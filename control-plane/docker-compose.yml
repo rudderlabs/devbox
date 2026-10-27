@@ -30,7 +30,7 @@ services:
   # on port 8080. Docker-socket mount lets it spawn container sandboxes on this
   # host. Pinned to a known-good server version.
   opensandbox:
-    image: ${OPENSANDBOX_IMAGE:-opensandbox/server:v0.2.3}
+    image: ${OPENSANDBOX_IMAGE:-opensandbox/server:v1.0.1}
     restart: unless-stopped
     # --config points at the mounted toml so the server uses docker runtime
     # (default is k8s, which fails without a kubeconfig).
@@ -57,7 +57,7 @@ services:
   # infra/local/iron-proxy.template.yaml and devbox.config.json. Each alias
   # must match a host in that config.
   iron-proxy:
-    image: ironsh/iron-proxy:0.45.0
+    image: ironsh/iron-proxy:0.53.0
     restart: unless-stopped
     entrypoint: [ "iron-proxy" ]
     command: [ "-config", "/etc/iron-proxy/config.yaml" ]
