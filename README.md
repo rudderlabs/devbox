@@ -12,7 +12,7 @@ reviews its own work and opens a draft pull request. You review and merge.
 Comment on the pull request, and it pushes the fix to the same branch.
 
 <p align="center">
-  <a href="https://youtu.be/wJQK3yCfYoI"><img alt="DevBox demo: a Linear issue is delegated to DevBox, it reviews its own diff, opens draft pull requests in each repo, and pushes a fix after a review comment. Click to watch the full video on YouTube." src="docs/images/devbox-demo.gif" width="100%"></a>
+  <a href="https://youtu.be/F5RIdaJRal8"><img alt="DevBox demo: a Linear issue is delegated to DevBox, it reviews its own diff, opens draft pull requests in each repo, and pushes a fix after a review comment. Click to watch the full video on YouTube." src="docs/images/devbox-demo.gif" width="100%"></a>
   <br>
   <a href="https://youtu.be/wJQK3yCfYoI">Watch the full launch video (2 min)</a>
 </p>
