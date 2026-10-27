@@ -1,0 +1,35 @@
+{{- /*
+Optional public access: `webhooks` routes /webhook/ only,
+`api` routes / (webhooks included). Event streams stay open for minutes: raise
+the controller's idle timeout (docs/kubernetes/README.md).
+*/ -}}
+{{- range $role := list "webhooks" "api" }}
+{{- $ing := index $.Values.ingress $role }}
+{{- if $ing.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devbox-control-plane-{{ $role }}
+  namespace: {{ $.Release.Namespace }}
+  labels: {{- include "devbox.labels" $ | nindent 4 }}
+  {{- with $ing.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $ing.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $ing.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $ing.host }}
+      http:
+        paths:
+          - path: {{ ternary "/webhook/" "/" (eq $role "webhooks") }}
+            pathType: Prefix
+            backend:
+              service: { name: devbox-control-plane, port: { number: 3000 } }
+{{- end }}
+{{- end }}

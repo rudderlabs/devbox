@@ -1,0 +1,13 @@
+apiVersion: v2
+name: devbox
+description: Run devbox tasks on Kubernetes (control plane, iron-proxy, repo snapshots, OpenSandbox).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+dependencies:
+  - name: opensandbox
+    version: 0.2.2
+
+# charts/opensandbox-0.2.2.tgz is vendored (hack/vendor-opensandbox.sh); its
+# values live under `opensandbox:` in values.yaml.

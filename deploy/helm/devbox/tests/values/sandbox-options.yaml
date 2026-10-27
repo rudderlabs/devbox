@@ -1,0 +1,9 @@
+images:
+  controlPlanePullSecrets: [{ name: control-plane-registry }]
+sandbox:
+  runtimeClassName: kata
+  tolerations: [{ key: sandbox, operator: Exists, effect: NoSchedule }]
+  nodeSelector: { pool: sandboxes }
+  imagePullSecrets: [{ name: registry }]
+  extraVolumes: [{ name: cache, emptyDir: {} }]
+  extraVolumeMounts: [{ name: cache, mountPath: /cache }]

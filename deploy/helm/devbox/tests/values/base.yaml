@@ -1,0 +1,5 @@
+storage: { storageClass: csi-hostpath-sc, volumeSnapshotClass: csi-hostpath-snapclass }
+repos:
+  - { url: https://github.com/acme/widgets.git, branch: main }
+llm: { baseUrl: https://llm.example.com/v1, model: gpt-test }
+ironProxy: { clusterIP: 10.96.0.20 }

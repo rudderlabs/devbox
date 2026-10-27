@@ -1,0 +1,72 @@
+{{- /*
+The GitHub App's token minter (integrations.githubApp with tokens: devbox).
+It alone holds the App's private key and keeps the token Secret fresh; the
+control plane, iron-proxy and the snapshot builder only read that Secret.
+*/ -}}
+{{- if include "devbox.githubMinter" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devbox-github-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+---
+# The token Secret must exist (RBAC cannot limit create by name): the
+# installer or the bootstrap hook creates it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devbox-github-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ include "devbox.githubSecret" . }}]
+    verbs: [get, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devbox-github-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: devbox-github-token }
+subjects:
+  - { kind: ServiceAccount, name: devbox-github-token, namespace: {{ .Release.Namespace }} }
+---
+# One minter at a time: Recreate stops the old pod before starting the new one.
+# (The seed Job also mints once on every install and upgrade; a second token
+# is harmless.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devbox-github-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "devbox.selectorLabels" "github-token" | nindent 6 }}
+  template: {{- include "devbox.githubTokenPod" (dict "ctx" . "component" "github-token" "command" (list "bun" "run" "github-token")) | nindent 4 }}
+---
+# Mints one token after every install and upgrade, before the first snapshot
+# build (weight 5), so a GitOps install starts with a token. A key or App
+# GitHub refuses fails it at once (no retries), which fails the release.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: devbox-github-token-seed
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  # Deleted 10 minutes after it finishes (hook-succeeded deletes it sooner on success; the TTL covers failures).
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template: {{- include "devbox.githubTokenPod" (dict "ctx" . "component" "github-token-seed" "restartPolicy" "Never" "command" (list "bun" "run" "github-token" "--once")) | nindent 4 }}
+{{- end }}

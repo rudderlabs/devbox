@@ -1,0 +1,90 @@
+# Egress proxy for sandboxes: sandboxes use it as their DNS
+# server and every allowlisted request goes through it. It holds the real
+# GitHub and LLM secrets; sandboxes only ever see dummies.
+apiVersion: v1
+kind: Service
+metadata:
+  name: devbox-iron-proxy
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  # Pinned: the sandbox pod template names this address as its nameserver.
+  clusterIP: {{ .Values.ironProxy.clusterIP }}
+  selector: {{- include "devbox.selectorLabels" "iron-proxy" | nindent 4 }}
+  ports:
+    - { name: dns-udp, port: 53, targetPort: 5353, protocol: UDP }
+    - { name: dns-tcp, port: 53, targetPort: 5353, protocol: TCP }
+    - { name: http, port: 80, targetPort: 8080, protocol: TCP }
+    - { name: https, port: 443, targetPort: 8443, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devbox-iron-proxy
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ironProxy.replicas }}
+  selector:
+    matchLabels: {{- include "devbox.selectorLabels" "iron-proxy" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "devbox.selectorLabels" "iron-proxy" | nindent 8 }}
+      annotations:
+        # iron-proxy reads its config once; a changed allowlist rolls the pods.
+        checksum/config: {{ include (print $.Template.BasePath "/iron-proxy-config.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      # Non-root on unprivileged ports; the Service maps 53/80/443 to them.
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532 }
+      containers:
+        - name: iron-proxy
+          image: {{ printf "%s:%s" .Values.ironProxy.image.repository .Values.ironProxy.image.tag }}
+          args: [-config, /etc/iron-proxy/config.yaml]
+          ports:
+            - { name: dns-udp, containerPort: 5353, protocol: UDP }
+            - { name: dns-tcp, containerPort: 5353, protocol: TCP }
+            - { name: http, containerPort: 8080, protocol: TCP }
+            - { name: https, containerPort: 8443, protocol: TCP }
+          readinessProbe:
+            tcpSocket: { port: https }
+            periodSeconds: 10
+          resources: {{- toYaml .Values.ironProxy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/iron-proxy, readOnly: true }
+            - { name: ca, mountPath: /certs, readOnly: true }
+            - { name: github, mountPath: /var/run/devbox/github, readOnly: true }
+            - { name: llm, mountPath: /var/run/devbox/llm, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: devbox-iron-proxy-config }
+        - name: ca
+          secret: { secretName: devbox-iron-proxy-ca, defaultMode: 0440 }
+        # The whole Secret, so a minted token's `expires-at` comes along.
+        - name: github
+          secret:
+            secretName: {{ include "devbox.githubSecret" . }}
+            defaultMode: 0440
+        - name: llm
+          secret:
+            secretName: {{ include "devbox.llmSecret" . }}
+            defaultMode: 0440
+            items: [{ key: api-key, path: api-key }]
+
+{{- if gt (int .Values.ironProxy.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: devbox-iron-proxy
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "devbox.selectorLabels" "iron-proxy" | nindent 6 }}
+{{- end }}

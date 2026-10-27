@@ -1,0 +1,51 @@
+# The BatchSandbox template the OpenSandbox server merges into every sandbox:
+# DNS through iron-proxy, the public CA mounted, a label for the
+# NetworkPolicy, no ServiceAccount token. Env cannot come from here; the
+# control plane passes it (K8S_EGRESS_ENV). The server reads this file once at
+# startup: `bun run k8s:install` restarts it when the template changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devbox-sandbox-template
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+data:
+  batchsandbox-template.yaml: |
+    metadata: {}
+    spec:
+      replicas: 1
+      template:
+        metadata:
+          labels: {{- include "devbox.selectorLabels" "sandbox" | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          enableServiceLinks: false
+          automountServiceAccountToken: false
+          dnsPolicy: None
+          dnsConfig:
+            nameservers: [{{ .Values.ironProxy.clusterIP | quote }}]
+          {{- with .Values.sandbox.runtimeClassName }}
+          runtimeClassName: {{ . }}
+          {{- end }}
+          {{- with .Values.sandbox.tolerations }}
+          tolerations: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.sandbox.nodeSelector }}
+          nodeSelector: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.sandbox.imagePullSecrets }}
+          imagePullSecrets: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumes:
+            - name: iron-proxy-ca
+              configMap: { name: iron-proxy-ca-cert }
+            {{- with .Values.sandbox.extraVolumes }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          containers:
+            - name: sandbox
+              volumeMounts:
+                - { name: iron-proxy-ca, mountPath: /run/iron-proxy, readOnly: true }
+                {{- with .Values.sandbox.extraVolumeMounts }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}

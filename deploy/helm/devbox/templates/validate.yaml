@@ -1,0 +1,93 @@
+{{- /*
+Fails rendering with a clear message when a required value is missing.
+Renders nothing.
+*/ -}}
+{{- /* The OpenSandbox subchart's namespaceOverride, the policies and the
+selectors all assume the release namespace devbox. */ -}}
+{{- if ne .Release.Namespace "devbox" }}
+{{- fail "install the release in namespace devbox (sandboxes run in devbox-sandboxes)" }}
+{{- end }}
+{{- if not .Values.storage.storageClass }}
+{{- fail "storage.storageClass is required: the StorageClass for task workspaces" }}
+{{- end }}
+{{- if not .Values.storage.volumeSnapshotClass }}
+{{- fail "storage.volumeSnapshotClass is required: a VolumeSnapshotClass of the StorageClass's CSI driver" }}
+{{- end }}
+{{- if not .Values.ironProxy.clusterIP }}
+{{- fail "ironProxy.clusterIP is required: a free address in the Service range (bun run k8s:install picks one; see docs/kubernetes/README.md)" }}
+{{- end }}
+{{- if not .Values.repos }}
+{{- /* An empty list would make the minter ask for the whole installation. */ -}}
+{{- if and (include "devbox.githubMinter" .) (ne (.Values.integrations.githubApp.tokenScope | default "") "installation") }}
+{{- fail "integrations.githubApp.enabled is true: tokenScope: repos needs at least one entry in repos (or use tokenScope: installation)" }}
+{{- end }}
+{{- fail "repos is required: at least one {url, branch}" }}
+{{- end }}
+{{- if or (not .Values.llm.baseUrl) (not .Values.llm.model) }}
+{{- fail "llm.baseUrl and llm.model are required" }}
+{{- end }}
+{{- if not (.Values.llm.model | trim) }}
+{{- fail "llm.model: must be a non-empty string after trimming whitespace" }}
+{{- end }}
+{{- /* The SDK appends /v1/messages, so a /v1 segment would be doubled. */ -}}
+{{- if and (eq .Values.llm.provider "anthropic") (regexMatch "/v1(/|$)" (urlParse .Values.llm.baseUrl).path) }}
+{{- fail "llm.baseUrl: for provider anthropic use the API root without /v1, for example https://api.anthropic.com" }}
+{{- end }}
+{{- /* Keep these lists in sync with harness.deepagents.model._SUPPORTED_REASONING_EFFORTS. */ -}}
+{{- $acceptedEfforts := dict
+  "openai" (list "none" "minimal" "low" "medium" "high" "xhigh")
+  "anthropic" (list "low" "medium" "high" "xhigh" "max")
+-}}
+{{- $providerEfforts := index $acceptedEfforts .Values.llm.provider -}}
+{{- $efforts := list (dict "path" "llm.reasoningEffort" "value" (.Values.llm.reasoningEffort | default "")) -}}
+{{- range $stage := include "devbox.llmStages" . | fromYamlArray -}}
+{{- $stageConfig := index ($.Values.llm.stages | default dict) $stage.key | default dict -}}
+{{- with $stageConfig.model -}}
+{{- if not (trim .) }}
+{{- fail (printf "llm.stages.%s.model: must be a non-empty string after trimming whitespace" $stage.key) }}
+{{- end }}
+{{- end -}}
+{{- $efforts = append $efforts (dict "path" (printf "llm.stages.%s.reasoningEffort" $stage.key) "value" ($stageConfig.reasoningEffort | default "")) -}}
+{{- end -}}
+{{- range $setting := $efforts }}
+{{- if and $setting.value (not (has $setting.value $providerEfforts)) }}
+{{- fail (printf "%s=%q is not a supported reasoning effort for provider %s; accepted: %s" $setting.path $setting.value $.Values.llm.provider (join ", " $providerEfforts)) }}
+{{- end }}
+{{- end }}
+{{- if and (not .Values.postgresql.enabled) (not .Values.database.existingSecret) }}
+{{- fail "database.existingSecret is required when postgresql.enabled is false: a Secret with key DATABASE_URL" }}
+{{- end }}
+{{- range $role := list "webhooks" "api" }}
+{{- $ing := index $.Values.ingress $role }}
+{{- if and $ing.enabled (not $ing.host) }}
+{{- fail (printf "ingress.%s.host is required when ingress.%s.enabled is true" $role $role) }}
+{{- end }}
+{{- end }}
+{{- $linear := .Values.integrations.linear | default dict }}
+{{- $slack := .Values.integrations.slack | default dict }}
+{{- $app := .Values.integrations.githubApp | default dict }}
+{{- $github := .Values.github | default dict }}
+{{- if and $linear.enabled (not $linear.clientId) }}
+{{- fail "integrations.linear.enabled is true: integrations.linear.clientId is required" }}
+{{- end }}
+{{- if and $slack.enabled (not $slack.channelId) }}
+{{- fail "integrations.slack.enabled is true: integrations.slack.channelId is required" }}
+{{- end }}
+{{- if $app.enabled }}
+{{- range $key := list "appId" "installationId" "botLogin" "botUserId" "tokens" }}
+{{- if not (index $app $key) }}
+{{- fail (printf "integrations.githubApp.enabled is true: integrations.githubApp.%s is required" $key) }}
+{{- end }}
+{{- end }}
+{{- if not (or $github.trustedOrgs $github.trustedUsers) }}
+{{- fail "integrations.githubApp.enabled is true: github.trustedOrgs or github.trustedUsers is required" }}
+{{- end }}
+{{- /* The minter writes only a Secret devbox owns, never the user's. */ -}}
+{{- if and (eq $app.tokens "devbox") .Values.secrets.github.existingSecret }}
+{{- fail "integrations.githubApp.enabled is true: tokens: devbox writes the token Secret itself: remove secrets.github.existingSecret, or use tokens: external" }}
+{{- end }}
+{{- /* Nothing else creates or refreshes devbox-github with external tokens. */ -}}
+{{- if and (eq $app.tokens "external") (not .Values.secrets.github.existingSecret) }}
+{{- fail "integrations.githubApp.enabled is true: tokens: external needs secrets.github.existingSecret: the Secret your tooling keeps fresh" }}
+{{- end }}
+{{- end }}

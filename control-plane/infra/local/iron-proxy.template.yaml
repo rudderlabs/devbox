@@ -1,0 +1,82 @@
+# Template for the local iron-proxy config. `bun run up`
+# (scripts/up/ironProxy.ts) renders it into infra/local/iron-proxy.yaml
+# (gitignored) from devbox.config.json, adding:
+#   - dns.upstream_resolver from `bun run up --dns-resolver` (default 1.1.1.1:53);
+#   - full access to each configured repo on github.com, api.github.com and
+#     raw.githubusercontent.com;
+#   - GET/HEAD api.github.com /orgs/<org>/members per trusted org and /users/*
+#     (the harness's trust lookups), and *.blob.core.windows.net
+#     /actions-results/* (CI log downloads);
+#   - POST to the one LLM endpoint the harness calls: `<baseUrl>/responses`
+#     for openai, `<baseUrl>/v1/messages` for anthropic;
+#   - the hosts each secret is swapped on.
+#
+# Routing: docker-compose.yml gives this container a network alias for each
+# host below, so Docker's embedded DNS sends sandbox traffic for them here.
+# Sandboxes only ever hold dummy tokens; iron-proxy swaps in the real ones
+# from its environment (GITHUB_TOKEN, LLM_API_KEY).
+#
+# Path patterns: a trailing "/*" matches the path itself and everything under
+# it. A "*" anywhere else matches within one path segment only. A pattern
+# without "*" matches that exact path.
+dns:
+  listen: ":53"
+  proxy_ip: "172.30.0.53"
+  # The proxy's own upstream lookups must skip Docker's DNS, which would
+  # resolve the aliased hosts back to this container. Set from --dns-resolver.
+  upstream_resolver: ""
+
+proxy:
+  http_listen: ":80"
+  https_listen: ":443"
+  max_request_body_bytes: 10485760
+
+tls:
+  ca_cert: "/certs/ca.crt"
+  ca_key: "/certs/ca.key"
+  cert_cache_size: 500
+  leaf_cert_expiry_hours: 24
+
+transforms:
+  - name: allowlist
+    config:
+      # Read-only GitHub access. The rendered file appends the repo and LLM rules.
+      rules:
+        - host: "codeload.github.com"
+          methods: ["GET", "HEAD"]
+          paths: ["/*"]
+        - host: "github.com"
+          methods: ["GET", "HEAD"]
+          paths: ["/*"]
+        # Clones and fetches of any repo: git-upload-pack is the read side of
+        # smart-HTTP git (pushes use git-receive-pack, allowed per repo below).
+        # A `*` inside a path matches one segment: /<owner>/<repo>.git needs two.
+        - host: "github.com"
+          methods: ["POST"]
+          paths:
+            - "/*/*/git-upload-pack"
+  - name: secrets
+    config:
+      secrets:
+        - source:
+            type: env
+            var: GITHUB_TOKEN
+          proxy_value: "proxy-github-dummy-token"
+          match_headers: ["Authorization"]
+          rules:
+            - host: "github.com"
+            - host: "api.github.com"
+            - host: "raw.githubusercontent.com"
+        - source:
+            type: env
+            # Never HARNESS_LLM_API_KEY: that allowlisted sandbox name holds
+            # the dummy below, while this unforwarded name holds the real key.
+            var: LLM_API_KEY
+          proxy_value: "proxy-llm-dummy-token"
+          # api-key: Azure OpenAI's header. x-api-key: Anthropic's.
+          match_headers: ["Authorization", "api-key", "x-api-key"]
+          # The rendered file sets the LLM host here.
+          rules: []
+
+log:
+  level: "info"

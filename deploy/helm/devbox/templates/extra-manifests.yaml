@@ -1,0 +1,4 @@
+{{- range .Values.extraManifests }}
+---
+{{ tpl (ternary . (toYaml .) (typeIs "string" .)) $ }}
+{{- end }}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/rudderlabs/devbox/discussions
+    about: Ask how to set it up, share what you built, or float an idea.
+  - name: Security issue
+    url: https://github.com/rudderlabs/devbox/security/policy
+    about: Report vulnerabilities privately, not as an issue.

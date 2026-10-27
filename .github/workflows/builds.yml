@@ -1,0 +1,122 @@
+# Publishes devbox's two images to Docker Hub. Follows rudder-server's builds.yml:
+# a release publishes the semver and `latest` tags, a push to main publishes the
+# branch tag, and a pull request publishes `pr-<n>`.
+#
+# The chart's `images.tag` defaults to the chart's appVersion, so a release must
+# carry a tag equal to `appVersion` in deploy/helm/devbox/Chart.yaml. Bump the two
+# together.
+name: builds
+
+on:
+  release:
+    # `published`, not `created`: GitHub does not fire `created` for a draft
+    # release, so a release drafted and then published would never build.
+    # `published` covers both paths, and fires for prereleases too.
+    types: [published]
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The chart's images.tag defaults to the chart's appVersion, so a release whose
+  # git tag differs from appVersion publishes images a default install cannot
+  # pull. Nothing else links the two, so fail the release here instead.
+  # Always runs: a job skipped by `if` skips everything that needs it, which
+  # would silently stop the push and pull-request builds. The check itself
+  # no-ops outside a release.
+  check-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The git tag must equal the chart's appVersion
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "release" ]; then
+            echo "not a release; nothing to check"
+            exit 0
+          fi
+          tag="${REF_NAME#v}"
+          app=$(sed -n 's/^appVersion:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' deploy/helm/devbox/Chart.yaml)
+          echo "git tag: $tag"
+          echo "Chart.yaml appVersion: $app"
+          if [ "$tag" != "$app" ]; then
+            echo "::error::the release tag ($tag) and Chart.yaml appVersion ($app) differ. A default install resolves images.tag from appVersion, so it would pull an image this release does not publish. Bump appVersion and re-tag."
+            exit 1
+          fi
+
+  control-plane:
+    needs: [check-version]
+    uses: ./.github/workflows/docker-build-dockerhub.yml
+    with:
+      # Two image names per component, as rudder-server does. Branch and pull
+      # request builds go only to the `develop-` repository, so the repository
+      # users pull from never accumulates pr-<n> tags. The release name is
+      # enabled on main and on a release, where its tags are the ones people
+      # actually pull.
+      image_names: |
+        ["rudderlabs/develop-devbox-control-plane",
+         "rudderlabs/devbox-control-plane,enable=${{ github.ref == 'refs/heads/main' || github.event_name == 'release' }}"]
+      context: control-plane
+      dockerfile: control-plane/Dockerfile
+      # A fork's pull request gets no secrets, so it builds without pushing.
+      push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      tags: |
+        type=ref,event=branch
+        type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+        type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
+        # Disabled while the major version is zero: a floating `0` tag would move
+        # across breaking 0.x bumps, which semver allows. See
+        # https://github.com/docker/metadata-action#major-version-zero
+        type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') && !startsWith(github.ref, 'refs/tags/0.') }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  harness:
+    needs: [check-version]
+    uses: ./.github/workflows/docker-build-dockerhub.yml
+    with:
+      # Two image names per component, as rudder-server does. Branch and pull
+      # request builds go only to the `develop-` repository, so the repository
+      # users pull from never accumulates pr-<n> tags. The release name is
+      # enabled on main and on a release, where its tags are the ones people
+      # actually pull.
+      image_names: |
+        ["rudderlabs/develop-devbox-harness",
+         "rudderlabs/devbox-harness,enable=${{ github.ref == 'refs/heads/main' || github.event_name == 'release' }}"]
+      context: harness
+      dockerfile: harness/Dockerfile
+      push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      tags: |
+        type=ref,event=branch
+        type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+        type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
+        # Disabled while the major version is zero: a floating `0` tag would move
+        # across breaking 0.x bumps, which semver allows. See
+        # https://github.com/docker/metadata-action#major-version-zero
+        type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') && !startsWith(github.ref, 'refs/tags/0.') }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

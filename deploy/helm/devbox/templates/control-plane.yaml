@@ -1,0 +1,202 @@
+{{- $sandboxNs := include "devbox.sandboxNamespace" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devbox-control-plane
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+---
+# Exactly what control-plane/src/clients/k8s.ts does in the sandbox namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devbox-control-plane
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devbox-control-plane
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: devbox-control-plane }
+subjects:
+  - { kind: ServiceAccount, name: devbox-control-plane, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devbox-control-plane
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "devbox.selectorLabels" "control-plane" | nindent 4 }}
+  ports:
+    - { name: http, port: 3000, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devbox-control-plane
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  selector:
+    matchLabels: {{- include "devbox.selectorLabels" "control-plane" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "devbox.selectorLabels" "control-plane" | nindent 8 }}
+    spec:
+      serviceAccountName: devbox-control-plane
+{{ include "devbox.controlPlaneImagePullSecrets" . | indent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
+      containers:
+        - name: control-plane
+          image: {{ include "devbox.controlPlaneImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 3000 }
+          # Only allowlisted HARNESS_* settings cross into sandboxes, and a
+          # forwarded name must never hold a real secret.
+          env:
+            - { name: PORT, value: "3000" }
+            - { name: AUTO_MIGRATE, value: "true" }
+            - { name: API_ENABLED, value: "true" }
+            - { name: API_PUBLIC_BASE_URL, value: {{ include "devbox.publicBaseUrl" . | quote }} }
+            - { name: SANDBOX_RUNTIME, value: k8s }
+            - { name: OPENSANDBOX_DOMAIN, value: "opensandbox-server:80" }
+            - name: OPENSANDBOX_API_KEY
+              valueFrom: { secretKeyRef: { name: devbox-opensandbox, key: api-key } }
+            - { name: PVC_NAMESPACE, value: {{ $sandboxNs | quote }} }
+            - { name: PVC_STORAGE_CLASS, value: {{ .Values.storage.storageClass | quote }} }
+            - { name: PVC_STORAGE_SIZE, value: {{ .Values.workspace.size | quote }} }
+            - { name: SANDBOX_IMAGE, value: {{ include "devbox.harnessImage" . | quote }} }
+            - { name: SANDBOX_RESOURCE_CPU, value: {{ .Values.sandbox.cpu | quote }} }
+            - { name: SANDBOX_RESOURCE_MEMORY, value: {{ .Values.sandbox.memory | quote }} }
+            - { name: MAX_CONCURRENT_SANDBOXES, value: {{ .Values.sandbox.maxConcurrent | quote }} }
+            - { name: SANDBOX_GIT_NAME, value: {{ .Values.git.name | quote }} }
+            - { name: SANDBOX_GIT_EMAIL, value: {{ .Values.git.email | quote }} }
+            - { name: GITHUB_TOKEN_FILE, value: /var/run/devbox/github/token }
+            - { name: HARNESS_LLM_PROVIDER, value: {{ .Values.llm.provider | quote }} }
+            - { name: HARNESS_LLM_BASE_URL, value: {{ .Values.llm.baseUrl | quote }} }
+            {{- /* extraEnv wins over each llm-derived model/effort variable without creating duplicates. */ -}}
+            {{- $extraEnvNames := dict -}}
+            {{- range .Values.extraEnv -}}
+            {{- if kindIs "map" . -}}
+            {{- with (index . "name") }}{{- $_ := set $extraEnvNames . true -}}{{- end }}
+            {{- end -}}
+            {{- end -}}
+            {{- $llmEnv := list (dict "name" "HARNESS_MODEL" "value" .Values.llm.model) -}}
+            {{- with .Values.llm.reasoningEffort -}}
+            {{- $llmEnv = append $llmEnv (dict "name" "HARNESS_REASONING_EFFORT" "value" .) -}}
+            {{- end -}}
+            {{- range $stage := include "devbox.llmStages" . | fromYamlArray -}}
+            {{- $config := index ($.Values.llm.stages | default dict) $stage.key | default dict -}}
+            {{- with $config.model -}}
+            {{- $llmEnv = append $llmEnv (dict "name" (printf "HARNESS_%s_MODEL" $stage.env) "value" .) -}}
+            {{- end -}}
+            {{- with $config.reasoningEffort -}}
+            {{- $llmEnv = append $llmEnv (dict "name" (printf "HARNESS_%s_REASONING_EFFORT" $stage.env) "value" .) -}}
+            {{- end -}}
+            {{- end -}}
+            {{- range $variable := $llmEnv }}
+            {{- if not (hasKey $extraEnvNames $variable.name) }}
+            - { name: {{ $variable.name }}, value: {{ $variable.value | quote }} }
+            {{- end }}
+            {{- end }}
+            # A dummy: iron-proxy swaps it for the real key on the LLM host.
+            - { name: HARNESS_LLM_API_KEY, value: proxy-llm-dummy-token }
+            {{- if .Values.postgresql.enabled }}
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: devbox-postgres, key: password } }
+            - { name: DATABASE_URL, value: "postgres://devbox:$(POSTGRES_PASSWORD)@devbox-postgres:5432/devbox" }
+            {{- else }}
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.database.existingSecret }}, key: DATABASE_URL } }
+            {{- end }}
+            {{- $linear := .Values.integrations.linear | default dict }}
+            {{- $slack := .Values.integrations.slack | default dict }}
+            {{- $app := .Values.integrations.githubApp | default dict }}
+            {{- $github := .Values.github | default dict }}
+            {{- if $linear.enabled }}
+            - { name: LINEAR_ENABLED, value: "true" }
+            {{- end }}
+            {{- with $linear.clientId }}
+            - { name: LINEAR_CLIENT_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- if $slack.enabled }}
+            - { name: SLACK_ENABLED, value: "true" }
+            {{- end }}
+            {{- with $slack.channelId }}
+            - { name: SLACK_CHANNEL_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- /* A disabled App block may hold an App not yet installed: none of it renders. */}}
+            {{- if $app.enabled }}
+            - { name: GITHUB_WEBHOOKS_ENABLED, value: "true" }
+            - { name: GITHUB_BOT_LOGIN, value: {{ $app.botLogin | quote }} }
+            - { name: GITHUB_BOT_USER_ID, value: {{ $app.botUserId | int64 | toString | quote }} }
+            {{- if $app.ciResults }}
+            - { name: GITHUB_CI_RESULT_ENABLED, value: "true" }
+            {{- end }}
+            {{- end }}
+            {{- with $github.trustedOrgs }}
+            - { name: GITHUB_TRUSTED_ORGS, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- with $github.trustedUsers }}
+            - { name: GITHUB_TRUSTED_USERS, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # The integrations Secret holds only secrets, and is optional. Each
+          # integration turns on only with its *_ENABLED switch above.
+          envFrom:
+            - secretRef: { name: {{ include "devbox.integrationsSecret" . }}, optional: true }
+          # Migrations run before the server listens; a long one must not be
+          # killed by the liveness probe. Up to 5 minutes.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources: {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: github-token, mountPath: /var/run/devbox/github, readOnly: true }
+      # The whole Secret: `token`, and `expires-at` when the minter writes it.
+      volumes:
+        - name: github-token
+          secret:
+            secretName: {{ include "devbox.githubSecret" . }}
+
+{{- if gt (int .Values.controlPlane.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: devbox-control-plane
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "devbox.selectorLabels" "control-plane" | nindent 6 }}
+{{- end }}

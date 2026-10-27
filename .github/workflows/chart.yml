@@ -1,0 +1,83 @@
+name: chart
+
+on:
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "control-plane/scripts/up/ironProxy.ts"
+      - "control-plane/infra/local/iron-proxy.template.yaml"
+      - ".github/workflows/chart.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "control-plane/scripts/up/ironProxy.ts"
+      - "control-plane/infra/local/iron-proxy.template.yaml"
+      - ".github/workflows/chart.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        helm: [v3.22.0, v4.3.0]
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: ${{ matrix.helm }}
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSLo /tmp/kubeconform.tgz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  /tmp/kubeconform.tgz" | sha256sum -c -
+          tar -xzf /tmp/kubeconform.tgz -C /usr/local/bin kubeconform
+
+      # The iron-proxy parity test imports the Compose renderer.
+      - name: Install control-plane dependencies
+        working-directory: control-plane
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # helm prints `coalesce.go:145: warning: skipping globals because source global
+      # is not a table` on every command; it comes from the vendored upstream chart's
+      # `global: null` and is expected.
+      - name: Lint
+        run: helm lint deploy/helm/devbox -f deploy/helm/devbox/tests/values/base.yaml
+
+      - name: Validate manifests
+        shell: bash
+        run: |
+          for f in deploy/helm/devbox/tests/values/*.yaml; do
+            [ "$(basename "$f")" = base.yaml ] && set -- -f "$f" || set -- -f deploy/helm/devbox/tests/values/base.yaml -f "$f"
+            helm template devbox deploy/helm/devbox -n devbox "$@" \
+              | kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.27.0 -summary
+          done
+
+      - name: Test
+        run: bun run test:chart
+
+      # The values reference is generated from values.yaml comments.
+      - name: Check the chart README is up to date
+        if: matrix.helm == 'v3.22.0'
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14.2
+          git diff --exit-code deploy/helm/devbox/README.md

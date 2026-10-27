@@ -1,0 +1,41 @@
+# Docker-mode OpenSandbox server config for the local stack.
+# Mounted into the opensandbox container via docker-compose. The execd and
+# egress versions match server v0.2.3 (its example configs).
+
+[server]
+host = "0.0.0.0"
+port = 8080
+max_sandbox_timeout_seconds = 86400
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.22"
+
+[storage]
+allowed_host_paths = []
+volume_default_size = "1Gi"
+
+[docker]
+# User-defined network from docker-compose.yml: sandboxes share it with
+# iron-proxy (whose aliases route GitHub and the LLM host through it) and the server
+# reaches them by container IP. Rules out networkPolicy, which the CP never sends.
+network_mode = "devbox"
+drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+no_new_privileges = true
+apparmor_profile = ""
+pids_limit = 4096
+seccomp_profile = ""
+
+[ingress]
+mode = "direct"
+
+[egress]
+image = "opensandbox/egress:v1.1.7"
+mode = "dns"
+
+[renew_intent]
+enabled = false
+min_interval_seconds = 60

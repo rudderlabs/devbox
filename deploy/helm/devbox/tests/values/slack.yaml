@@ -1,0 +1,1 @@
+integrations: { slack: { enabled: true, channelId: "C0123456789" } }

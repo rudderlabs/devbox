@@ -1,0 +1,13 @@
+# Public webhooks without TLS, VPN-only API with TLS.
+ingress:
+  webhooks:
+    enabled: true
+    className: public-nginx
+    host: hooks.example.com
+    annotations: { nginx.ingress.kubernetes.io/limit-rps: "10" }
+  api:
+    enabled: true
+    className: internal-nginx
+    host: devbox.internal.example.com
+    annotations: { nginx.ingress.kubernetes.io/proxy-read-timeout: "3600" }
+    tls: [{ hosts: [devbox.internal.example.com], secretName: devbox-tls }]

@@ -1,0 +1,13 @@
+integrations:
+  githubApp:
+    enabled: true
+    appId: 123456
+    installationId: 7890123
+    botLogin: example-devbox
+    botUserId: 1234567
+    tokens: external
+    tokenScope: repos
+    ciResults: true
+github: { trustedOrgs: [example-org] }
+secrets:
+  github: { existingSecret: example-github-token }

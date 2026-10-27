@@ -1,0 +1,51 @@
+# Accepted exceptions to the Trivy gates in dependency-scan.yml and
+# docker-build-dockerhub.yml. Both fail on any Critical or High finding that
+# has an upstream fix.
+#
+# An entry is for a finding Trivy calls fixable that no upstream release has
+# fixed yet in the component we ship. Scope it with `purls` to the exact
+# vulnerable version and, where Trivy reports a file, with `paths` to that
+# file; a purl alone also matches any other copy at the same version. Give
+# the reason in `statement` and set `expired_at`: after that date the finding
+# fails the gates again, on purpose. Then bump the component or renew the
+# entry with a new reason.
+vulnerabilities:
+  # kubectl v1.37.1, the latest release on every supported minor, is built with
+  # Go 1.26.8. The control plane runs it only against the in-cluster API server,
+  # with the service account token and cluster CA. Expires early: the next
+  # Kubernetes patch release should rebuild with a fixed Go.
+  - id: CVE-2026-111943
+    purls: ["pkg:golang/stdlib@v1.26.8"]
+    paths: ["usr/local/bin/kubectl"]
+    statement: In kubectl v1.37.1 (latest); kubectl only talks to the in-cluster API server.
+    expired_at: 2026-11-30
+  - id: CVE-2026-78667
+    purls: ["pkg:golang/stdlib@v1.26.8"]
+    paths: ["usr/local/bin/kubectl"]
+    statement: In kubectl v1.37.1 (latest); server-side net/http Range handling, which kubectl does not serve.
+    expired_at: 2026-11-30
+  - id: CVE-2026-78669
+    purls: ["pkg:golang/stdlib@v1.26.8", "pkg:golang/golang.org/x/net@v0.57.0"]
+    paths: ["usr/local/bin/kubectl"]
+    statement: In kubectl v1.37.1 (latest); kubectl only talks to the in-cluster API server.
+    expired_at: 2026-11-30
+  - id: CVE-2026-97031
+    purls: ["pkg:golang/stdlib@v1.26.8"]
+    paths: ["usr/local/bin/kubectl"]
+    statement: In kubectl v1.37.1 (latest); kubectl only talks to the in-cluster API server.
+    expired_at: 2026-11-30
+  - id: CVE-2026-56851
+    purls: ["pkg:golang/golang.org/x/text@v0.40.0"]
+    paths: ["usr/local/bin/kubectl"]
+    statement: In kubectl v1.37.1 (latest); kubectl does not apply the x/text Nickname profile to input.
+    expired_at: 2026-11-30
+  # npm vendors its own undici. No npm release ships a fixed one yet: 11.21.1
+  # (latest 11.x) and 12.2.1 (latest) both bundle undici 6.29.0. npm uses it
+  # only as an HTTP client for registry requests during installs; nothing in
+  # the harness serves or streams through it. Bump npm in harness/Dockerfile
+  # once a release bundles undici 6.29.1 or newer, and drop this entry.
+  - id: CVE-2026-109869
+    purls: ["pkg:npm/undici@6.29.0"]
+    paths: ["usr/local/lib/node_modules/npm/node_modules/undici/package.json"]
+    statement: In npm's bundled undici (npm 11.21.1, latest 11.x); no npm release bundles a fixed undici yet.
+    expired_at: 2026-11-30

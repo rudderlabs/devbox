@@ -1,0 +1,10 @@
+node_modules
+.git
+.env
+*.log
+.DS_Store
+
+# Tests and their fixtures are not part of the runtime image.
+**/*.test.ts
+**/__tests__/
+**/__pycache__/

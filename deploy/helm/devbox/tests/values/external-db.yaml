@@ -1,0 +1,2 @@
+postgresql: { enabled: false }
+database: { existingSecret: my-database }

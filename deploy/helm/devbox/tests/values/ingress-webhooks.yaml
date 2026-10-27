@@ -1,0 +1,6 @@
+ingress:
+  webhooks:
+    enabled: true
+    className: nginx
+    host: hooks.example.com
+    tls: [{ hosts: [hooks.example.com], secretName: hooks-tls }]
