@@ -1,0 +1,54 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+__pycache__/
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# VS Code (local editor/debugger config)
+.vscode
+
+# Claude Code (local agent config)
+.claude
+
+# Local dev-test sandbox connection state
+.dev-test.state
+.dev-test.state.lock
+
+# Per-run evaluation inputs, source archives, and sandbox launch records
+.eval-runs/
+
+# Finder (MacOS) folder config
+.DS_Store
+
+# Local stack (`bun run up`): iron-proxy CA, OpenSandbox API key, and the
+# iron-proxy config generated from devbox.config.json
+infra/local/certs/
+infra/local/opensandbox.key
+infra/local/iron-proxy.yaml

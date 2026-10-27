@@ -1,0 +1,19 @@
+# The devbox chart
+
+Runs devbox tasks on Kubernetes: the control plane, iron-proxy, the repo
+snapshot builder, a bundled OpenSandbox and, optionally, a minimal Postgres.
+Sandboxes run in the namespace `devbox-sandboxes`; install the release as
+`devbox` in the namespace `devbox`.
+
+How to install it, with the installer or with GitOps:
+[docs/kubernetes/README.md](../../../docs/kubernetes/README.md). Secrets never
+go in values: see [docs/kubernetes/secrets.md](../../../docs/kubernetes/secrets.md).
+
+This file is generated from `values.yaml` by
+[helm-docs](https://github.com/norwoodj/helm-docs):
+
+```bash
+docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14.2
+```
+
+{{ template "chart.valuesSection" . }}

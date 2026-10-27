@@ -1,0 +1,27 @@
+{
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "setup": "bun control-plane/scripts/setup.ts",
+    "quickstart": "bun run setup && bun control-plane/scripts/quickstart.ts",
+    "secrets": "bun control-plane/scripts/secrets.ts",
+    "up": "bun run setup && bun control-plane/scripts/up.ts",
+    "down": "bash control-plane/scripts/local-down.sh",
+    "reset": "bash control-plane/scripts/local-down.sh && docker compose -f control-plane/docker-compose.yml --profile github-app down -v && (docker volume rm devbox-repos || true) && (docker volume ls -q --filter label=devbox.task-volume | xargs -r docker volume rm)",
+    "devbox": "bun cli/devbox.ts",
+    "k8s:install": "bun run setup && bun control-plane/scripts/k8s.ts install",
+    "k8s:kind": "bun run setup && bun control-plane/scripts/k8s.ts kind",
+    "k8s:connect": "bun control-plane/scripts/k8s.ts connect",
+    "k8s:refresh-snapshot": "bun control-plane/scripts/k8s.ts refresh-snapshot",
+    "k8s:uninstall": "bun control-plane/scripts/k8s.ts uninstall",
+    "k8s:check": "bun control-plane/scripts/k8s.ts check",
+    "linear:setup": "bun run setup && bun control-plane/scripts/linear.ts setup",
+    "linear:status": "bun control-plane/scripts/linear.ts status",
+    "linear:disable": "bun control-plane/scripts/linear.ts disable",
+    "github:setup": "bun run setup && bun control-plane/scripts/github.ts setup",
+    "github:status": "bun control-plane/scripts/github.ts status",
+    "github:disable": "bun control-plane/scripts/github.ts disable",
+    "test:chart": "bun test deploy/helm/devbox/tests",
+    "test": "cd harness && make test && cd ../control-plane && bun test && cd ../cli && bun test && cd .. && bun run test:chart"
+  }
+}

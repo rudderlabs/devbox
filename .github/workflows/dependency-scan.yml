@@ -1,0 +1,52 @@
+# Scans the bun lockfiles for known vulnerabilities. Dependabot does not read
+# bun.lock, so without this job a vulnerable control-plane or CLI dependency
+# raises no alert anywhere. The weekly run catches advisories published after
+# the lockfile last changed.
+name: dependency-scan
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 6 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  bun-lockfiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        lockfile:
+          - control-plane/bun.lock
+          - cli/bun.lock
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same gate as the image scan in docker-build-dockerhub.yml: a fixable
+      # Critical or High fails the job. Trivy runs from its digest-pinned
+      # image because the org action allowlist has no usable trivy-action.
+      # Exceptions go in .trivyignore.yaml.
+      - name: Trivy (${{ matrix.lockfile }})
+        env:
+          LOCKFILE: ${{ matrix.lockfile }}
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src \
+            aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            fs --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+            --ignorefile .trivyignore.yaml --exit-code 1 "$LOCKFILE"

@@ -1,0 +1,103 @@
+name: kubernetes
+
+on:
+  pull_request:
+    paths: ["deploy/**", "control-plane/**", "harness/**", "cli/**", ".github/workflows/kubernetes.yml", "package.json", "**/bun.lock"]
+  push:
+    branches: [main]
+    paths: ["deploy/**", "control-plane/**", "harness/**", "cli/**", ".github/workflows/kubernetes.yml", "package.json", "**/bun.lock"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      # Both images are built, then loaded into the kind node: one run hit
+      # "out of disk space" there. Toolchains this job never uses go first.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          docker image prune -af >/dev/null
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+
+      - name: Install kind
+        run: |
+          curl -fsSLo /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.32.0/kind-linux-amd64
+          echo "50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54  /tmp/kind" | sha256sum -c -
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+
+      # Pinned like helm and kind, checked against the release's published digest.
+      - name: Install kubectl
+        run: |
+          base=https://dl.k8s.io/release/v1.33.5/bin/linux/amd64
+          curl -fsSLo /tmp/kubectl "$base/kubectl"
+          sha="$(curl -fsSL "$base/kubectl.sha256")"
+          echo "$sha  /tmp/kubectl" | sha256sum -c -
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+
+      # This repo as the only configured repo, read with the workflow token.
+      # Sandboxes get half a CPU: the runner has 2, and the rest of the
+      # cluster requests about 1.4 of them.
+      - name: Write devbox.config.json and devbox.kind.json
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          cat > devbox.config.json <<EOF
+          { "repos": [{ "url": "https://github.com/${REPO}.git", "branch": "${BRANCH}" }],
+            "llm": { "baseUrl": "https://llm.invalid/v1", "model": "none" } }
+          EOF
+          # k8s:kind keeps a target file's values; context and profile are its own.
+          echo '{ "values": { "sandbox": { "cpu": "500m" } } }' > devbox.kind.json
+
+      - name: Install on kind
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LLM_API_KEY: no-llm-in-ci
+        run: bun run k8s:kind --skip-push-check --skip-llm-check
+
+      - name: End-to-end checks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          bun run k8s:connect --target devbox.kind.json &
+          # k8s:kind pins the profile's local port from 13000 up; on a fresh runner it is 13000.
+          for _ in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:13000/health && break; sleep 2; done
+          curl -fsS -o /dev/null http://localhost:13000/health
+          bash control-plane/scripts/k8s/e2e.sh "$REPO"
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl --context kind-devbox get all,pvc,volumesnapshot -A || true
+          kubectl --context kind-devbox -n devbox-sandboxes describe pods || true
+          kubectl --context kind-devbox -n devbox-sandboxes get events --sort-by=.lastTimestamp || true
+          kubectl --context kind-devbox describe node devbox-control-plane | sed -n '/Allocated resources/,/Events/p' || true
+          kubectl --context kind-devbox -n devbox logs deploy/devbox-control-plane --tail=200 || true
+          kubectl --context kind-devbox -n devbox logs deploy/devbox-iron-proxy --tail=200 || true
+          kubectl --context kind-devbox -n devbox logs deploy/opensandbox-server --tail=200 || true

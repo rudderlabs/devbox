@@ -1,0 +1,12 @@
+llm:
+  reasoningEffort: medium
+  stages:
+    orientation: { model: gpt-orientation, reasoningEffort: low }
+    planning: { model: gpt-planning, reasoningEffort: high }
+    planReview: { model: gpt-plan-review, reasoningEffort: minimal }
+    implementation: { model: gpt-implementation, reasoningEffort: xhigh }
+    distillation: { model: gpt-distillation, reasoningEffort: medium }
+    review: { model: gpt-review, reasoningEffort: high }
+    followup: { model: gpt-followup, reasoningEffort: none }
+extraEnv:
+  - { name: HARNESS_PLANNING_MODEL, value: extra-env-planning }

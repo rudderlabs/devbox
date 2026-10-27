@@ -1,0 +1,46 @@
+{
+  "name": "devbox-control-plane",
+  "version": "0.19.1",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "db:generate": "bunx drizzle-kit generate",
+    "db:migrate": "bun run src/db/migrate.ts",
+    "api-token": "bun run scripts/api-token.ts",
+    "github-token": "bun run src/githubTokenMinter.ts",
+    "dev-test": "bun run scripts/dev-test.ts",
+    "local-down": "bash scripts/local-down.sh",
+    "typecheck": "bunx tsc --noEmit",
+    "lint": "bunx @biomejs/biome lint .",
+    "format": "bunx @biomejs/biome format --write .",
+    "biome": "bunx @biomejs/biome check .",
+    "biome:ci": "bunx @biomejs/biome ci .",
+    "test": "bun test --isolate"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/bun": "latest",
+    "drizzle-kit": "^0.31.11"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@alibaba-group/opensandbox": "^0.1.6",
+    "@linear/sdk": "^81.0.0",
+    "cls-rtracer": "^2.6.4",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.13",
+    "lodash": "^4.18.1",
+    "safe-stable-stringify": "^2.5.0",
+    "winston": "^3.19.0",
+    "yaml": "2.9.1"
+  },
+  "overrides": {
+    "undici": "^7.30.1"
+  }
+}

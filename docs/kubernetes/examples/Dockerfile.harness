@@ -1,0 +1,19 @@
+# A harness image with an extra toolchain (docs/kubernetes/harness-image.md).
+# Build and push it, then set images.harness to it. images.tag sets the tag of
+# both devbox images, so tag this one with the devbox version too.
+#
+#   docker build -f Dockerfile.harness -t <registry>/devbox-harness-java:0.1.0 .
+#   docker push <registry>/devbox-harness-java:0.1.0
+ARG DEVBOX_VERSION=0.1.0
+FROM rudderlabs/devbox-harness:${DEVBOX_VERSION}
+
+# Sandboxes reach only GitHub and the LLM host, so install every tool the agent
+# needs here, not at task time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        openjdk-17-jdk-headless \
+        maven \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep the base image's user (root), working directory (/workspace) and
+# /usr/local/bin/harness-entrypoint: the control plane starts sandboxes with it.

@@ -1,0 +1,97 @@
+{{- $llmHost := include "devbox.llmHost" . }}
+# Same allowlist and secret matching as control-plane/scripts/up/ironProxy.ts
+# renders for Compose; tests/iron-proxy.test.ts keeps them equal.
+# Secrets are read from mounted files on a TTL, so a rotated Secret takes
+# effect without a restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devbox-iron-proxy-config
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    dns:
+      listen: ":5353"
+      # Every name a sandbox looks up resolves to iron-proxy's Service.
+      proxy_ip: {{ .Values.ironProxy.clusterIP | quote }}
+    proxy:
+      http_listen: ":8080"
+      https_listen: ":8443"
+      max_request_body_bytes: 10485760
+    tls:
+      ca_cert: /certs/tls.crt
+      ca_key: /certs/tls.key
+      cert_cache_size: 500
+      leaf_cert_expiry_hours: 24
+    transforms:
+      - name: allowlist
+        config:
+          rules:
+            - host: codeload.github.com
+              methods: [GET, HEAD]
+              paths: ["/*"]
+            - host: github.com
+              methods: [GET, HEAD]
+              paths: ["/*"]
+            # Clones and fetches of any repo: git-upload-pack is the read side
+            # of smart-HTTP git (pushes use git-receive-pack, allowed per repo
+            # below). A `*` inside a path matches one segment: /<owner>/<repo>.git
+            # needs two.
+            - host: github.com
+              methods: [POST]
+              paths: ["/*/*/git-upload-pack"]
+            {{- range .Values.repos }}
+            {{- $owner := include "devbox.repoOwner" .url }}
+            {{- $name := include "devbox.repoName" .url }}
+            - host: github.com
+              paths: [{{ printf "/%s/%s/*" $owner $name | quote }}, {{ printf "/%s/%s.git/*" $owner $name | quote }}]
+            - host: api.github.com
+              paths: [{{ printf "/repos/%s/%s/*" $owner $name | quote }}]
+            - host: raw.githubusercontent.com
+              paths: [{{ printf "/%s/%s/*" $owner $name | quote }}]
+            {{- end }}
+            {{- $orgs := .Values.github.trustedOrgs }}
+            {{- range $orgs }}
+            {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9-]*$" .) }}
+            {{- fail (printf "github.trustedOrgs: %q is not a GitHub login" .) }}
+            {{- end }}
+            {{- end }}
+            {{- if $orgs }}
+            - host: api.github.com
+              methods: [GET, HEAD]
+              paths:
+                {{- range $orgs }}
+                - {{ printf "/orgs/%s/members" . | quote }}
+                {{- end }}
+            {{- end }}
+            - host: api.github.com
+              methods: [GET, HEAD]
+              paths: ["/users/*"]
+            - host: "*.blob.core.windows.net"
+              methods: [GET, HEAD]
+              paths: ["/actions-results/*"]
+            - host: {{ $llmHost | quote }}
+              methods: [POST]
+              paths: [{{ include "devbox.llmPath" . | quote }}]
+            {{- with .Values.ironProxy.extraAllowlist }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      - name: secrets
+        config:
+          secrets:
+            - source: { type: file, path: /var/run/devbox/github/token, ttl: 60s }
+              proxy_value: proxy-github-dummy-token
+              match_headers: [Authorization]
+              rules:
+                - host: github.com
+                - host: api.github.com
+                - host: raw.githubusercontent.com
+            - source: { type: file, path: /var/run/devbox/llm/api-key, ttl: 60s }
+              proxy_value: proxy-llm-dummy-token
+              # api-key: Azure OpenAI's header. x-api-key: Anthropic's.
+              match_headers: [Authorization, api-key, x-api-key]
+              rules:
+                - host: {{ $llmHost | quote }}
+    log:
+      level: info

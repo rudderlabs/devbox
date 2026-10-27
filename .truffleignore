@@ -1,0 +1,32 @@
+# Paths the image scanner must not scan, for rudderlabs/build-scan-push-action.
+# Its docker-image-scanner.py reads this file with
+# pathspec.PathSpec.from_lines("gitwildmatch", ...), so these are
+# **gitignore patterns, not regexes**: a leading `^` would be a literal
+# character and would match nothing.
+#
+# Everything listed is third-party or base-OS content baked into the images,
+# where the detectors fire on example URIs in library documentation and on byte
+# patterns inside compiled objects (tiktoken, jiter, perl). devbox's own code
+# under /app and /opt/harness/src is still scanned.
+
+# Dependencies
+**/node_modules/**
+**/.venv/**
+
+# Package-manager caches the images currently keep
+**/.cache/uv/**
+**/.cache/node/**
+
+# Toolchains installed into the harness image
+/usr/local/go/**
+
+# Base image: distro packages, shared libraries, docs, perl, dpkg state
+/usr/lib/**
+/usr/share/**
+/usr/bin/**
+/usr/local/bin/**
+/usr/local/lib/**
+/var/lib/dpkg/**
+/bin/**
+/sbin/**
+/lib/**

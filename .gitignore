@@ -1,0 +1,10 @@
+node_modules/
+.venv/
+dist/
+.superpowers/
+devbox.config.json
+devbox.k8s.json
+devbox.kind.json
+.env
+# GitHub App private keys written by bun run github:setup
+*.private-key.pem

@@ -1,0 +1,94 @@
+# Weekly version updates, each held 7 days after release. Security updates
+# ignore the cooldown and arrive in one grouped PR per ecosystem.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+      exclude:
+        - "rudderlabs/*"
+        - "rudderstack/*"
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "bun"
+    directories:
+      - "/cli"
+      - "/control-plane"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      # A group covers version updates only, unless it sets applies-to.
+      bun-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      bun-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "uv"
+    directory: "/harness"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      uv-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      uv-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/control-plane"
+      - "/harness"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+      exclude:
+        - "rudderstack/*"
+    # The Bun base moves by hand, together with the other Bun pins
+    # (CI bun-version, MIN_BUN_VERSION, MIN_BUN). A lone FROM bump drifts.
+    ignore:
+      - dependency-name: "oven/bun"
+    groups:
+      docker-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker-compose"
+    directory: "/control-plane"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+      exclude:
+        - "rudderstack/*"
+    groups:
+      compose-deps:
+        patterns:
+          - "*"

@@ -1,0 +1,129 @@
+{{- $sandboxNs := include "devbox.sandboxNamespace" . }}
+{{- $hook := dict "helm.sh/hook" "pre-install,pre-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devbox-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations: {{- merge (dict "helm.sh/hook-weight" "-10") $hook | toYaml | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devbox-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations: {{- merge (dict "helm.sh/hook-weight" "-10") $hook | toYaml | nindent 4 }}
+rules:
+  # RBAC cannot limit create by name.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames:
+      - devbox-opensandbox
+      - devbox-postgres
+      - devbox-iron-proxy-ca
+      {{- if include "devbox.githubMinter" . }}
+      - {{ include "devbox.githubSecret" . }}
+      {{- end }}
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devbox-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations: {{- merge (dict "helm.sh/hook-weight" "-10") $hook | toYaml | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: devbox-bootstrap }
+subjects:
+  - { kind: ServiceAccount, name: devbox-bootstrap, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devbox-bootstrap
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations: {{- merge (dict "helm.sh/hook-weight" "-10") $hook | toYaml | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [iron-proxy-ca-cert]
+    verbs: [get, patch]
+  # RBAC cannot limit create by name.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    resourceNames: [devbox-repos-scratch]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devbox-bootstrap
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations: {{- merge (dict "helm.sh/hook-weight" "-10") $hook | toYaml | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: devbox-bootstrap }
+subjects:
+  - { kind: ServiceAccount, name: devbox-bootstrap, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devbox-bootstrap-script
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations: {{- merge (dict "helm.sh/hook-weight" "-10") $hook | toYaml | nindent 4 }}
+data:
+  bootstrap.sh: |
+{{ .Files.Get "files/bootstrap.sh" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: devbox-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations: {{- merge (dict "helm.sh/hook-weight" "0") $hook | toYaml | nindent 4 }}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {{- include "devbox.selectorLabels" "bootstrap" | nindent 8 }}
+    spec:
+      serviceAccountName: devbox-bootstrap
+{{ include "devbox.controlPlaneImagePullSecrets" . | indent 6 }}
+      restartPolicy: Never
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
+      containers:
+        - name: bootstrap
+          image: {{ include "devbox.controlPlaneImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: [sh, /scripts/bootstrap.sh]
+          env:
+            - { name: RELEASE_NAMESPACE, value: {{ .Release.Namespace | quote }} }
+            - { name: SANDBOX_NAMESPACE, value: {{ $sandboxNs | quote }} }
+            - { name: POSTGRES_ENABLED, value: {{ .Values.postgresql.enabled | quote }} }
+            - { name: SCRATCH_PVC, value: devbox-repos-scratch }
+            - { name: STORAGE_CLASS, value: {{ .Values.storage.storageClass | quote }} }
+            - { name: WORKSPACE_SIZE, value: {{ .Values.workspace.size | quote }} }
+            {{- if include "devbox.githubMinter" . }}
+            # The minter may only update this Secret, so it must exist first.
+            - { name: GITHUB_TOKEN_SECRET, value: {{ include "devbox.githubSecret" . | quote }} }
+            {{- end }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+      volumes:
+        - name: scripts
+          configMap: { name: devbox-bootstrap-script }

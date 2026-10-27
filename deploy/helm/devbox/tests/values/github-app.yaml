@@ -1,0 +1,11 @@
+integrations:
+  githubApp:
+    enabled: true
+    appId: 123456
+    installationId: 7890123
+    botLogin: example-devbox
+    botUserId: 1234567
+    tokens: devbox
+    tokenScope: repos
+    ciResults: true
+github: { trustedOrgs: [example-org], trustedUsers: [alice, bob] }

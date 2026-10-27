@@ -1,0 +1,32 @@
+devbox is installed in namespace {{ .Release.Namespace }}; sandboxes run in {{ include "devbox.sandboxNamespace" . }}.
+{{- $ing := .Values.ingress }}
+{{- if or $ing.webhooks.enabled $ing.api.enabled }}
+
+Ingresses:
+{{- if $ing.webhooks.enabled }}
+  webhooks: {{ ternary "https" "http" (not (empty $ing.webhooks.tls)) }}://{{ $ing.webhooks.host }}
+{{- end }}
+{{- if $ing.api.enabled }}
+  API and CLI: {{ include "devbox.publicBaseUrl" . }}
+{{- end }}
+{{- range $role := list "webhooks" "api" }}
+{{- $cfg := get $ing $role }}
+{{- if and $cfg.enabled (empty $cfg.tls) }}
+
+WARNING: the {{ $role }} Ingress has no TLS. Terminate TLS in front of it (a load balancer or the Ingress controller), or set ingress.{{ $role }}.tls.
+{{- end }}
+{{- end }}
+{{- end }}
+
+Installed with `bun run k8s:install`: {{ if not $ing.api.enabled }}run
+`bun run k8s:connect --target <file>`, then {{ end }}`bun run devbox create "…"`.
+
+Installed another way (GitOps):
+  1. Create an API token:
+     kubectl -n {{ .Release.Namespace }} exec deploy/devbox-control-plane -- bun run api-token create <name>
+  2. Save it as a CLI profile:
+     devbox profile add <name> --url {{ if $ing.api.enabled }}{{ include "devbox.publicBaseUrl" . }}{{ else }}http://localhost:3000{{ end }} --token <token> --use
+{{- if not $ing.api.enabled }}
+  3. Reach the control plane:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/devbox-control-plane 3000:3000
+{{- end }}

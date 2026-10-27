@@ -1,0 +1,55 @@
+{{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: devbox-postgres
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "devbox.selectorLabels" "postgres" | nindent 4 }}
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: devbox-postgres
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  serviceName: devbox-postgres
+  replicas: 1
+  selector:
+    matchLabels: {{- include "devbox.selectorLabels" "postgres" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "devbox.selectorLabels" "postgres" | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgresql.image }}
+          env:
+            - { name: POSTGRES_DB, value: devbox }
+            - { name: POSTGRES_USER, value: devbox }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: devbox-postgres, key: password } }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          readinessProbe:
+            exec: { command: [pg_isready, -U, devbox, -d, devbox] }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            # postgres:18 keeps its data under /var/lib/postgresql/<major>.
+            - { name: data, mountPath: /var/lib/postgresql }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels: {{- include "devbox.selectorLabels" "postgres" | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.storage.storageClass }}
+        resources: { requests: { storage: {{ .Values.postgresql.size }} } }
+{{- end }}

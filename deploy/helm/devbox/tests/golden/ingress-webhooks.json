@@ -1,0 +1,2487 @@
+{
+  "ClusterRole//opensandbox-manager-role": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "ClusterRole",
+    "metadata": {
+      "name": "opensandbox-manager-role",
+      "labels": {
+        "helm.sh/chart": "opensandbox-controller-0.2.1",
+        "app.kubernetes.io/name": "opensandbox",
+        "app.kubernetes.io/instance": "devbox",
+        "control-plane": "controller-manager",
+        "app.kubernetes.io/version": "0.2.0",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "rbac"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "events",
+          "pods"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch",
+          "update",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "pods/status"
+        ],
+        "verbs": [
+          "get",
+          "patch",
+          "update"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "configmaps"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "secrets"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          "batch"
+        ],
+        "resources": [
+          "jobs"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch",
+          "update",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          "batch"
+        ],
+        "resources": [
+          "jobs/status"
+        ],
+        "verbs": [
+          "get",
+          "patch",
+          "update"
+        ]
+      },
+      {
+        "apiGroups": [
+          "sandbox.opensandbox.io"
+        ],
+        "resources": [
+          "batchsandboxes",
+          "pools",
+          "sandboxsnapshots"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch",
+          "update",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          "sandbox.opensandbox.io"
+        ],
+        "resources": [
+          "batchsandboxes/finalizers",
+          "pools/finalizers",
+          "sandboxsnapshots/finalizers"
+        ],
+        "verbs": [
+          "update"
+        ]
+      },
+      {
+        "apiGroups": [
+          "sandbox.opensandbox.io"
+        ],
+        "resources": [
+          "batchsandboxes/status",
+          "pools/status",
+          "sandboxsnapshots/status"
+        ],
+        "verbs": [
+          "get",
+          "patch",
+          "update"
+        ]
+      }
+    ]
+  },
+  "ClusterRole//opensandbox-server-role": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "ClusterRole",
+    "metadata": {
+      "name": "opensandbox-server-role",
+      "labels": {
+        "helm.sh/chart": "opensandbox-server-0.1.0",
+        "app.kubernetes.io/name": "opensandbox-server",
+        "app.kubernetes.io/instance": "devbox",
+        "app.kubernetes.io/version": "0.2.2",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "opensandbox-server",
+        "app.kubernetes.io/part-of": "opensandbox"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "pods",
+          "pods/status",
+          "pods/log",
+          "events",
+          "services",
+          "configmaps"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch",
+          "update",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "namespaces"
+        ],
+        "verbs": [
+          "get",
+          "list"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "secrets"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "persistentvolumeclaims"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch"
+        ]
+      },
+      {
+        "apiGroups": [
+          "node.k8s.io"
+        ],
+        "resources": [
+          "runtimeclasses"
+        ],
+        "verbs": [
+          "get",
+          "list"
+        ]
+      },
+      {
+        "apiGroups": [
+          "sandbox.opensandbox.io"
+        ],
+        "resources": [
+          "batchsandboxes",
+          "batchsandboxes/status",
+          "batchsandboxes/finalizers"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch",
+          "update",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          "sandbox.opensandbox.io"
+        ],
+        "resources": [
+          "pools",
+          "pools/status",
+          "pools/finalizers"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch",
+          "update",
+          "watch"
+        ]
+      },
+      {
+        "apiGroups": [
+          "sandbox.opensandbox.io"
+        ],
+        "resources": [
+          "sandboxsnapshots",
+          "sandboxsnapshots/status",
+          "sandboxsnapshots/finalizers"
+        ],
+        "verbs": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "patch",
+          "update",
+          "watch"
+        ]
+      }
+    ]
+  },
+  "ClusterRoleBinding//opensandbox-manager-role": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "ClusterRoleBinding",
+    "metadata": {
+      "name": "opensandbox-manager-role",
+      "labels": {
+        "helm.sh/chart": "opensandbox-controller-0.2.1",
+        "app.kubernetes.io/name": "opensandbox",
+        "app.kubernetes.io/instance": "devbox",
+        "control-plane": "controller-manager",
+        "app.kubernetes.io/version": "0.2.0",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "rbac"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "ClusterRole",
+      "name": "opensandbox-manager-role"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "opensandbox-controller-manager",
+        "namespace": "devbox"
+      }
+    ]
+  },
+  "ClusterRoleBinding//opensandbox-server-rolebinding": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "ClusterRoleBinding",
+    "metadata": {
+      "name": "opensandbox-server-rolebinding",
+      "labels": {
+        "helm.sh/chart": "opensandbox-server-0.1.0",
+        "app.kubernetes.io/name": "opensandbox-server",
+        "app.kubernetes.io/instance": "devbox",
+        "app.kubernetes.io/version": "0.2.2",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "opensandbox-server",
+        "app.kubernetes.io/part-of": "opensandbox"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "ClusterRole",
+      "name": "opensandbox-server-role"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "opensandbox-server",
+        "namespace": "devbox"
+      }
+    ]
+  },
+  "ConfigMap/devbox-sandboxes/devbox-snapshot-builder-script": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "devbox-snapshot-builder-script",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "data": {
+      "snapshot-builder.sh": "#!/bin/sh\n# Builds a repo snapshot: clones or fetches the configured repos\n# into the scratch volume, flushes them to disk, creates a VolumeSnapshot\n# repos-<UTC timestamp>, waits until it is ready and deletes all but the\n# newest $KEEP. The control plane restores each task's workspace from the\n# newest ready snapshot.\n#\n# Trusted and clone-only: it reads the real GitHub token (from the release\n# namespace, through the API, so it is never stored in the sandbox namespace)\n# and its egress is open on 443. It must never run repo code.\nset -eu\n\nKUBECTL=\"${KUBECTL:-kubectl}\"\nGIT=\"${GIT:-git}\"\nREPOS_DIR=\"${REPOS_DIR:-/repos}\"\n: \"${REPOS:?}\" \"${RELEASE_NAMESPACE:?}\" \"${SANDBOX_NAMESPACE:?}\" \"${GITHUB_SECRET:?}\"\n: \"${SCRATCH_PVC:?}\" \"${SNAPSHOT_CLASS:?}\" \"${KEEP:?}\"\n\n# On its own so that a failed read stops the run (set -e) instead of cloning\n# anonymously.\nencoded=\"$(\"$KUBECTL\" get secret \"$GITHUB_SECRET\" -n \"$RELEASE_NAMESPACE\" -o 'jsonpath={.data.token}')\"\ntoken=\"$(printf '%s' \"$encoded\" | base64 -d | tr -d '\\r\\n')\"\nunset encoded\nif [ -n \"$token\" ]; then\n  # Via GIT_CONFIG_* env: never argv or .git/config.\n  export GIT_CONFIG_COUNT=1\n  export GIT_CONFIG_KEY_0=\"http.https://github.com/.extraheader\"\n  GIT_CONFIG_VALUE_0=\"Authorization: Basic $(printf 'x-access-token:%s' \"$token\" | base64 | tr -d '\\n')\"\n  export GIT_CONFIG_VALUE_0\nelse\n  echo \"the GitHub token is empty: cloning anonymously\"\nfi\nunset token\nexport GIT_TERMINAL_PROMPT=0\n\necho \"$REPOS\" | while read -r url branch; do\n  [ -n \"$url\" ] || continue\n  case \"$url\" in\n    https://github.com/*/*.git) ;;\n    *) echo \"unsupported repo url: $url (expected https://github.com/<owner>/<repo>.git)\" >&2; exit 1 ;;\n  esac\n  name=\"$(basename \"$url\" .git)\"\n  case \"$name\" in \"\" | . | .. | -*) echo \"bad repo name in $url\" >&2; exit 1 ;; esac\n  case \"$branch\" in \"\" | -* | *..*) echo \"bad branch for $url: $branch\" >&2; exit 1 ;; esac\n  dir=\"$REPOS_DIR/$name\"\n  if [ -d \"$dir/.git\" ]; then\n    echo \"fetch $url ($branch)\"\n    \"$GIT\" -C \"$dir\" -c core.fsync=all fetch -q --depth 1 origin \"+refs/heads/$branch:refs/remotes/origin/$branch\"\n    \"$GIT\" -C \"$dir\" checkout -q -f -B \"$branch\" \"origin/$branch\"\n    \"$GIT\" -C \"$dir\" clean -q -ffdx\n  else\n    echo \"clone $url ($branch)\"\n    rm -rf \"$dir\"\n    \"$GIT\" -c core.fsync=all clone -q --depth 1 --single-branch --branch \"$branch\" -- \"$url\" \"$dir\"\n  fi\ndone\n\nif grep -lsE \"x-access-token|github_pat_|gh[opsu]_\" \"$REPOS_DIR\"/*/.git/config; then\n  echo \"token found in the git config files above; aborting\" >&2\n  exit 1\nfi\nsync\n\nname=\"repos-${SNAPSHOT_TIMESTAMP:-$(date -u +%Y%m%d%H%M%S)}\"\n\"$KUBECTL\" create -f - <<EOF\napiVersion: snapshot.storage.k8s.io/v1\nkind: VolumeSnapshot\nmetadata:\n  name: $name\n  namespace: $SANDBOX_NAMESPACE\n  labels:\n    app.kubernetes.io/part-of: devbox\n    app.kubernetes.io/component: repo-snapshot\n    app.kubernetes.io/managed-by: devbox-snapshot-builder\nspec:\n  volumeSnapshotClassName: $SNAPSHOT_CLASS\n  source:\n    persistentVolumeClaimName: $SCRATCH_PVC\nEOF\n\"$KUBECTL\" wait volumesnapshot \"$name\" -n \"$SANDBOX_NAMESPACE\" \\\n  --for='jsonpath={.status.readyToUse}=true' --timeout=\"${READY_TIMEOUT:-15m}\"\necho \"snapshot $name is ready\"\n\n# Oldest first; delete all but the newest $KEEP of this builder's own\n# snapshots: both labels and the repos- name, so a snapshot made by hand in\n# this namespace is never pruned. awk instead of `head -n -N`, which BSD head\n# rejects. Same labels as control-plane/src/clients/repoSnapshots.ts.\n\"$KUBECTL\" get volumesnapshot -n \"$SANDBOX_NAMESPACE\" \\\n  -l app.kubernetes.io/component=repo-snapshot,app.kubernetes.io/managed-by=devbox-snapshot-builder \\\n  --sort-by=.metadata.creationTimestamp -o name \\\n  | awk -v keep=\"$KEEP\" '/\\/repos-[^\\/]*$/ { l[++n] = $0 } END { for (i = 1; i <= n - keep; i++) print l[i] }' \\\n  | while read -r old; do\n  \"$KUBECTL\" delete -n \"$SANDBOX_NAMESPACE\" \"$old\" --wait=false\ndone\n"
+    }
+  },
+  "ConfigMap/devbox/devbox-bootstrap-script": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "devbox-bootstrap-script",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "pre-install,pre-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "helm.sh/hook-weight": "-10"
+      }
+    },
+    "data": {
+      "bootstrap.sh": "#!/bin/sh\n# Creates the chart's generated secrets when they are missing:\n# the OpenSandbox API key, the Postgres password, the iron-proxy CA and, with\n# the GitHub token minter, an empty token Secret for it to fill, and\n# copies the CA's public certificate into a ConfigMap in the sandbox\n# namespace. Never replaces an existing value, so every install and upgrade\n# can run it. Runs as a Helm pre-install/pre-upgrade hook (ArgoCD: PreSync).\n# Kubernetes RBAC cannot limit `create` by name; this Job's Role allows\n# creating Secrets in the release namespace and reading only the named ones.\nset -eu\n\nKUBECTL=\"${KUBECTL:-kubectl}\"\nNS=\"${RELEASE_NAMESPACE:?}\"\nSANDBOX_NS=\"${SANDBOX_NAMESPACE:?}\"\nWORK=\"$(mktemp -d)\"\ntrap 'rm -rf \"$WORK\"' EXIT\nSCRATCH_PVC=\"${SCRATCH_PVC:?}\"\nSTORAGE_CLASS=\"${STORAGE_CLASS:?}\"\nWORKSPACE_SIZE=\"${WORKSPACE_SIZE:?}\"\n\nmissing() { ! \"$KUBECTL\" get secret \"$1\" -n \"$NS\" -o name >/dev/null 2>&1; }\nrandom_hex() { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n'; }\n\nif missing devbox-opensandbox; then\n  random_hex >\"$WORK/api-key\"\n  \"$KUBECTL\" create secret generic devbox-opensandbox -n \"$NS\" --from-file=\"api-key=$WORK/api-key\"\n  echo \"created secret devbox-opensandbox\"\nfi\n\nif [ \"${POSTGRES_ENABLED:-false}\" = true ] && missing devbox-postgres; then\n  random_hex >\"$WORK/password\"\n  \"$KUBECTL\" create secret generic devbox-postgres -n \"$NS\" --from-file=\"password=$WORK/password\"\n  echo \"created secret devbox-postgres\"\nfi\n\nif missing devbox-iron-proxy-ca; then\n  (\n    umask 077\n    openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 3650 \\\n      -subj \"/CN=devbox iron-proxy CA\" \\\n      -addext \"basicConstraints=critical,CA:TRUE\" \\\n      -addext \"keyUsage=critical,keyCertSign,cRLSign\" \\\n      -keyout \"$WORK/tls.key\" -out \"$WORK/tls.crt\" 2>/dev/null\n  )\n  \"$KUBECTL\" create secret generic devbox-iron-proxy-ca -n \"$NS\" \\\n    --from-file=\"tls.crt=$WORK/tls.crt\" --from-file=\"tls.key=$WORK/tls.key\"\n  echo \"created secret devbox-iron-proxy-ca\"\nfi\n\n# The GitHub token minter may only update its Secret (RBAC cannot limit\n# create by name), so it starts empty here when the installer did not write\n# one. Readers treat an empty token as not yet minted.\nif [ -n \"${GITHUB_TOKEN_SECRET:-}\" ] && missing \"$GITHUB_TOKEN_SECRET\"; then\n  : >\"$WORK/token\"\n  \"$KUBECTL\" create secret generic \"$GITHUB_TOKEN_SECRET\" -n \"$NS\" --from-file=\"token=$WORK/token\"\n  echo \"created secret $GITHUB_TOKEN_SECRET (empty until the minter writes a token)\"\nfi\n\n# The public certificate for sandboxes, rewritten from the Secret on every\n# run, so a deleted or stale ConfigMap heals without a new CA. The private\n# key never leaves the release namespace.\n\"$KUBECTL\" get secret devbox-iron-proxy-ca -n \"$NS\" -o 'jsonpath={.data.tls\\.crt}' | base64 -d >\"$WORK/ca.crt\"\n\"$KUBECTL\" create configmap iron-proxy-ca-cert -n \"$SANDBOX_NS\" \\\n  --from-file=\"ca.crt=$WORK/ca.crt\" --dry-run=client -o json | \"$KUBECTL\" apply -f -\necho \"CA certificate published to $SANDBOX_NS\"\n\n# The snapshot builder's scratch volume is created here, not by the chart:\n# on a WaitForFirstConsumer StorageClass a claim binds only once a pod mounts\n# it, and `helm --wait` (ArgoCD and Flux too) waits for every chart PVC to\n# bind before the post-install hook that would mount this one. A claim made\n# by a hook is outside that wait. Its size is fixed at creation: most classes\n# cannot shrink, so a changed workspace.size is refused rather than ignored.\n# The requested size is kept in an annotation: the API server stores 1024Mi\n# as 1Gi, so the claim's own size cannot be compared with workspace.size.\nif size=\"$(\"$KUBECTL\" get pvc \"$SCRATCH_PVC\" -n \"$SANDBOX_NS\" -o 'jsonpath={.metadata.annotations.devbox\\.io/workspace-size}' 2>/dev/null)\"; then\n  if [ -z \"$size\" ]; then\n    echo \"the scratch volume $SCRATCH_PVC was not created by devbox: its size is not checked\"\n  elif [ \"$size\" != \"$WORKSPACE_SIZE\" ]; then\n    echo \"the scratch volume $SCRATCH_PVC is $size but workspace.size is $WORKSPACE_SIZE: delete it to resize (kubectl -n $SANDBOX_NS delete pvc $SCRATCH_PVC), then run bun run k8s:refresh-snapshot --target <file>\" >&2\n    exit 1\n  fi\nelse\n  \"$KUBECTL\" create -f - <<EOF\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: $SCRATCH_PVC\n  namespace: $SANDBOX_NS\n  labels:\n    app.kubernetes.io/part-of: devbox\n    app.kubernetes.io/component: snapshot-builder\n  annotations:\n    devbox.io/workspace-size: \"$WORKSPACE_SIZE\"\nspec:\n  accessModes: [ReadWriteOnce]\n  storageClassName: $STORAGE_CLASS\n  resources: { requests: { storage: $WORKSPACE_SIZE } }\nEOF\n  echo \"created the scratch volume $SCRATCH_PVC ($WORKSPACE_SIZE)\"\nfi\n"
+    }
+  },
+  "ConfigMap/devbox/devbox-iron-proxy-config": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "devbox-iron-proxy-config",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "data": {
+      "config.yaml": "dns:\n  listen: \":5353\"\n  # Every name a sandbox looks up resolves to iron-proxy's Service.\n  proxy_ip: \"10.96.0.20\"\nproxy:\n  http_listen: \":8080\"\n  https_listen: \":8443\"\n  max_request_body_bytes: 10485760\ntls:\n  ca_cert: /certs/tls.crt\n  ca_key: /certs/tls.key\n  cert_cache_size: 500\n  leaf_cert_expiry_hours: 24\ntransforms:\n  - name: allowlist\n    config:\n      rules:\n        - host: codeload.github.com\n          methods: [GET, HEAD]\n          paths: [\"/*\"]\n        - host: github.com\n          methods: [GET, HEAD]\n          paths: [\"/*\"]\n        # Clones and fetches of any repo: git-upload-pack is the read side\n        # of smart-HTTP git (pushes use git-receive-pack, allowed per repo\n        # below). A `*` inside a path matches one segment: /<owner>/<repo>.git\n        # needs two.\n        - host: github.com\n          methods: [POST]\n          paths: [\"/*/*/git-upload-pack\"]\n        - host: github.com\n          paths: [\"/acme/widgets/*\", \"/acme/widgets.git/*\"]\n        - host: api.github.com\n          paths: [\"/repos/acme/widgets/*\"]\n        - host: raw.githubusercontent.com\n          paths: [\"/acme/widgets/*\"]\n        - host: api.github.com\n          methods: [GET, HEAD]\n          paths: [\"/users/*\"]\n        - host: \"*.blob.core.windows.net\"\n          methods: [GET, HEAD]\n          paths: [\"/actions-results/*\"]\n        - host: \"llm.example.com\"\n          methods: [POST]\n          paths: [\"/v1/responses\"]\n  - name: secrets\n    config:\n      secrets:\n        - source: { type: file, path: /var/run/devbox/github/token, ttl: 60s }\n          proxy_value: proxy-github-dummy-token\n          match_headers: [Authorization]\n          rules:\n            - host: github.com\n            - host: api.github.com\n            - host: raw.githubusercontent.com\n        - source: { type: file, path: /var/run/devbox/llm/api-key, ttl: 60s }\n          proxy_value: proxy-llm-dummy-token\n          # api-key: Azure OpenAI's header. x-api-key: Anthropic's.\n          match_headers: [Authorization, api-key, x-api-key]\n          rules:\n            - host: \"llm.example.com\"\nlog:\n  level: info\n"
+    }
+  },
+  "ConfigMap/devbox/devbox-sandbox-template": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "devbox-sandbox-template",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "data": {
+      "batchsandbox-template.yaml": "metadata: {}\nspec:\n  replicas: 1\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/part-of: devbox\n        app.kubernetes.io/component: sandbox\n    spec:\n      restartPolicy: Never\n      enableServiceLinks: false\n      automountServiceAccountToken: false\n      dnsPolicy: None\n      dnsConfig:\n        nameservers: [\"10.96.0.20\"]\n      volumes:\n        - name: iron-proxy-ca\n          configMap: { name: iron-proxy-ca-cert }\n      containers:\n        - name: sandbox\n          volumeMounts:\n            - { name: iron-proxy-ca, mountPath: /run/iron-proxy, readOnly: true }\n"
+    }
+  },
+  "ConfigMap/devbox/opensandbox-server-config": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "opensandbox-server-config",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-server-0.1.0",
+        "app.kubernetes.io/name": "opensandbox-server",
+        "app.kubernetes.io/instance": "devbox",
+        "app.kubernetes.io/version": "0.2.2",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "opensandbox-server",
+        "app.kubernetes.io/part-of": "opensandbox"
+      }
+    },
+    "data": {
+      "config.toml": "[server]\nhost = \"0.0.0.0\"\nport = 80\nmax_sandbox_timeout_seconds = 86400\n\n[log]\nlevel = \"INFO\"\n\n[runtime]\ntype = \"kubernetes\"\nexecd_image = \"opensandbox/execd:v1.0.22\"\n\n[storage]\nallowed_host_paths = []\nvolume_default_size = \"1Gi\"\n\n[kubernetes]\nkubeconfig_path = \"\"\nnamespace = \"devbox-sandboxes\"\ninformer_enabled = true\ninformer_resync_seconds = 300\ninformer_watch_timeout_seconds = 60\nworkload_provider = \"batchsandbox\"\nimage_pull_policy = \"IfNotPresent\"\nbatchsandbox_template_file = \"/etc/devbox/batchsandbox-template.yaml\"\n\n[egress]\nimage = \"opensandbox/egress:v1.1.7\"\nmode = \"dns\"\n\n[renew_intent]\nenabled = false\nmin_interval_seconds = 60\n\n\n[ingress]\nmode = \"direct\"\n"
+    }
+  },
+  "CronJob/devbox-sandboxes/devbox-snapshot-builder": {
+    "apiVersion": "batch/v1",
+    "kind": "CronJob",
+    "metadata": {
+      "name": "devbox-snapshot-builder",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "schedule": "0 */6 * * *",
+      "suspend": false,
+      "concurrencyPolicy": "Forbid",
+      "successfulJobsHistoryLimit": 1,
+      "failedJobsHistoryLimit": 3,
+      "jobTemplate": {
+        "spec": {
+          "ttlSecondsAfterFinished": 600,
+          "backoffLimit": 2,
+          "template": {
+            "metadata": {
+              "labels": {
+                "app.kubernetes.io/part-of": "devbox",
+                "app.kubernetes.io/component": "snapshot-builder"
+              }
+            },
+            "spec": {
+              "serviceAccountName": "devbox-snapshot-builder",
+              "restartPolicy": "Never",
+              "securityContext": {
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "runAsGroup": 1000,
+                "fsGroup": 1000
+              },
+              "containers": [
+                {
+                  "name": "snapshot-builder",
+                  "image": "rudderlabs/devbox-control-plane:0.1.0",
+                  "imagePullPolicy": "IfNotPresent",
+                  "command": [
+                    "sh",
+                    "/scripts/snapshot-builder.sh"
+                  ],
+                  "env": [
+                    {
+                      "name": "REPOS",
+                      "value": "https://github.com/acme/widgets.git main\n"
+                    },
+                    {
+                      "name": "RELEASE_NAMESPACE",
+                      "value": "devbox"
+                    },
+                    {
+                      "name": "SANDBOX_NAMESPACE",
+                      "value": "devbox-sandboxes"
+                    },
+                    {
+                      "name": "GITHUB_SECRET",
+                      "value": "devbox-github"
+                    },
+                    {
+                      "name": "SCRATCH_PVC",
+                      "value": "devbox-repos-scratch"
+                    },
+                    {
+                      "name": "SNAPSHOT_CLASS",
+                      "value": "csi-hostpath-snapclass"
+                    },
+                    {
+                      "name": "KEEP",
+                      "value": "3"
+                    }
+                  ],
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "name": "repos",
+                      "mountPath": "/repos"
+                    },
+                    {
+                      "name": "scripts",
+                      "mountPath": "/scripts",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "volumes": [
+                {
+                  "name": "repos",
+                  "persistentVolumeClaim": {
+                    "claimName": "devbox-repos-scratch"
+                  }
+                },
+                {
+                  "name": "scripts",
+                  "configMap": {
+                    "name": "devbox-snapshot-builder-script"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "Deployment/devbox/devbox-control-plane": {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "name": "devbox-control-plane",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/part-of": "devbox",
+          "app.kubernetes.io/component": "control-plane"
+        }
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/part-of": "devbox",
+            "app.kubernetes.io/component": "control-plane"
+          }
+        },
+        "spec": {
+          "serviceAccountName": "devbox-control-plane",
+          "securityContext": {
+            "runAsNonRoot": true,
+            "runAsUser": 1000,
+            "runAsGroup": 1000
+          },
+          "containers": [
+            {
+              "name": "control-plane",
+              "image": "rudderlabs/devbox-control-plane:0.1.0",
+              "imagePullPolicy": "IfNotPresent",
+              "ports": [
+                {
+                  "name": "http",
+                  "containerPort": 3000
+                }
+              ],
+              "env": [
+                {
+                  "name": "PORT",
+                  "value": "3000"
+                },
+                {
+                  "name": "AUTO_MIGRATE",
+                  "value": "true"
+                },
+                {
+                  "name": "API_ENABLED",
+                  "value": "true"
+                },
+                {
+                  "name": "API_PUBLIC_BASE_URL",
+                  "value": "http://localhost:3000"
+                },
+                {
+                  "name": "SANDBOX_RUNTIME",
+                  "value": "k8s"
+                },
+                {
+                  "name": "OPENSANDBOX_DOMAIN",
+                  "value": "opensandbox-server:80"
+                },
+                {
+                  "name": "OPENSANDBOX_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "devbox-opensandbox",
+                      "key": "api-key"
+                    }
+                  }
+                },
+                {
+                  "name": "PVC_NAMESPACE",
+                  "value": "devbox-sandboxes"
+                },
+                {
+                  "name": "PVC_STORAGE_CLASS",
+                  "value": "csi-hostpath-sc"
+                },
+                {
+                  "name": "PVC_STORAGE_SIZE",
+                  "value": "15Gi"
+                },
+                {
+                  "name": "SANDBOX_IMAGE",
+                  "value": "rudderlabs/devbox-harness:0.1.0"
+                },
+                {
+                  "name": "SANDBOX_RESOURCE_CPU",
+                  "value": "2"
+                },
+                {
+                  "name": "SANDBOX_RESOURCE_MEMORY",
+                  "value": "8Gi"
+                },
+                {
+                  "name": "MAX_CONCURRENT_SANDBOXES",
+                  "value": "5"
+                },
+                {
+                  "name": "SANDBOX_GIT_NAME",
+                  "value": "devbox"
+                },
+                {
+                  "name": "SANDBOX_GIT_EMAIL",
+                  "value": "devbox@users.noreply.github.com"
+                },
+                {
+                  "name": "GITHUB_TOKEN_FILE",
+                  "value": "/var/run/devbox/github/token"
+                },
+                {
+                  "name": "HARNESS_LLM_PROVIDER",
+                  "value": "openai"
+                },
+                {
+                  "name": "HARNESS_LLM_BASE_URL",
+                  "value": "https://llm.example.com/v1"
+                },
+                {
+                  "name": "HARNESS_MODEL",
+                  "value": "gpt-test"
+                },
+                {
+                  "name": "HARNESS_LLM_API_KEY",
+                  "value": "proxy-llm-dummy-token"
+                },
+                {
+                  "name": "POSTGRES_PASSWORD",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "devbox-postgres",
+                      "key": "password"
+                    }
+                  }
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "value": "postgres://devbox:$(POSTGRES_PASSWORD)@devbox-postgres:5432/devbox"
+                }
+              ],
+              "envFrom": [
+                {
+                  "secretRef": {
+                    "name": "devbox-integrations",
+                    "optional": true
+                  }
+                }
+              ],
+              "startupProbe": {
+                "httpGet": {
+                  "path": "/health",
+                  "port": "http"
+                },
+                "periodSeconds": 5,
+                "failureThreshold": 60
+              },
+              "readinessProbe": {
+                "httpGet": {
+                  "path": "/health",
+                  "port": "http"
+                },
+                "periodSeconds": 10
+              },
+              "livenessProbe": {
+                "httpGet": {
+                  "path": "/health",
+                  "port": "http"
+                },
+                "initialDelaySeconds": 30,
+                "periodSeconds": 20
+              },
+              "resources": {
+                "limits": {
+                  "memory": "1Gi"
+                },
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "256Mi"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "github-token",
+                  "mountPath": "/var/run/devbox/github",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "github-token",
+              "secret": {
+                "secretName": "devbox-github"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Deployment/devbox/devbox-iron-proxy": {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "name": "devbox-iron-proxy",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/part-of": "devbox",
+          "app.kubernetes.io/component": "iron-proxy"
+        }
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/part-of": "devbox",
+            "app.kubernetes.io/component": "iron-proxy"
+          },
+          "annotations": {
+            "checksum/config": "374ad64ab61294cd69ced2bcb05cea27807b92c78f6527f250a51112a149cfb3"
+          }
+        },
+        "spec": {
+          "automountServiceAccountToken": false,
+          "securityContext": {
+            "runAsNonRoot": true,
+            "runAsUser": 65532,
+            "runAsGroup": 65532,
+            "fsGroup": 65532
+          },
+          "containers": [
+            {
+              "name": "iron-proxy",
+              "image": "ironsh/iron-proxy:0.45.0",
+              "args": [
+                "-config",
+                "/etc/iron-proxy/config.yaml"
+              ],
+              "ports": [
+                {
+                  "name": "dns-udp",
+                  "containerPort": 5353,
+                  "protocol": "UDP"
+                },
+                {
+                  "name": "dns-tcp",
+                  "containerPort": 5353,
+                  "protocol": "TCP"
+                },
+                {
+                  "name": "http",
+                  "containerPort": 8080,
+                  "protocol": "TCP"
+                },
+                {
+                  "name": "https",
+                  "containerPort": 8443,
+                  "protocol": "TCP"
+                }
+              ],
+              "readinessProbe": {
+                "tcpSocket": {
+                  "port": "https"
+                },
+                "periodSeconds": 10
+              },
+              "resources": {
+                "limits": {
+                  "memory": "512Mi"
+                },
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "128Mi"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "readOnlyRootFilesystem": true,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "config",
+                  "mountPath": "/etc/iron-proxy",
+                  "readOnly": true
+                },
+                {
+                  "name": "ca",
+                  "mountPath": "/certs",
+                  "readOnly": true
+                },
+                {
+                  "name": "github",
+                  "mountPath": "/var/run/devbox/github",
+                  "readOnly": true
+                },
+                {
+                  "name": "llm",
+                  "mountPath": "/var/run/devbox/llm",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "config",
+              "configMap": {
+                "name": "devbox-iron-proxy-config"
+              }
+            },
+            {
+              "name": "ca",
+              "secret": {
+                "secretName": "devbox-iron-proxy-ca",
+                "defaultMode": 440
+              }
+            },
+            {
+              "name": "github",
+              "secret": {
+                "secretName": "devbox-github",
+                "defaultMode": 440
+              }
+            },
+            {
+              "name": "llm",
+              "secret": {
+                "secretName": "devbox-llm",
+                "defaultMode": 440,
+                "items": [
+                  {
+                    "key": "api-key",
+                    "path": "api-key"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Deployment/devbox/opensandbox-controller-manager": {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "name": "opensandbox-controller-manager",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-controller-0.2.1",
+        "app.kubernetes.io/name": "opensandbox",
+        "app.kubernetes.io/instance": "devbox",
+        "control-plane": "controller-manager",
+        "app.kubernetes.io/version": "0.2.0",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "controller-manager"
+      }
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/name": "opensandbox",
+          "app.kubernetes.io/instance": "devbox",
+          "control-plane": "controller-manager"
+        }
+      },
+      "template": {
+        "metadata": {
+          "annotations": {
+            "kubectl.kubernetes.io/default-container": "manager"
+          },
+          "labels": {
+            "app.kubernetes.io/name": "opensandbox",
+            "app.kubernetes.io/instance": "devbox",
+            "control-plane": "controller-manager"
+          }
+        },
+        "spec": {
+          "serviceAccountName": "opensandbox-controller-manager",
+          "securityContext": {
+            "runAsNonRoot": true,
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "containers": [
+            {
+              "name": "manager",
+              "image": "opensandbox/controller:v0.2.0",
+              "imagePullPolicy": "IfNotPresent",
+              "command": [
+                "/workspace/server"
+              ],
+              "args": [
+                "--leader-elect",
+                "--health-probe-bind-address=:8081",
+                "--zap-log-level=info",
+                "--kube-client-qps=100",
+                "--kube-client-burst=200",
+                "--image-committer-image=sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/image-committer:v0.1.1",
+                "--commit-job-timeout=10m"
+              ],
+              "ports": [
+                {
+                  "name": "health",
+                  "containerPort": 8081,
+                  "protocol": "TCP"
+                }
+              ],
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "readOnlyRootFilesystem": false
+              },
+              "livenessProbe": {
+                "httpGet": {
+                  "path": "/healthz",
+                  "port": 8081
+                },
+                "initialDelaySeconds": 15,
+                "periodSeconds": 20,
+                "timeoutSeconds": 1,
+                "successThreshold": 1,
+                "failureThreshold": 3
+              },
+              "readinessProbe": {
+                "httpGet": {
+                  "path": "/readyz",
+                  "port": 8081
+                },
+                "initialDelaySeconds": 5,
+                "periodSeconds": 10,
+                "timeoutSeconds": 1,
+                "successThreshold": 1,
+                "failureThreshold": 3
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "500m",
+                  "memory": "128Mi"
+                },
+                "requests": {
+                  "cpu": "10m",
+                  "memory": "64Mi"
+                }
+              }
+            }
+          ],
+          "terminationGracePeriodSeconds": 10
+        }
+      }
+    }
+  },
+  "Deployment/devbox/opensandbox-server": {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "name": "opensandbox-server",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-server-0.1.0",
+        "app.kubernetes.io/name": "opensandbox-server",
+        "app.kubernetes.io/instance": "devbox",
+        "app.kubernetes.io/version": "0.2.2",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "opensandbox-server",
+        "app.kubernetes.io/part-of": "opensandbox"
+      }
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/name": "opensandbox-server",
+          "app.kubernetes.io/instance": "devbox"
+        }
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/name": "opensandbox-server",
+            "app.kubernetes.io/instance": "devbox",
+            "app.kubernetes.io/part-of": "opensandbox",
+            "app.kubernetes.io/component": "opensandbox-server"
+          },
+          "annotations": {
+            "checksum/config": "7e4af7b31af28f7ba032624feaf80f211a634bf7f79f5e0ef379934ec604e237"
+          }
+        },
+        "spec": {
+          "serviceAccountName": "opensandbox-server",
+          "containers": [
+            {
+              "name": "main",
+              "image": "opensandbox/server:v0.2.3",
+              "imagePullPolicy": "IfNotPresent",
+              "args": [
+                "--config",
+                "/etc/opensandbox/config.toml"
+              ],
+              "ports": [
+                {
+                  "name": "http",
+                  "containerPort": 80,
+                  "protocol": "TCP"
+                }
+              ],
+              "env": [
+                {
+                  "name": "SANDBOX_CONFIG_PATH",
+                  "value": "/etc/opensandbox/config.toml"
+                },
+                {
+                  "name": "OPENSANDBOX_SERVER_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "api-key",
+                      "name": "devbox-opensandbox"
+                    }
+                  }
+                }
+              ],
+              "volumeMounts": [
+                {
+                  "name": "config",
+                  "mountPath": "/etc/opensandbox/config.toml",
+                  "subPath": "config.toml",
+                  "readOnly": true
+                },
+                {
+                  "mountPath": "/etc/devbox",
+                  "name": "sandbox-template",
+                  "readOnly": true
+                }
+              ],
+              "livenessProbe": {
+                "httpGet": {
+                  "path": "/health",
+                  "port": "http"
+                },
+                "initialDelaySeconds": 10,
+                "periodSeconds": 15,
+                "timeoutSeconds": 5
+              },
+              "readinessProbe": {
+                "httpGet": {
+                  "path": "/health",
+                  "port": "http"
+                },
+                "initialDelaySeconds": 5,
+                "periodSeconds": 10,
+                "timeoutSeconds": 3
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "2",
+                  "memory": "1Gi"
+                },
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "256Mi"
+                }
+              }
+            }
+          ],
+          "volumes": [
+            {
+              "name": "config",
+              "configMap": {
+                "name": "opensandbox-server-config"
+              }
+            },
+            {
+              "configMap": {
+                "name": "devbox-sandbox-template"
+              },
+              "name": "sandbox-template"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Ingress/devbox/devbox-control-plane-webhooks": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "Ingress",
+    "metadata": {
+      "name": "devbox-control-plane-webhooks",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "ingressClassName": "nginx",
+      "tls": [
+        {
+          "hosts": [
+            "hooks.example.com"
+          ],
+          "secretName": "hooks-tls"
+        }
+      ],
+      "rules": [
+        {
+          "host": "hooks.example.com",
+          "http": {
+            "paths": [
+              {
+                "path": "/webhook/",
+                "pathType": "Prefix",
+                "backend": {
+                  "service": {
+                    "name": "devbox-control-plane",
+                    "port": {
+                      "number": 3000
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "Job/devbox-sandboxes/devbox-snapshot-builder-install": {
+    "apiVersion": "batch/v1",
+    "kind": "Job",
+    "metadata": {
+      "name": "devbox-snapshot-builder-install",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "post-install",
+        "helm.sh/hook-weight": "5",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+      }
+    },
+    "spec": {
+      "ttlSecondsAfterFinished": 600,
+      "backoffLimit": 2,
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/part-of": "devbox",
+            "app.kubernetes.io/component": "snapshot-builder"
+          }
+        },
+        "spec": {
+          "serviceAccountName": "devbox-snapshot-builder",
+          "restartPolicy": "Never",
+          "securityContext": {
+            "runAsNonRoot": true,
+            "runAsUser": 1000,
+            "runAsGroup": 1000,
+            "fsGroup": 1000
+          },
+          "containers": [
+            {
+              "name": "snapshot-builder",
+              "image": "rudderlabs/devbox-control-plane:0.1.0",
+              "imagePullPolicy": "IfNotPresent",
+              "command": [
+                "sh",
+                "/scripts/snapshot-builder.sh"
+              ],
+              "env": [
+                {
+                  "name": "REPOS",
+                  "value": "https://github.com/acme/widgets.git main\n"
+                },
+                {
+                  "name": "RELEASE_NAMESPACE",
+                  "value": "devbox"
+                },
+                {
+                  "name": "SANDBOX_NAMESPACE",
+                  "value": "devbox-sandboxes"
+                },
+                {
+                  "name": "GITHUB_SECRET",
+                  "value": "devbox-github"
+                },
+                {
+                  "name": "SCRATCH_PVC",
+                  "value": "devbox-repos-scratch"
+                },
+                {
+                  "name": "SNAPSHOT_CLASS",
+                  "value": "csi-hostpath-snapclass"
+                },
+                {
+                  "name": "KEEP",
+                  "value": "3"
+                }
+              ],
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "repos",
+                  "mountPath": "/repos"
+                },
+                {
+                  "name": "scripts",
+                  "mountPath": "/scripts",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "repos",
+              "persistentVolumeClaim": {
+                "claimName": "devbox-repos-scratch"
+              }
+            },
+            {
+              "name": "scripts",
+              "configMap": {
+                "name": "devbox-snapshot-builder-script"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Job/devbox/devbox-bootstrap": {
+    "apiVersion": "batch/v1",
+    "kind": "Job",
+    "metadata": {
+      "name": "devbox-bootstrap",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "pre-install,pre-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "helm.sh/hook-weight": "0"
+      }
+    },
+    "spec": {
+      "backoffLimit": 2,
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/part-of": "devbox",
+            "app.kubernetes.io/component": "bootstrap"
+          }
+        },
+        "spec": {
+          "serviceAccountName": "devbox-bootstrap",
+          "restartPolicy": "Never",
+          "securityContext": {
+            "runAsNonRoot": true,
+            "runAsUser": 1000,
+            "runAsGroup": 1000
+          },
+          "containers": [
+            {
+              "name": "bootstrap",
+              "image": "rudderlabs/devbox-control-plane:0.1.0",
+              "imagePullPolicy": "IfNotPresent",
+              "command": [
+                "sh",
+                "/scripts/bootstrap.sh"
+              ],
+              "env": [
+                {
+                  "name": "RELEASE_NAMESPACE",
+                  "value": "devbox"
+                },
+                {
+                  "name": "SANDBOX_NAMESPACE",
+                  "value": "devbox-sandboxes"
+                },
+                {
+                  "name": "POSTGRES_ENABLED",
+                  "value": "true"
+                },
+                {
+                  "name": "SCRATCH_PVC",
+                  "value": "devbox-repos-scratch"
+                },
+                {
+                  "name": "STORAGE_CLASS",
+                  "value": "csi-hostpath-sc"
+                },
+                {
+                  "name": "WORKSPACE_SIZE",
+                  "value": "15Gi"
+                }
+              ],
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "scripts",
+                  "mountPath": "/scripts",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "scripts",
+              "configMap": {
+                "name": "devbox-bootstrap-script"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "NetworkPolicy/devbox-sandboxes/devbox-sandbox": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "name": "devbox-sandbox",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/part-of": "devbox",
+          "app.kubernetes.io/component": "sandbox"
+        }
+      },
+      "policyTypes": [
+        "Ingress",
+        "Egress"
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "namespaceSelector": {
+                "matchLabels": {
+                  "kubernetes.io/metadata.name": "devbox"
+                }
+              },
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "opensandbox-server"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "egress": [
+        {
+          "to": [
+            {
+              "namespaceSelector": {
+                "matchLabels": {
+                  "kubernetes.io/metadata.name": "devbox"
+                }
+              },
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "iron-proxy"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "protocol": "UDP",
+              "port": 5353
+            },
+            {
+              "protocol": "TCP",
+              "port": 5353
+            },
+            {
+              "protocol": "TCP",
+              "port": 8080
+            },
+            {
+              "protocol": "TCP",
+              "port": 8443
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "NetworkPolicy/devbox-sandboxes/devbox-snapshot-builder": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "name": "devbox-snapshot-builder",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "snapshot-builder"
+        }
+      },
+      "policyTypes": [
+        "Ingress",
+        "Egress"
+      ],
+      "egress": [
+        {
+          "ports": [
+            {
+              "protocol": "UDP",
+              "port": 53
+            },
+            {
+              "protocol": "TCP",
+              "port": 53
+            }
+          ]
+        },
+        {
+          "ports": [
+            {
+              "protocol": "TCP",
+              "port": 443
+            },
+            {
+              "protocol": "TCP",
+              "port": 6443
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "NetworkPolicy/devbox/devbox-iron-proxy": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "name": "devbox-iron-proxy",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "iron-proxy"
+        }
+      },
+      "policyTypes": [
+        "Ingress"
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "namespaceSelector": {
+                "matchLabels": {
+                  "kubernetes.io/metadata.name": "devbox-sandboxes"
+                }
+              },
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "sandbox"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "protocol": "UDP",
+              "port": 5353
+            },
+            {
+              "protocol": "TCP",
+              "port": 5353
+            },
+            {
+              "protocol": "TCP",
+              "port": 8080
+            },
+            {
+              "protocol": "TCP",
+              "port": 8443
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "NetworkPolicy/devbox/devbox-opensandbox-server": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "name": "devbox-opensandbox-server",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "opensandbox-server"
+        }
+      },
+      "policyTypes": [
+        "Ingress"
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "control-plane"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "NetworkPolicy/devbox/devbox-postgres": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "name": "devbox-postgres",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "postgres"
+        }
+      },
+      "policyTypes": [
+        "Ingress"
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "control-plane"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "protocol": "TCP",
+              "port": 5432
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "Role/devbox-sandboxes/devbox-bootstrap": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "Role",
+    "metadata": {
+      "name": "devbox-bootstrap",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "pre-install,pre-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "helm.sh/hook-weight": "-10"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "configmaps"
+        ],
+        "verbs": [
+          "create"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "configmaps"
+        ],
+        "resourceNames": [
+          "iron-proxy-ca-cert"
+        ],
+        "verbs": [
+          "get",
+          "patch"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "persistentvolumeclaims"
+        ],
+        "verbs": [
+          "create"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "persistentvolumeclaims"
+        ],
+        "resourceNames": [
+          "devbox-repos-scratch"
+        ],
+        "verbs": [
+          "get"
+        ]
+      }
+    ]
+  },
+  "Role/devbox-sandboxes/devbox-control-plane": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "Role",
+    "metadata": {
+      "name": "devbox-control-plane",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "persistentvolumeclaims"
+        ],
+        "verbs": [
+          "get",
+          "create",
+          "delete"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "pods"
+        ],
+        "verbs": [
+          "get",
+          "list"
+        ]
+      },
+      {
+        "apiGroups": [
+          "snapshot.storage.k8s.io"
+        ],
+        "resources": [
+          "volumesnapshots"
+        ],
+        "verbs": [
+          "get",
+          "list"
+        ]
+      }
+    ]
+  },
+  "Role/devbox-sandboxes/devbox-snapshot-builder": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "Role",
+    "metadata": {
+      "name": "devbox-snapshot-builder",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          "snapshot.storage.k8s.io"
+        ],
+        "resources": [
+          "volumesnapshots"
+        ],
+        "verbs": [
+          "create",
+          "get",
+          "list",
+          "watch",
+          "delete"
+        ]
+      }
+    ]
+  },
+  "Role/devbox/devbox-bootstrap": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "Role",
+    "metadata": {
+      "name": "devbox-bootstrap",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "pre-install,pre-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "helm.sh/hook-weight": "-10"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "secrets"
+        ],
+        "verbs": [
+          "create"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "secrets"
+        ],
+        "resourceNames": [
+          "devbox-opensandbox",
+          "devbox-postgres",
+          "devbox-iron-proxy-ca"
+        ],
+        "verbs": [
+          "get"
+        ]
+      }
+    ]
+  },
+  "Role/devbox/devbox-snapshot-builder-token": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "Role",
+    "metadata": {
+      "name": "devbox-snapshot-builder-token",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "secrets"
+        ],
+        "resourceNames": [
+          "devbox-github"
+        ],
+        "verbs": [
+          "get"
+        ]
+      }
+    ]
+  },
+  "Role/devbox/opensandbox-leader-election-role": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "Role",
+    "metadata": {
+      "name": "opensandbox-leader-election-role",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-controller-0.2.1",
+        "app.kubernetes.io/name": "opensandbox",
+        "app.kubernetes.io/instance": "devbox",
+        "control-plane": "controller-manager",
+        "app.kubernetes.io/version": "0.2.0",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "rbac"
+      }
+    },
+    "rules": [
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "configmaps"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update",
+          "patch",
+          "delete"
+        ]
+      },
+      {
+        "apiGroups": [
+          "coordination.k8s.io"
+        ],
+        "resources": [
+          "leases"
+        ],
+        "verbs": [
+          "get",
+          "list",
+          "watch",
+          "create",
+          "update",
+          "patch",
+          "delete"
+        ]
+      },
+      {
+        "apiGroups": [
+          ""
+        ],
+        "resources": [
+          "events"
+        ],
+        "verbs": [
+          "create",
+          "patch"
+        ]
+      }
+    ]
+  },
+  "RoleBinding/devbox-sandboxes/devbox-bootstrap": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "RoleBinding",
+    "metadata": {
+      "name": "devbox-bootstrap",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "pre-install,pre-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "helm.sh/hook-weight": "-10"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "Role",
+      "name": "devbox-bootstrap"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "devbox-bootstrap",
+        "namespace": "devbox"
+      }
+    ]
+  },
+  "RoleBinding/devbox-sandboxes/devbox-control-plane": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "RoleBinding",
+    "metadata": {
+      "name": "devbox-control-plane",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "Role",
+      "name": "devbox-control-plane"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "devbox-control-plane",
+        "namespace": "devbox"
+      }
+    ]
+  },
+  "RoleBinding/devbox-sandboxes/devbox-snapshot-builder": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "RoleBinding",
+    "metadata": {
+      "name": "devbox-snapshot-builder",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "Role",
+      "name": "devbox-snapshot-builder"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "devbox-snapshot-builder",
+        "namespace": "devbox-sandboxes"
+      }
+    ]
+  },
+  "RoleBinding/devbox/devbox-bootstrap": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "RoleBinding",
+    "metadata": {
+      "name": "devbox-bootstrap",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "pre-install,pre-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "helm.sh/hook-weight": "-10"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "Role",
+      "name": "devbox-bootstrap"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "devbox-bootstrap",
+        "namespace": "devbox"
+      }
+    ]
+  },
+  "RoleBinding/devbox/devbox-snapshot-builder-token": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "RoleBinding",
+    "metadata": {
+      "name": "devbox-snapshot-builder-token",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "Role",
+      "name": "devbox-snapshot-builder-token"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "devbox-snapshot-builder",
+        "namespace": "devbox-sandboxes"
+      }
+    ]
+  },
+  "RoleBinding/devbox/opensandbox-leader-election-role": {
+    "apiVersion": "rbac.authorization.k8s.io/v1",
+    "kind": "RoleBinding",
+    "metadata": {
+      "name": "opensandbox-leader-election-role",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-controller-0.2.1",
+        "app.kubernetes.io/name": "opensandbox",
+        "app.kubernetes.io/instance": "devbox",
+        "control-plane": "controller-manager",
+        "app.kubernetes.io/version": "0.2.0",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "rbac"
+      }
+    },
+    "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "Role",
+      "name": "opensandbox-leader-election-role"
+    },
+    "subjects": [
+      {
+        "kind": "ServiceAccount",
+        "name": "opensandbox-controller-manager",
+        "namespace": "devbox"
+      }
+    ]
+  },
+  "Service/devbox/devbox-control-plane": {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "name": "devbox-control-plane",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "selector": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/component": "control-plane"
+      },
+      "ports": [
+        {
+          "name": "http",
+          "port": 3000,
+          "targetPort": "http"
+        }
+      ]
+    }
+  },
+  "Service/devbox/devbox-iron-proxy": {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "name": "devbox-iron-proxy",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "clusterIP": "10.96.0.20",
+      "selector": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/component": "iron-proxy"
+      },
+      "ports": [
+        {
+          "name": "dns-udp",
+          "port": 53,
+          "targetPort": 5353,
+          "protocol": "UDP"
+        },
+        {
+          "name": "dns-tcp",
+          "port": 53,
+          "targetPort": 5353,
+          "protocol": "TCP"
+        },
+        {
+          "name": "http",
+          "port": 80,
+          "targetPort": 8080,
+          "protocol": "TCP"
+        },
+        {
+          "name": "https",
+          "port": 443,
+          "targetPort": 8443,
+          "protocol": "TCP"
+        }
+      ]
+    }
+  },
+  "Service/devbox/devbox-postgres": {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "name": "devbox-postgres",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "selector": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/component": "postgres"
+      },
+      "ports": [
+        {
+          "name": "postgres",
+          "port": 5432,
+          "targetPort": "postgres"
+        }
+      ]
+    }
+  },
+  "Service/devbox/opensandbox-server": {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "name": "opensandbox-server",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-server-0.1.0",
+        "app.kubernetes.io/name": "opensandbox-server",
+        "app.kubernetes.io/instance": "devbox",
+        "app.kubernetes.io/version": "0.2.2",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "opensandbox-server",
+        "app.kubernetes.io/part-of": "opensandbox"
+      }
+    },
+    "spec": {
+      "type": "ClusterIP",
+      "ports": [
+        {
+          "port": 80,
+          "targetPort": "http",
+          "protocol": "TCP",
+          "name": "http"
+        }
+      ],
+      "selector": {
+        "app.kubernetes.io/name": "opensandbox-server",
+        "app.kubernetes.io/instance": "devbox"
+      }
+    }
+  },
+  "ServiceAccount/devbox-sandboxes/devbox-snapshot-builder": {
+    "apiVersion": "v1",
+    "kind": "ServiceAccount",
+    "metadata": {
+      "name": "devbox-snapshot-builder",
+      "namespace": "devbox-sandboxes",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    }
+  },
+  "ServiceAccount/devbox/devbox-bootstrap": {
+    "apiVersion": "v1",
+    "kind": "ServiceAccount",
+    "metadata": {
+      "name": "devbox-bootstrap",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      },
+      "annotations": {
+        "helm.sh/hook": "pre-install,pre-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "helm.sh/hook-weight": "-10"
+      }
+    }
+  },
+  "ServiceAccount/devbox/devbox-control-plane": {
+    "apiVersion": "v1",
+    "kind": "ServiceAccount",
+    "metadata": {
+      "name": "devbox-control-plane",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    }
+  },
+  "ServiceAccount/devbox/opensandbox-controller-manager": {
+    "apiVersion": "v1",
+    "kind": "ServiceAccount",
+    "metadata": {
+      "name": "opensandbox-controller-manager",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-controller-0.2.1",
+        "app.kubernetes.io/name": "opensandbox",
+        "app.kubernetes.io/instance": "devbox",
+        "control-plane": "controller-manager",
+        "app.kubernetes.io/version": "0.2.0",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "serviceaccount"
+      }
+    }
+  },
+  "ServiceAccount/devbox/opensandbox-server": {
+    "apiVersion": "v1",
+    "kind": "ServiceAccount",
+    "metadata": {
+      "name": "opensandbox-server",
+      "namespace": "devbox",
+      "labels": {
+        "helm.sh/chart": "opensandbox-server-0.1.0",
+        "app.kubernetes.io/name": "opensandbox-server",
+        "app.kubernetes.io/instance": "devbox",
+        "app.kubernetes.io/version": "0.2.2",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/component": "opensandbox-server",
+        "app.kubernetes.io/part-of": "opensandbox"
+      }
+    }
+  },
+  "StatefulSet/devbox/devbox-postgres": {
+    "apiVersion": "apps/v1",
+    "kind": "StatefulSet",
+    "metadata": {
+      "name": "devbox-postgres",
+      "namespace": "devbox",
+      "labels": {
+        "app.kubernetes.io/part-of": "devbox",
+        "app.kubernetes.io/managed-by": "Helm",
+        "helm.sh/chart": "devbox-0.1.0"
+      }
+    },
+    "spec": {
+      "serviceName": "devbox-postgres",
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/part-of": "devbox",
+          "app.kubernetes.io/component": "postgres"
+        }
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/part-of": "devbox",
+            "app.kubernetes.io/component": "postgres"
+          }
+        },
+        "spec": {
+          "containers": [
+            {
+              "name": "postgres",
+              "image": "postgres:18",
+              "env": [
+                {
+                  "name": "POSTGRES_DB",
+                  "value": "devbox"
+                },
+                {
+                  "name": "POSTGRES_USER",
+                  "value": "devbox"
+                },
+                {
+                  "name": "POSTGRES_PASSWORD",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "devbox-postgres",
+                      "key": "password"
+                    }
+                  }
+                }
+              ],
+              "ports": [
+                {
+                  "name": "postgres",
+                  "containerPort": 5432
+                }
+              ],
+              "readinessProbe": {
+                "exec": {
+                  "command": [
+                    "pg_isready",
+                    "-U",
+                    "devbox",
+                    "-d",
+                    "devbox"
+                  ]
+                },
+                "periodSeconds": 5
+              },
+              "resources": {
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "256Mi"
+                },
+                "limits": {
+                  "memory": "1Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "data",
+                  "mountPath": "/var/lib/postgresql"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "volumeClaimTemplates": [
+        {
+          "metadata": {
+            "name": "data",
+            "labels": {
+              "app.kubernetes.io/part-of": "devbox",
+              "app.kubernetes.io/component": "postgres"
+            }
+          },
+          "spec": {
+            "accessModes": [
+              "ReadWriteOnce"
+            ],
+            "storageClassName": "csi-hostpath-sc",
+            "resources": {
+              "requests": {
+                "storage": "10Gi"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

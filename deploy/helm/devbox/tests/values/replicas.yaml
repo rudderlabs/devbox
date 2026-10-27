@@ -1,0 +1,2 @@
+controlPlane: { replicas: 2 }
+ironProxy: { replicas: 2 }

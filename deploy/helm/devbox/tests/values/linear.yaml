@@ -1,0 +1,1 @@
+integrations: { linear: { enabled: true, clientId: "lin-client-id" } }

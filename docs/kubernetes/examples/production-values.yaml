@@ -1,0 +1,188 @@
+# A production example for the devbox chart (docs/kubernetes/customizing.md):
+#   - sandboxes in Kata Containers VMs, on their own nodes;
+#   - Cilium FQDN egress policies for iron-proxy and the control plane;
+#   - External Secrets for every Secret;
+#   - an external database;
+#   - a StorageClass tuned for snapshot restores;
+#   - two replicas of the control plane and iron-proxy.
+# Replace every <…>. It assumes Cilium as the CNI, Kata Containers with a
+# RuntimeClass, External Secrets Operator with a ClusterSecretStore, and the
+# EBS CSI driver with a VolumeSnapshotClass; swap these for your own.
+# Apply with:
+#   helm upgrade --install devbox deploy/helm/devbox -n devbox -f production-values.yaml --wait --timeout 15m
+
+storage:
+  storageClass: devbox-workspaces          # defined in extraManifests below
+  volumeSnapshotClass: <snapshot-class>    # of the same CSI driver
+
+workspace:
+  size: 30Gi
+
+repos:
+  - { url: "https://github.com/<owner>/<repo>.git", branch: main }
+
+llm:
+  # openai (base URL with /v1) or anthropic (the API root, https://api.anthropic.com).
+  provider: openai
+  baseUrl: https://<llm-host>/v1
+  model: <model>
+
+git:
+  name: <name>
+  email: <email>
+
+ironProxy:
+  clusterIP: <free address in the Service range>   # docs/kubernetes/README.md#iron-proxy-address
+  replicas: 2
+
+sandbox:
+  cpu: "4"
+  memory: 16Gi
+  maxConcurrent: 20
+  # A VM per sandbox. The name is the RuntimeClass your Kata install created.
+  runtimeClassName: kata-qemu
+  nodeSelector: { devbox.example.com/pool: sandboxes }
+  tolerations:
+    - { key: devbox.example.com/sandbox, operator: Exists, effect: NoSchedule }
+
+controlPlane:
+  replicas: 2
+  publicBaseUrl: https://devbox.example.com
+
+postgresql:
+  enabled: false
+
+# The Secrets below have the default names, so only the database needs one here.
+database:
+  existingSecret: devbox-database
+
+# Public webhooks with a VPN-only API: add ingress.webhooks (docs/kubernetes/customizing.md#ingress).
+# Keep the Ingress/controller request-body limit at or below the control plane's 1 MiB webhook limit.
+ingress:
+  api:
+    enabled: true
+    className: <ingress-class>
+    host: devbox.example.com
+    annotations:
+      # Event streams (devbox logs -f) stay open: raise the idle timeout.
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    tls:
+      - { hosts: [devbox.example.com], secretName: devbox-tls }
+
+github:
+  trustedOrgs: [<your-org>]
+
+extraManifests:
+  # Workspaces are restored from snapshots. On EBS, a restored volume loads its
+  # blocks lazily from S3; an initialization rate makes it load at a set speed.
+  - apiVersion: storage.k8s.io/v1
+    kind: StorageClass
+    metadata:
+      name: devbox-workspaces
+    provisioner: ebs.csi.aws.com
+    volumeBindingMode: WaitForFirstConsumer
+    allowVolumeExpansion: true
+    reclaimPolicy: Delete
+    parameters:
+      type: gp3
+      encrypted: "true"
+      iops: "6000"
+      throughput: "500"
+      # MiB/s. Needs a recent EBS CSI driver: check its docs before you set it.
+      # volumeInitializationRate: "300"
+
+  # Every Secret from the secret store (docs/kubernetes/secrets.md). The
+  # control plane and iron-proxy wait until the Secrets exist.
+  - apiVersion: external-secrets.io/v1
+    kind: ExternalSecret
+    metadata:
+      name: devbox-github
+      namespace: "{{ .Release.Namespace }}"
+    spec:
+      refreshInterval: 1h
+      secretStoreRef: { kind: ClusterSecretStore, name: <store> }
+      target: { name: devbox-github }
+      data:
+        - { secretKey: token, remoteRef: { key: <github-token-path> } }
+  - apiVersion: external-secrets.io/v1
+    kind: ExternalSecret
+    metadata:
+      name: devbox-llm
+      namespace: "{{ .Release.Namespace }}"
+    spec:
+      refreshInterval: 1h
+      secretStoreRef: { kind: ClusterSecretStore, name: <store> }
+      target: { name: devbox-llm }
+      data:
+        - { secretKey: api-key, remoteRef: { key: <llm-key-path> } }
+  - apiVersion: external-secrets.io/v1
+    kind: ExternalSecret
+    metadata:
+      name: devbox-database
+      namespace: "{{ .Release.Namespace }}"
+    spec:
+      refreshInterval: 1h
+      secretStoreRef: { kind: ClusterSecretStore, name: <store> }
+      target: { name: devbox-database }
+      data:
+        - { secretKey: DATABASE_URL, remoteRef: { key: <database-url-path> } }
+
+  # iron-proxy holds the real tokens and is the sandboxes' only way out: let it
+  # reach only GitHub and the LLM host. A Cilium policy with egress rules makes
+  # all other egress of the selected pods denied.
+  # Add every host in ironProxy.extraAllowlist to toFQDNs below too.
+  - apiVersion: cilium.io/v2
+    kind: CiliumNetworkPolicy
+    metadata:
+      name: devbox-iron-proxy-egress
+      namespace: "{{ .Release.Namespace }}"
+    spec:
+      endpointSelector:
+        matchLabels: { app.kubernetes.io/component: iron-proxy }
+      egress:
+        - toEndpoints:
+            - matchLabels: { k8s:io.kubernetes.pod.namespace: kube-system, k8s:k8s-app: kube-dns }
+          toPorts:
+            - ports: [{ port: "53", protocol: ANY }]
+              rules: { dns: [{ matchPattern: "*" }] }
+        - toFQDNs:
+            - matchName: github.com
+            - matchName: api.github.com
+            - matchName: codeload.github.com
+            - matchName: raw.githubusercontent.com
+            - matchName: <llm-host>
+          toPorts:
+            - ports: [{ port: "443", protocol: TCP }]
+
+  # The control plane: DNS, the Kubernetes API, the OpenSandbox server,
+  # GitHub's API and the database. Add the hosts of integrations you use.
+  - apiVersion: cilium.io/v2
+    kind: CiliumNetworkPolicy
+    metadata:
+      name: devbox-control-plane-egress
+      namespace: "{{ .Release.Namespace }}"
+    spec:
+      endpointSelector:
+        matchLabels: { app.kubernetes.io/component: control-plane }
+      egress:
+        - toEndpoints:
+            - matchLabels: { k8s:io.kubernetes.pod.namespace: kube-system, k8s:k8s-app: kube-dns }
+          toPorts:
+            - ports: [{ port: "53", protocol: ANY }]
+              rules: { dns: [{ matchPattern: "*" }] }
+        - toEntities: [kube-apiserver]
+        - toEndpoints:
+            - matchLabels: { app.kubernetes.io/component: opensandbox-server }
+        - toFQDNs:
+            - matchName: api.github.com
+            - matchName: api.linear.app   # with integrations.linear enabled
+          toPorts:
+            - ports: [{ port: "443", protocol: TCP }]
+        - toFQDNs:
+            - matchName: <database-host>
+          toPorts:
+            - ports: [{ port: "5432", protocol: TCP }]
+
+  # The snapshot builder's NetworkPolicy in the chart allows port 443 to any
+  # host. Cilium adds allow rules together, so a Cilium policy cannot narrow
+  # it; the builder only clones and runs no repo code.

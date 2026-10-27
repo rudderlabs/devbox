@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in DevBox doesn't work as documented.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues go to security@rudderstack.com, not here. See [SECURITY.md](https://github.com/rudderlabs/devbox/security/policy).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. bun run up
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: How you run DevBox
+      options:
+        - Docker Compose
+        - Kubernetes (Helm)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: model
+    attributes:
+      label: Model provider
+      options:
+        - OpenAI
+        - Anthropic
+        - Both
+  - type: dropdown
+    id: source
+    attributes:
+      label: Where the task came from
+      options:
+        - CLI
+        - Linear
+        - GitHub
+        - Not a task problem
+  - type: input
+    id: version
+    attributes:
+      label: DevBox version or commit
+      placeholder: v0.1.0 or the commit SHA
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Control plane or harness logs around the failure. Remove keys and tokens first.
+      render: shell

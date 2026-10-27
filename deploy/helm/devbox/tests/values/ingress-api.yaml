@@ -1,0 +1,6 @@
+ingress:
+  api:
+    enabled: true
+    className: nginx
+    host: devbox.example.com
+    tls: [{ hosts: [devbox.example.com], secretName: devbox-tls }]

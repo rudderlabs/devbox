@@ -1,0 +1,101 @@
+{{- $sandboxNs := include "devbox.sandboxNamespace" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devbox-snapshot-builder
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devbox-snapshot-builder
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [create, get, list, watch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devbox-snapshot-builder
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: devbox-snapshot-builder }
+subjects:
+  - { kind: ServiceAccount, name: devbox-snapshot-builder, namespace: {{ $sandboxNs }} }
+---
+# The builder reads the GitHub token from the release namespace at run time,
+# so no real token is stored in the sandbox namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devbox-snapshot-builder-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ include "devbox.githubSecret" . }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devbox-snapshot-builder-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: devbox-snapshot-builder-token }
+subjects:
+  - { kind: ServiceAccount, name: devbox-snapshot-builder, namespace: {{ $sandboxNs }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devbox-snapshot-builder-script
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+data:
+  snapshot-builder.sh: |
+{{ .Files.Get "files/snapshot-builder.sh" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: devbox-snapshot-builder
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.snapshotBuilder.schedule | quote }}
+  suspend: {{ .Values.snapshotBuilder.suspend }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Deleted 10 minutes after it finishes, pod included: manual Jobs (kubectl create job --from=cronjob) are not pruned by the history limits.
+      ttlSecondsAfterFinished: 600
+      backoffLimit: 2
+      template: {{- include "devbox.snapshotBuilderPod" . | nindent 8 }}
+---
+# The first snapshot, built at install (ArgoCD: PostSync), so tasks can start
+# right away. `helm install --wait` waits for it: raise --timeout for big repos.
+# Deleted once it succeeds (hook-succeeded) and ten minutes after it fails
+# (TTL); k8s:install shows its logs when it fails.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: devbox-snapshot-builder-install
+  namespace: {{ $sandboxNs }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  # Deleted 10 minutes after it finishes (hook-succeeded deletes it sooner on success; the TTL covers failures).
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 2
+  template: {{- include "devbox.snapshotBuilderPod" . | nindent 4 }}

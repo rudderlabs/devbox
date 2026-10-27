@@ -1,0 +1,3 @@
+# Rendered chart output the chart tests compare against. Regenerate with
+# `UPDATE_GOLDEN=1 bun run test:chart`; GitHub collapses them in diffs.
+deploy/helm/devbox/tests/golden/*.json linguist-generated=true

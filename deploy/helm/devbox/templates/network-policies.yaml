@@ -1,0 +1,119 @@
+# Sandboxes may reach only iron-proxy, and only the OpenSandbox server may
+# reach them. Ports are container ports: policies apply
+# after the Service's port mapping.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devbox-sandbox
+  namespace: {{ include "devbox.sandboxNamespace" . }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "devbox.selectorLabels" "sandbox" | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+          podSelector: { matchLabels: { app.kubernetes.io/component: opensandbox-server } }
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+          podSelector: { matchLabels: { app.kubernetes.io/component: iron-proxy } }
+      ports:
+        - { protocol: UDP, port: 5353 }
+        - { protocol: TCP, port: 5353 }
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
+---
+# Only sandboxes may use the proxy that holds the real tokens.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devbox-iron-proxy
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/component: iron-proxy } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ include "devbox.sandboxNamespace" . }} } }
+          podSelector: { matchLabels: { app.kubernetes.io/component: sandbox } }
+      ports:
+        - { protocol: UDP, port: 5353 }
+        - { protocol: TCP, port: 5353 }
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
+---
+# The server's /sandboxes/{id}/proxy/{port} endpoint skips the API key, so
+# only the control plane may reach it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devbox-opensandbox-server
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/component: opensandbox-server } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/component: control-plane } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devbox-postgres
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/component: postgres } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/component: control-plane } }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# A plain NetworkPolicy cannot restrict by hostname, so this is not limited to
+# GitHub; the builder runs no repo code.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devbox-snapshot-builder
+  namespace: {{ include "devbox.sandboxNamespace" . }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/component: snapshot-builder } }
+  policyTypes: [Ingress, Egress]
+  egress:
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+{{- if include "devbox.githubMinter" . }}
+---
+# The GitHub token minter and its seed Job. As for the snapshot builder, a
+# plain NetworkPolicy cannot restrict by hostname: HTTPS is open
+# (api.github.com), plus the API server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devbox-github-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "devbox.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/component, operator: In, values: [github-token, github-token-seed] }
+  policyTypes: [Ingress, Egress]
+  egress:
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+{{- end }}
