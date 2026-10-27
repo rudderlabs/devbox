@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@alibaba-group/opensandbox": "^0.1.6",
-    "@linear/sdk": "^81.0.0",
+    "@linear/sdk": "^98.0.0",
     "cls-rtracer": "^2.6.4",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
