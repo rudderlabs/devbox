@@ -30,7 +30,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@alibaba-group/opensandbox": "^0.1.6",
+    "@alibaba-group/opensandbox": "^1.1.1",
     "@linear/sdk": "^98.0.0",
     "cls-rtracer": "^2.6.4",
     "drizzle-orm": "^0.45.4",
