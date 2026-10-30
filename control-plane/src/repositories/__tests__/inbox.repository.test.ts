@@ -335,6 +335,30 @@ describe("InboxRepository", () => {
       expect(await repo.listPendingByTask(task.id)).toEqual([]);
     });
 
+    it("returns the rows it failed, whole, in arrival order", async () => {
+      const task = await insertTask({ ownerId: "pod-a" });
+      const ids: string[] = [];
+      for (const external_id of ["first", "second"]) {
+        const row = await repo.appendInbox({
+          taskId: task.id,
+          message: {
+            source: "linear",
+            kind: "assignment",
+            external_id,
+            payload: assignmentPayload,
+          },
+          replyTargets: [linearTarget(`s-${external_id}`)],
+        });
+        if (!row) throw new Error("insert failed");
+        ids.push(row.id);
+      }
+
+      const failed = await repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "x" });
+
+      expect(failed as unknown[]).toEqual(await Promise.all(ids.map((id) => repo.getById(id))));
+      expect(failed[0]?.reply_targets).toEqual([linearTarget("s-first")]);
+    });
+
     it("does not touch an already-responded row", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
       const row = await repo.appendInbox({

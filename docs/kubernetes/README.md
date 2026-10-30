@@ -454,12 +454,11 @@ While old and new pods overlap, and after a rollback to a release without the
 `inbox_source_kind_external_uniq` index, an old pod can answer a webhook that
 races its own redelivery with a 500: `duplicate key value violates unique
 constraint "inbox_source_kind_external_uniq"`. The other request stored the
-round and the platform retries, so nothing is lost. After such a rollback,
-dropping the index stops the errors:
-
-```sql
-DROP INDEX inbox_source_kind_external_uniq;
-```
+round and the platform retries, so nothing is lost. Leave the index in place
+after a rollback: the database has recorded its migration, so a dropped index
+is not rebuilt on the next upgrade, and the new release then fails to store
+any follow-up (a comment, review, CI result or API message) with `there is no
+unique or exclusion constraint matching the ON CONFLICT specification`.
 
 ## Uninstall
 

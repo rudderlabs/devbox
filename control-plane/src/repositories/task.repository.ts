@@ -471,21 +471,12 @@ export class TaskRepository {
   }
 
   // As long as a pod owns a task it heartbeats; if it loses interest it calls
-  // releaseLease.
-  async heartbeatOwnedBy(ownerId: string): Promise<void> {
-    await db
-      .update(schema.tasks)
-      .set({ heartbeatAt: sql`now()` })
-      .where(eq(schema.tasks.ownerId, ownerId));
-  }
-
-  // One task's heartbeat, renewed right before its reconcile. Owner-guarded:
-  // 0 rows means the lease was taken over.
-  async heartbeatTask(params: { taskId: string; ownerId: string }): Promise<{ id: string }[]> {
+  // releaseLease. Returns the tasks renewed: one missing was taken over.
+  async heartbeatOwnedBy(ownerId: string): Promise<{ id: string }[]> {
     return db
       .update(schema.tasks)
       .set({ heartbeatAt: sql`now()` })
-      .where(this.ownedByUs(params.taskId, params.ownerId))
+      .where(eq(schema.tasks.ownerId, ownerId))
       .returning({ id: schema.tasks.id });
   }
 

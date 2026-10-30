@@ -1053,22 +1053,6 @@ describe("TaskRepository", () => {
     });
   });
 
-  describe("heartbeatTask", () => {
-    it("renews one owned task and returns 0 rows once the lease is someone else's", async () => {
-      const mine = await insertTask({ ownerId: "pod-a", heartbeatAt: new Date("2020-01-01") });
-      const other = await insertTask({ ownerId: "pod-a", heartbeatAt: new Date("2020-01-01") });
-
-      expect(await repo.heartbeatTask({ taskId: mine.id, ownerId: "pod-a" })).toEqual([
-        { id: mine.id },
-      ]);
-      expect(await repo.heartbeatTask({ taskId: mine.id, ownerId: "pod-b" })).toEqual([]);
-
-      const rows = await db.select().from(schema.tasks);
-      expect(rows.find((r) => r.id === mine.id)?.heartbeatAt?.getFullYear()).toBeGreaterThan(2020);
-      expect(rows.find((r) => r.id === other.id)?.heartbeatAt?.getFullYear()).toBe(2020);
-    });
-  });
-
   describe("heartbeatOwnedBy / backdateHeartbeatsOwnedBy", () => {
     it("heartbeat updates only rows owned by us", async () => {
       const mine = await insertTask({
@@ -1082,7 +1066,8 @@ describe("TaskRepository", () => {
         heartbeatAt: new Date("2020-01-01"),
       });
 
-      await repo.heartbeatOwnedBy("pod-a");
+      // The renewed tasks: a task taken over is missing.
+      expect(await repo.heartbeatOwnedBy("pod-a")).toEqual([{ id: mine.id }]);
 
       const rows = await db.select().from(schema.tasks);
       expect(rows.find((r) => r.id === mine.id)?.heartbeatAt?.getFullYear()).toBeGreaterThan(2020);

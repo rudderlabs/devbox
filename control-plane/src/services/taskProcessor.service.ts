@@ -6,7 +6,7 @@ import { PvcNotFoundError, SandboxCreateError } from "../errors";
 import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
-import type { InboxRepository } from "../repositories/inbox.repository";
+import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
 import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
@@ -25,7 +25,8 @@ export class TaskProcessorService {
   private running = false;
   private loopPromise: Promise<void> | null = null;
   private sleepAbort: AbortController | null = null;
-  private readonly inflight = new Set<Promise<void>>();
+  // Provisions running on this pod, by task id.
+  private readonly inflight = new Map<string, Promise<void>>();
   // First tick (per task) we saw the backing pod ABSENT (kubectl NotFound). A
   // pod can be briefly gone between create and scheduling, so absence gets a
   // grace window (config.sandboxAbsentGraceMs) before we fail. Cleared the
@@ -94,7 +95,7 @@ export class TaskProcessorService {
 
     // In-flight provisions, then detached hooks (some started by those
     // provisions), share one shutdownDrainMs budget.
-    const drain = Promise.allSettled([...this.inflight]);
+    const drain = Promise.allSettled([...this.inflight.values()]);
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, config.shutdownDrainMs));
     await Promise.race([drain, timeout]);
     await this.hooks.drain(timeout);
@@ -126,17 +127,19 @@ export class TaskProcessorService {
     // 2. Idle reaper — kill sandboxes idle past the ceiling, release leases.
     await this.reapIdle().catch((err) => logErr("reapIdle failed", err));
 
-    // 3. Reconcile owned tasks with live sandboxes. Each task's lease is renewed
-    //    right before its reconcile (and with each cursor advance inside it), so
-    //    slow sends can't let it outlive the lease mid-tick; 0 rows means a
-    //    sibling took it over.
+    // 3. Reconcile owned tasks with live sandboxes. Every lease this pod holds
+    //    (in-flight provisions included) is renewed right before each reconcile,
+    //    and the task's own with each cursor advance inside it, so slow sends
+    //    can't let a lease expire mid-tick; a task not renewed was taken over.
+    //    ponytail: one reconcile of many slow but successful sends (>120 s) can
+    //    still outlive an in-flight provision's lease; a lease timer if it matters.
     const owned = await this.taskRepo.listInFlightOwnedBy(config.podId, this.taskSources);
     for (const task of owned) {
       // Shutting down: leave the rest to siblings (stop() backdates our
       // heartbeats), so shutdown waits for one task's reconcile at most (§10).
       if (!this.running) break;
-      const renewed = await this.taskRepo.heartbeatTask({ taskId: task.id, ownerId: config.podId });
-      if (renewed.length === 0) {
+      const renewed = await this.taskRepo.heartbeatOwnedBy(config.podId);
+      if (!renewed.some((r) => r.id === task.id)) {
         logger.info("lease lost before reconcile; skipping", { taskId: task.id });
         continue;
       }
@@ -202,13 +205,21 @@ export class TaskProcessorService {
   }
 
   private dispatch(task: Task): void {
+    // A provision still running here whose lease expired can be claimed back;
+    // a second one would orphan a sandbox and a PVC.
+    if (this.inflight.has(task.id)) {
+      logger.warn("claimed a task whose provision is still running here; skipping", {
+        taskId: task.id,
+      });
+      return;
+    }
     const p = this.runTask(task)
       .catch((err) => this.handleTaskError(task, err))
       // Nothing awaits p, so a throw from handleTaskError itself (e.g. a DB
       // error releasing the lease) would be an unhandled rejection. Log it.
       .catch((err) => logErr(`handleTaskError failed for task ${task.id}`, err))
-      .finally(() => this.inflight.delete(p));
-    this.inflight.add(p);
+      .finally(() => this.inflight.delete(task.id));
+    this.inflight.set(task.id, p);
   }
 
   // Creates or attaches a sandbox. Branches on `sandbox_id` nullability:
@@ -402,6 +413,9 @@ export class TaskProcessorService {
     const events = await this.sandboxManager.readEvents(task.sandboxId, task.lastObservedEventSeq);
     for (const event of events) {
       if (currentTask === null) break; // self-evict: lease lost or task gone
+      // Shutting down: stop after the event in hand (the cursor is persisted
+      // per event), so shutdown waits for one event, not the backlog (§10).
+      if (!this.running) break;
 
       const result = await this.eventDispatcher.handle(event, currentTask);
       switch (result) {
@@ -783,25 +797,18 @@ export class TaskProcessorService {
     opts: { killSandbox?: boolean } = {},
   ): Promise<void> {
     const { killSandbox = true } = opts;
-    const nonTerminal = await this.inboxRepo
-      .listNonTerminalByTask(task.id)
-      .catch((e): Awaited<ReturnType<InboxRepository["listNonTerminalByTask"]>> => {
-        logErr(`failTask: listNonTerminalByTask failed for ${task.id}`, e);
-        return [];
-      });
     // Dead-letter the inbox rows FIRST, and BEFORE releaseLease — failTaskInbox
     // is owner-guarded and needs owner_id still set. Only the rows it
-    // transitions get a failure message, so a racing restart or a late
-    // `completed` can't draw a "Task failed" on a live or finished round.
+    // transitions (as it returns them) get a failure message, so a racing
+    // restart or a late `completed` can't draw a "Task failed" on a live or
+    // finished round, and every row it fails gets one.
     const failed = await this.inboxRepo
       .failTaskInbox({ taskId: task.id, ownerId: config.podId, reason: message })
-      .catch((e) => {
+      .catch((e): InboxRow[] => {
         logErr(`failTaskInbox failed for task ${task.id}`, e);
-        return [] as { id: string }[];
+        return [];
       });
-    const failedIds = new Set(failed.map((r) => r.id));
-    const failedRows = nonTerminal.filter((r) => failedIds.has(r.id));
-    const assignment = failedRows.find((r) => r.kind === "assignment");
+    const assignment = failed.find((r) => r.kind === "assignment");
     if (failed.length > 0) {
       logger.warn("inbox rows dead-lettered on task failure", {
         taskId: task.id,
@@ -815,7 +822,7 @@ export class TaskProcessorService {
     // seeing the same error N times. At most once: there is no cursor to hold,
     // so a delivery error (RetryableError included) is logged and dropped.
     const seen = new Set<string>();
-    for (const row of failedRows) {
+    for (const row of failed) {
       // A source this build has no integration for (say, rows written by a
       // newer build before a rollback), or a disabled one, gets no notice; its
       // row is still failed.

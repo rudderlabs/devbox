@@ -157,7 +157,6 @@ const survivingNonTerminalRow = (taskId = "task-1", externalId = "issue-1"): any
 
 describe("TaskProcessorService", () => {
   let heartbeatOwnedBy: ReturnType<typeof mock>;
-  let heartbeatTask: ReturnType<typeof mock>;
   let claimNext: ReturnType<typeof mock>;
   let attachSandboxResources: ReturnType<typeof mock>;
   let backdateHeartbeatsOwnedBy: ReturnType<typeof mock>;
@@ -213,8 +212,8 @@ describe("TaskProcessorService", () => {
     postReviewCommentReply.mockReset();
     postReviewCommentReply.mockResolvedValue({ id: 1, url: "u" });
 
-    heartbeatOwnedBy = mock(() => Promise.resolve());
-    heartbeatTask = mock(() => Promise.resolve([{ id: "task-1" }]));
+    // Renews every task the tests reconcile.
+    heartbeatOwnedBy = mock(() => Promise.resolve([{ id: "task-1" }, { id: "task-2" }]));
     claimNext = mock(() => Promise.resolve(null));
     attachSandboxResources = mock(() => Promise.resolve([{ id: "task-1" }]));
     backdateHeartbeatsOwnedBy = mock(() => Promise.resolve());
@@ -228,7 +227,6 @@ describe("TaskProcessorService", () => {
     getByIdOwnedBy = mock((id: string) => Promise.resolve(makeTask({ id })));
     taskRepo = {
       heartbeatOwnedBy,
-      heartbeatTask,
       claimNext,
       attachSandboxResources,
       backdateHeartbeatsOwnedBy,
@@ -321,12 +319,11 @@ describe("TaskProcessorService", () => {
     );
   });
 
-  // failTask broadcasts to every non-terminal row's reply targets — stub one
-  // Linear session target so the user-facing failure message reaches emitError.
+  // failTask broadcasts to the reply targets of the rows failTaskInbox
+  // dead-letters — stub one with a Linear session target so the user-facing
+  // failure message reaches emitError.
   const stubLinearTarget = (task: Task): void => {
-    (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValueOnce([
-      survivingNonTerminalRow(task.id, task.externalId),
-    ]);
+    failTaskInbox.mockResolvedValueOnce([survivingNonTerminalRow(task.id, task.externalId)]);
   };
 
   describe("API tasks", () => {
@@ -353,7 +350,7 @@ describe("TaskProcessorService", () => {
 
     it("failTask posts nothing to an api_session target and still dead-letters", async () => {
       const t = apiTask();
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+      failTaskInbox.mockResolvedValue([
         {
           ...survivingNonTerminalRow(t.id, t.externalId),
           source: "api",
@@ -541,9 +538,9 @@ describe("TaskProcessorService", () => {
       createSandboxWithPvc.mockImplementation(() =>
         Promise.reject(new Error("docker daemon gone with token=abcd")),
       );
-      // failTask broadcasts the message to every non-terminal row's reply
-      // targets — stub one row with the assignment row's Linear session target.
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValueOnce([
+      // failTask broadcasts the message to the reply targets of the rows it
+      // dead-letters — stub one row with the assignment row's Linear session target.
+      failTaskInbox.mockResolvedValue([
         {
           id: "inbox-1",
           task_id: task.id,
@@ -559,7 +556,6 @@ describe("TaskProcessorService", () => {
           updated_at: new Date(),
         },
       ]);
-      failTaskInbox.mockResolvedValue([{ id: "inbox-1" }]);
 
       service.start();
       await waitFor(() => releaseLease.mock.calls.length > 0);
@@ -580,10 +576,9 @@ describe("TaskProcessorService", () => {
       const task = makeTask({ sandboxId: null });
       claimNext.mockResolvedValueOnce(task).mockResolvedValue(null);
       createSandboxWithPvc.mockImplementation(() => Promise.reject(new Error("provision boom")));
-      stubLinearTarget(task);
       // failTaskInbox returning a non-empty set = rows actually dead-lettered on
       // THIS call; that transition is the gate for the (at-most-once) Slack post.
-      failTaskInbox.mockResolvedValueOnce([{ id: "inbox-1" }]);
+      stubLinearTarget(task);
 
       service.start();
       await waitFor(() => notifyTerminal.mock.calls.length > 0);
@@ -618,10 +613,7 @@ describe("TaskProcessorService", () => {
         created_at: new Date(),
         updated_at: new Date(),
       };
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValueOnce([
-        commentRow,
-      ]);
-      failTaskInbox.mockResolvedValueOnce([{ id: "inbox-c" }]);
+      failTaskInbox.mockResolvedValueOnce([commentRow]);
 
       service.start();
       await waitFor(() => releaseLease.mock.calls.length > 0);
@@ -635,7 +627,6 @@ describe("TaskProcessorService", () => {
       const task = makeTask({ sandboxId: null });
       claimNext.mockResolvedValueOnce(task).mockResolvedValue(null);
       createSandboxWithPvc.mockImplementation(() => Promise.reject(new Error("provision boom")));
-      stubLinearTarget(task);
       // Default failTaskInbox returns [] → no transition → no Slack post.
       service.start();
       await waitFor(() => releaseLease.mock.calls.length > 0);
@@ -824,7 +815,7 @@ describe("TaskProcessorService", () => {
     });
 
     it("posts once per distinct target id across every open row, by target kind", async () => {
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+      failTaskInbox.mockResolvedValue([
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
         // Same session as the assignment → deduped.
         row("lc", "comment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
@@ -840,7 +831,6 @@ describe("TaskProcessorService", () => {
         // CI target: commentId 0 = "post a new PR comment".
         row("ci", "ci_result", "github", [issueComment("9001", 9, 0)]),
       ]);
-      failTaskInbox.mockResolvedValue(["a", "lc", "gc", "rv", "ci"].map((id) => ({ id })));
 
       await failTask(makeTask());
 
@@ -864,12 +854,29 @@ describe("TaskProcessorService", () => {
       });
     });
 
-    it("dead-letters before posting, and posts only to the rows it dead-lettered", async () => {
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+    it("notices every row failTaskInbox dead-letters, whatever a separate read of the open rows saw", async () => {
+      // A follow-up committed after such a read, or the read failing, must not
+      // cost a dead-lettered row its notice, hook or Slack post.
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockRejectedValue(
+        new Error("connection reset"),
+      );
+      failTaskInbox.mockResolvedValue([
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
-        // Responded by a late `completed` before failTaskInbox ran: not transitioned.
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
+
+      await failTask(makeTask());
+
+      expect(emitError).toHaveBeenCalledWith(expect.anything(), "sess-1", MSG);
+      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 7, MSG, expect.any(AbortSignal));
+      expect(notifyTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "task-1" }),
+        "failed",
+        MSG,
+      );
+    });
+
+    it("dead-letters before posting, and posts only to the rows it dead-lettered", async () => {
       const order: string[] = [];
       emitError.mockImplementation(() => {
         order.push("post");
@@ -882,7 +889,11 @@ describe("TaskProcessorService", () => {
       });
       failTaskInbox.mockImplementation(() => {
         order.push("mark");
-        return Promise.resolve([{ id: "a" }]);
+        // The GitHub round was responded by a late `completed` before
+        // failTaskInbox ran: not transitioned, so not returned.
+        return Promise.resolve([
+          row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
+        ]);
       });
       releaseLease.mockImplementation(() => {
         order.push("release");
@@ -897,11 +908,10 @@ describe("TaskProcessorService", () => {
 
     it("finishes a dead-lettered assignment's round: outcome failed, first transition, no archive", async () => {
       const onRoundFinished = spyOn(integrations.linear, "onRoundFinished");
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+      failTaskInbox.mockResolvedValue([
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
-      failTaskInbox.mockResolvedValue([{ id: "a" }, { id: "gc" }]);
 
       await failTask(makeTask());
       await waitFor(() => onRoundFinished.mock.calls.length > 0);
@@ -920,11 +930,10 @@ describe("TaskProcessorService", () => {
     });
 
     it("a row whose source has no integration is skipped; other rows post and the lease is released", async () => {
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+      failTaskInbox.mockResolvedValue([
         row("x", "comment", "unknown-source", [issueComment("777", 7, 777)]),
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
-      failTaskInbox.mockResolvedValue([{ id: "x" }, { id: "gc" }]);
 
       await failTask(makeTask());
 
@@ -940,10 +949,9 @@ describe("TaskProcessorService", () => {
 
     it("a row whose integration is disabled gets no notice; it is still dead-lettered and the lease released", async () => {
       integrations.github = new GithubIntegration(false, { status: () => ({}) as never });
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+      failTaskInbox.mockResolvedValue([
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
-      failTaskInbox.mockResolvedValue([{ id: "gc" }]);
 
       await failTask(makeTask());
 
@@ -963,11 +971,10 @@ describe("TaskProcessorService", () => {
 
     it("a Linear token failure skips only the Linear post; GitHub and Slack posts, dead-letter and release go on", async () => {
       getAuthorizedLinearClient.mockRejectedValue(new Error("token refresh failed"));
-      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+      failTaskInbox.mockResolvedValue([
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
-      failTaskInbox.mockResolvedValue([{ id: "a" }, { id: "gc" }]);
 
       await failTask(makeTask());
 
@@ -1489,14 +1496,15 @@ describe("TaskProcessorService", () => {
       expect(holds.stats()).toEqual({});
     });
 
-    it("renews each task's lease right before its reconcile; a lost lease skips that task", async () => {
+    it("renews every lease this pod holds right before each reconcile; a lost lease skips that task", async () => {
       const t1 = makeTask({ id: "task-1", sandboxId: "sbx-1" });
       const t2 = makeTask({ id: "task-2", sandboxId: "sbx-2" });
       listInFlightOwnedBy.mockResolvedValueOnce([t1, t2]).mockResolvedValue([]);
       const order: string[] = [];
-      heartbeatTask.mockImplementation((p: { taskId: string }) => {
-        order.push(`heartbeat ${p.taskId}`);
-        return Promise.resolve(p.taskId === "task-2" ? [] : [{ id: p.taskId }]);
+      // task-2's lease was taken over.
+      heartbeatOwnedBy.mockImplementation(() => {
+        order.push("heartbeat");
+        return Promise.resolve([{ id: "task-1" }, { id: "in-flight-provision" }]);
       });
       getSandboxInfo.mockImplementation((id: string) => {
         order.push(`reconcile ${id}`);
@@ -1504,12 +1512,65 @@ describe("TaskProcessorService", () => {
       });
 
       service.start();
-      await waitFor(() => order.length >= 3);
+      await waitFor(() => order.length >= 4);
       await new Promise<void>((r) => setTimeout(r, 30));
       await service.stop();
 
-      expect(order).toEqual(["heartbeat task-1", "reconcile sbx-1", "heartbeat task-2"]);
-      expect(heartbeatTask).toHaveBeenCalledWith({ taskId: "task-1", ownerId: "pod-test" });
+      // Tick start, then before each reconcile.
+      expect(order.slice(0, 4)).toEqual(["heartbeat", "heartbeat", "reconcile sbx-1", "heartbeat"]);
+      expect(order).not.toContain("reconcile sbx-2");
+      expect(heartbeatOwnedBy).toHaveBeenCalledWith("pod-test");
+    });
+
+    it("never provisions a task twice on this pod: a re-claim while its provision runs is skipped", async () => {
+      let release!: () => void;
+      createSandboxWithPvc.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ sandboxId: "sbx-1", pvcName: "devbox-pvc-task-1-aaaaaa" });
+          }),
+      );
+      // The lease of the running provision expired, so claimNext hands it back.
+      claimNext
+        .mockResolvedValueOnce(makeTask())
+        .mockResolvedValueOnce(makeTask())
+        .mockResolvedValue(null);
+
+      service.start();
+      await waitFor(() => claimNext.mock.calls.length >= 3);
+      release();
+      await waitFor(() => attachSandboxResources.mock.calls.length > 0);
+      await service.stop();
+
+      expect(createSandboxWithPvc).toHaveBeenCalledTimes(1);
+    });
+
+    it("once shutdown starts, dispatches no further event of the task in hand", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      listInFlightOwnedBy.mockResolvedValue([task]);
+      const thought = (seq: number) =>
+        ({
+          seq,
+          ts: "t",
+          type: "agent_thought",
+          inbox_id: "inbox-1",
+          target_id: "sess-1",
+          body: "x",
+        }) as HarnessEvent;
+      readEvents.mockResolvedValue([thought(1), thought(2), thought(3)]);
+      let stopping: Promise<void> | undefined;
+      dispatcherHandle.mockImplementation(() => {
+        stopping ??= service.stop();
+        return Promise.resolve("ok" as const);
+      });
+
+      service.start();
+      await waitFor(() => stopping !== undefined);
+      await stopping;
+
+      // The event in hand finishes and its cursor is kept; the rest wait.
+      expect(dispatcherHandle).toHaveBeenCalledTimes(1);
+      expect(recordEventCursor).toHaveBeenCalledTimes(1);
     });
 
     it("claims and lists only the configured task sources", async () => {
@@ -1609,7 +1670,6 @@ describe("TaskProcessorService", () => {
       getSandboxPodStatus.mockResolvedValue({ exists: true, phase: "Running", oomKilled: false });
       getSandboxInfo.mockResolvedValue(makeSandboxInfo({ metadata: { task_id: "other-task" } }));
       stubLinearTarget(task);
-      failTaskInbox.mockResolvedValue([{ id: "inbox-1" }]);
 
       service.start();
       await waitFor(() => releaseLease.mock.calls.length > 0);
@@ -1747,7 +1807,6 @@ describe("TaskProcessorService", () => {
     it("retries exhausted → dead-letters + fails with the give-up message", async () => {
       const task = makeTask({ sandboxId: "sbx-oom" });
       stubLinearTarget(task);
-      failTaskInbox.mockResolvedValue([{ id: "inbox-1" }]);
       getSandboxPodStatus.mockResolvedValue({ exists: true, phase: "Failed", oomKilled: true });
       // The count is durable in tasks.metadata; requeueForRetry persists it. Mirror
       // that on the shared task object so the next assess() reads the bumped count

@@ -125,9 +125,16 @@ export class IntegrationHooks {
   }
 
   // Waits for detached work until `deadline` settles, then logs what is still
-  // running; the process exits right after.
+  // running; the process exits right after. Work detached meanwhile (say, a
+  // restart's sandbox kill from a webhook still being served) is waited for too.
   async drain(deadline: Promise<void>): Promise<void> {
-    await Promise.race([Promise.allSettled(this.detached.keys()), deadline]);
+    let expired = false;
+    void deadline.then(() => {
+      expired = true;
+    });
+    while (this.detached.size > 0 && !expired) {
+      await Promise.race([Promise.allSettled(this.detached.keys()), deadline]);
+    }
     for (const { taskId, hook } of this.detached.values()) {
       logger.warn("hook abandoned at shutdown", { event: "hook_abandoned", taskId, hook });
     }

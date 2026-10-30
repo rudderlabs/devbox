@@ -156,6 +156,34 @@ describe("IntegrationHooks", () => {
     expect(onTaskStarted).toHaveBeenCalledTimes(2);
   });
 
+  it("drain also waits for work detached while it drains", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => logger);
+    try {
+      const { hooks } = hooksWith({});
+      let finished = false;
+      hooks.detach(
+        "task-1",
+        "onRoundFinished",
+        sleep(10).then(() =>
+          // A webhook still being served restarts a task meanwhile.
+          hooks.detach(
+            "task-2",
+            "killSandbox",
+            sleep(20).then(() => {
+              finished = true;
+            }),
+          ),
+        ),
+      );
+      await hooks.drain(sleep(500));
+
+      expect(finished).toBe(true);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("onRoundFinished routes by round.source; drain logs hook_abandoned for what is still running", async () => {
     const warn = spyOn(logger, "warn").mockImplementation(() => logger);
     try {

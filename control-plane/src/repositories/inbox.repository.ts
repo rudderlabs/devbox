@@ -279,9 +279,7 @@ export class InboxRepository {
     return asRows<RawInboxRow>(result).map(mapRow);
   }
 
-  // Every non-terminal row of a task (pending or delivered). failTask reads
-  // these before dead-lettering, then sends the failure message to the reply
-  // targets of the rows failTaskInbox transitioned.
+  // Every non-terminal row of a task (pending or delivered).
   async listNonTerminalByTask(taskId: string): Promise<InboxRow[]> {
     const result = await db.execute<RawInboxRow>(sql`
       SELECT * FROM inbox
@@ -360,29 +358,33 @@ export class InboxRepository {
   // task-failure paths (provision failure, sandbox crash/timeout) call this so
   // a failed task cannot leave a row stuck pre-terminal — a non-terminal row
   // pins the idle reaper, and on a no-sandbox provision failure a 'pending'
-  // row would otherwise stay claimable forever. Returns the affected row ids:
-  // the caller logs them and sends the failure message only to those rows.
+  // row would otherwise stay claimable forever. Returns the rows it failed, in
+  // arrival order: the caller logs them and sends the failure message only to
+  // those rows.
   async failTaskInbox(params: {
     taskId: string;
     ownerId: string;
     reason: string;
-  }): Promise<{ id: string }[]> {
+  }): Promise<InboxRow[]> {
     return db.transaction(async (tx) => {
       // Lock the task row first so task_events ids are handed out in commit
       // order per task for stable event cursors. Tasks before inbox,
       // the same order as restartTaskWithInbox.
       await tx.execute(sql`SELECT 1 FROM tasks WHERE id = ${params.taskId} FOR NO KEY UPDATE`);
-      const result = await tx.execute<{ id: string }>(sql`
-        UPDATE inbox i
-           SET status = 'failed', failure_reason = ${params.reason}, updated_at = now()
-          FROM tasks t
-         WHERE i.task_id = ${params.taskId}
-           AND i.task_id = t.id
-           AND t.owner_id = ${params.ownerId}
-           AND i.status IN ('pending', 'delivered')
-        RETURNING i.id;
+      const result = await tx.execute<RawInboxRow>(sql`
+        WITH failed AS (
+          UPDATE inbox i
+             SET status = 'failed', failure_reason = ${params.reason}, updated_at = now()
+            FROM tasks t
+           WHERE i.task_id = ${params.taskId}
+             AND i.task_id = t.id
+             AND t.owner_id = ${params.ownerId}
+             AND i.status IN ('pending', 'delivered')
+          RETURNING i.*
+        )
+        SELECT * FROM failed ORDER BY created_at ASC;
       `);
-      const failed = asRows<{ id: string }>(result);
+      const failed = asRows<RawInboxRow>(result).map(mapRow);
       // Write one round_failed event per failed row in the same transaction.
       for (const row of failed) {
         await insertCpEventIfApi(tx, {
