@@ -555,6 +555,24 @@ describe("EventDispatcher", () => {
       expect(postIssueComment).not.toHaveBeenCalled();
       expect(emitError).not.toHaveBeenCalled();
     });
+
+    it("a GitHub comment round failure posts nothing when GitHub webhooks are off (no bot login)", async () => {
+      const webhooks = mockedConfig.github.webhooks;
+      mockedConfig.github.webhooks = undefined;
+      try {
+        getByIdForTask.mockResolvedValue(
+          ghRow("comment", {
+            id: "555",
+            spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 555 },
+          }),
+        );
+        expect(await dispatcher.handle(errorEvent("555"), makeTask())).toBe("ok");
+        expect(postIssueComment).not.toHaveBeenCalled();
+        expect(postReviewCommentReply).not.toHaveBeenCalled();
+      } finally {
+        mockedConfig.github.webhooks = webhooks;
+      }
+    });
   });
 
   describe("labelling", () => {
@@ -653,6 +671,16 @@ describe("EventDispatcher", () => {
         "https://github.com/o/r/pull/1",
         "r",
       );
+    });
+
+    it("Linear task: a token fetch failure rejects before appendPrUrl (cursor held)", async () => {
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        new Error("token refresh failed"),
+      );
+      await expect(dispatcher.handle(prEvent(), makeTask())).rejects.toThrow(
+        "token refresh failed",
+      );
+      expect(appendPrUrl).not.toHaveBeenCalled();
     });
 
     it("self-evicts when appendPrUrl returns 0 rows (lease lost); skips attachUrlToIssue", async () => {
@@ -1238,6 +1266,16 @@ describe("EventDispatcher", () => {
       markResponded.mockResolvedValue([]);
       await dispatcher.handle(completedEvent(), makeTask());
       expect(markResponded).toHaveBeenCalled();
+    });
+
+    it("Linear assignment: a token fetch failure rejects before markResponded (cursor held)", async () => {
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        new Error("token refresh failed"),
+      );
+      await expect(dispatcher.handle(completedEvent(), makeTask())).rejects.toThrow(
+        "token refresh failed",
+      );
+      expect(markResponded).not.toHaveBeenCalled();
     });
 
     it("still marks responded when linearClient is null", async () => {

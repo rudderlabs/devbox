@@ -332,7 +332,17 @@ export class InboxService {
       });
     const target = entry.reply_targets[0];
     if (marked.length === 0 || !target) return;
-    await this.integrations[entry.source]
+    // A source this build has no integration for (say, rows written by a newer
+    // build before a rollback) gets no notice; its row is still failed.
+    const integration: Integration | undefined = this.integrations[entry.source];
+    if (!integration) {
+      logger.warn("workspace_missing: no integration for the row's source; notice skipped", {
+        inboxId: entry.id,
+        source: entry.source,
+      });
+      return;
+    }
+    await integration
       .deliver({ signal: new AbortController().signal, log: logger }, target, {
         type: "failure",
         cause: "workspace_missing",

@@ -783,6 +783,23 @@ describe("TaskProcessorService", () => {
       expect(postIssueComment).not.toHaveBeenCalled();
     });
 
+    it("a row whose source has no integration is skipped; other rows post and the lease is released", async () => {
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+        row("x", "comment", "unknown-source", [issueComment("777", 7, 777)]),
+        row("gc", "comment", "github", [issueComment("555", 7, 555)]),
+      ]);
+      failTaskInbox.mockResolvedValue([{ id: "x" }, { id: "gc" }]);
+
+      await failTask(makeTask());
+
+      expect(postIssueComment.mock.calls as unknown[]).toEqual([["o", "r", 7, MSG]]);
+      expect(releaseLease).toHaveBeenCalledWith({
+        taskId: "task-1",
+        ownerId: "pod-test",
+        alsoClearSandbox: true,
+      });
+    });
+
     it("a Linear token failure skips only the Linear post; GitHub posts, dead-letter and release go on", async () => {
       getAuthorizedLinearClient.mockRejectedValue(new Error("token refresh failed"));
       (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([

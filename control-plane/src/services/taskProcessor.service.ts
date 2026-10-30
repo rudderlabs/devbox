@@ -767,10 +767,21 @@ export class TaskProcessorService {
     // so a delivery error (RetryableError included) is logged and dropped.
     const seen = new Set<string>();
     for (const row of failedRows) {
+      // A source this build has no integration for (say, rows written by a
+      // newer build before a rollback) gets no notice; its row is still failed.
+      const integration: Integration | undefined = this.integrations[row.source];
+      if (!integration) {
+        logger.warn("failTask: no integration for the row's source; notice skipped", {
+          taskId: task.id,
+          inboxId: row.id,
+          source: row.source,
+        });
+        continue;
+      }
       for (const t of row.reply_targets) {
         if (seen.has(t.id)) continue;
         seen.add(t.id);
-        await this.integrations[row.source]
+        await integration
           .deliver({ signal: new AbortController().signal, log: logger }, t, {
             type: "failure",
             cause: "task_failed",
