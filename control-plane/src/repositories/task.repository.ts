@@ -30,7 +30,8 @@ export class TaskRepository {
   // an order, one not above the stored order is a duplicate; otherwise the
   // same id is. A duplicate changes nothing; anything else restarts the task.
   // A new task gets its assignment row and, for API tasks, task_created.
-  // Returns the preempted sandbox for the caller to kill after commit.
+  // Returns the preempted sandbox for the caller to kill after commit, and on
+  // a restart the replaced delegation's target id.
   async assign(p: {
     source: TaskSource;
     externalId?: string; // required with a hint key; a sequence key is its own
@@ -43,7 +44,11 @@ export class TaskRepository {
     requester?: Person;
     createdBy?: string;
   }): Promise<
-    TaskRef & { result: "created" | "restarted" | "duplicate"; prevSandboxId: string | null }
+    TaskRef & {
+      result: "created" | "restarted" | "duplicate";
+      prevSandboxId: string | null;
+      prevTargetId?: string;
+    }
   > {
     return db.transaction(async (tx) => {
       // In a savepoint so a key collision leaves the transaction usable: a
@@ -121,7 +126,7 @@ export class TaskRepository {
         },
         tx,
       );
-      return { ...t, result: "restarted", prevSandboxId };
+      return { ...t, result: "restarted", prevSandboxId, prevTargetId: prev?.id };
     });
   }
 

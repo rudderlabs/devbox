@@ -34,7 +34,12 @@ export interface TaskIntake {
     target: (t: TaskRef) => ReplyTarget; // target.id = delegation id; optional target.order (monotonic number)
     requester?: Person; // tasks.metadata.requester
     createdBy?: string; // API token id
-  }): Promise<{ taskId: string; key: string; result: "created" | "restarted" | "duplicate" }>;
+  }): Promise<{
+    taskId: string;
+    key: string;
+    result: "created" | "restarted" | "duplicate";
+    previousTargetId?: string; // a restart's replaced delegation id
+  }>;
 
   restart(
     taskId: string,
@@ -73,7 +78,7 @@ export class Intake implements TaskIntake {
 
   async assign(p: Parameters<TaskIntake["assign"]>[0]): ReturnType<TaskIntake["assign"]> {
     if ("hint" in p.key && !p.externalId) throw new Error("assign: a hint key needs externalId");
-    const { prevSandboxId, ...t } = await this.taskRepo.assign({
+    const { prevSandboxId, prevTargetId, ...t } = await this.taskRepo.assign({
       ...p,
       key:
         "hint" in p.key
@@ -85,8 +90,8 @@ export class Intake implements TaskIntake {
         return target;
       },
     });
-    this.killPreempted(t.id, prevSandboxId);
-    return { taskId: t.id, key: t.key, result: t.result };
+    this.killPreempted(t.id, prevSandboxId, "preempted re-delegation");
+    return { taskId: t.id, key: t.key, result: t.result, previousTargetId: prevTargetId };
   }
 
   // API only: today's API restart, with the definition replacing the current
@@ -108,7 +113,7 @@ export class Intake implements TaskIntake {
       inboxReplyTargets: [apiSessionTarget(taskId)],
       api: { title: def.title, description: def.description, experimentalFlags: def.flags },
     });
-    this.killPreempted(taskId, prevSandboxId);
+    this.killPreempted(taskId, prevSandboxId, "API restart");
   }
 
   async followUp(p: Parameters<TaskIntake["followUp"]>[0]): ReturnType<TaskIntake["followUp"]> {
@@ -140,14 +145,14 @@ export class Intake implements TaskIntake {
 
   // A restart's preempted sandbox, killed after commit in the tracked detached
   // set so shutdown drains it. The old workspace volume is kept (§15 bug 6).
-  private killPreempted(taskId: string, sandboxId: string | null): void {
+  private killPreempted(taskId: string, sandboxId: string | null, why: string): void {
     if (!sandboxId) return;
     this.hooks.detach(
       taskId,
       "killSandbox",
       this.sandboxManager.killSandbox(sandboxId).catch((err) => {
         const e = err instanceof Error ? err : new Error(String(err));
-        logger.error("killSandbox(restart) failed", {
+        logger.error(`killSandbox(${why}) failed`, {
           taskId,
           sandboxId,
           message: e.message,

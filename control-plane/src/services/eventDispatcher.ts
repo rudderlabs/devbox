@@ -194,7 +194,9 @@ export class EventDispatcher {
           this.hooks.detach(
             task.id,
             "slack",
-            this.slackNotifier.notifyTerminal(task, event.status ?? "completed"),
+            this.slackNotifier
+              .notifyTerminal(task, event.status ?? "completed")
+              .catch((err) => logErr("slack completion notify failed", err, { taskId: task.id })),
           );
         }
         break;

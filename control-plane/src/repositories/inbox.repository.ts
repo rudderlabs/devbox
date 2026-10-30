@@ -239,11 +239,14 @@ export class InboxRepository {
         );
         const seen = count?.n ?? 0;
         if (seen >= p.ciResultMax) {
+          // external_id is workflow_run:<run>:<attempt>:<pr>.
+          const [, runId, , prNumber] = message.external_id.split(":").map(Number);
           logger.warn("ci_result loop breaker tripped — dropping CI failure", {
             taskId: p.taskId,
             seen,
             max: p.ciResultMax,
-            externalId: message.external_id,
+            runId,
+            prNumber,
           });
           return { dropped: "ci_limit" };
         }

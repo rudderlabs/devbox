@@ -91,15 +91,7 @@ export function createApp(): AppBundle {
     lastWebhookAt: (): string | null => integrations.github.controller?.lastWebhookAt() ?? null,
   });
 
-  // The registry. Every outbound message goes through
-  // integrations[round.source].deliver, and core skips a disabled
-  // integration's webhook, sends and hooks.
-  const integrations = {
-    linear: new LinearIntegration(linearTokenProvider, config.linear !== undefined, linearStatus),
-    api: new ApiIntegration(config.api.enabled),
-    // GitHub rounds come only from its webhooks.
-    github: new GithubIntegration(config.github.webhooks !== undefined, githubStatus),
-  } satisfies Record<IntegrationName, Integration>;
+  const integrations = createIntegrations(config, linearTokenProvider, linearStatus, githubStatus);
   // The registered integrations that create tasks (github creates none). Only
   // these sources are claimed and reconciled, so an older image never works a
   // task whose source it doesn't know (§10).
@@ -192,23 +184,46 @@ export function createApp(): AppBundle {
       sseMaxDurationMs: config.api.sseMaxDurationMs,
       clock: realClock,
     });
-    // Each integration's own status body, plus its held sends (§4 I14).
-    const statuses = Object.fromEntries(
-      Object.values(integrations).map((i) => [
-        i.name,
-        { status: async () => ({ ...(await i.status()), holds: replyHolds.of(i.name) }) },
-      ]),
-    ) as Record<IntegrationName, Pick<Integration, "status">>;
     app.route(
       "/",
       createApiRoutes(apiController, new ApiAuthService(apiTokenRepository), {
         authEnabled: config.api.authEnabled,
         allowedHosts: config.api.allowedHosts,
-        integrations: statuses,
+        integrations: statusesWithHolds(integrations, replyHolds),
       }),
     );
     stopApiStreams = () => apiController.closeStreams();
   }
 
   return { app, taskProcessor, stopApiStreams };
+}
+
+// The registry. Every outbound message goes through
+// integrations[round.source].deliver, and core skips a disabled
+// integration's webhook, sends and hooks.
+export function createIntegrations(
+  cfg: { linear?: unknown; api: { enabled: boolean }; github: { webhooks?: unknown } },
+  linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
+  linearStatus: Pick<LinearStatusService, "status">,
+  githubStatus: Pick<GithubStatusService, "status">,
+) {
+  return {
+    linear: new LinearIntegration(linearTokenProvider, cfg.linear !== undefined, linearStatus),
+    api: new ApiIntegration(cfg.api.enabled),
+    // GitHub rounds come only from its webhooks.
+    github: new GithubIntegration(cfg.github.webhooks !== undefined, githubStatus),
+  } satisfies Record<IntegrationName, Integration>;
+}
+
+// Each integration's own status body, plus its held sends (§4 I14).
+export function statusesWithHolds(
+  integrations: ReturnType<typeof createIntegrations>,
+  replyHolds: Pick<ReplyHolds, "of">,
+): Record<IntegrationName, Pick<Integration, "status">> {
+  return Object.fromEntries(
+    Object.values(integrations).map((i) => [
+      i.name,
+      { status: async () => ({ ...(await i.status()), holds: replyHolds.of(i.name) }) },
+    ]),
+  ) as Record<IntegrationName, Pick<Integration, "status">>;
 }

@@ -98,6 +98,9 @@ const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
 const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
+const { InboxService: RealInboxService, WORKSPACE_MISSING_MESSAGE } = await import(
+  "../inbox.service"
+);
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
   config: { shutdownDrainMs: number };
 };
@@ -723,6 +726,52 @@ describe("TaskProcessorService", () => {
         alsoClearSandbox: true,
       });
     });
+
+    it("a row whose integration is disabled gets no notice; it is still failed and the lease released", async () => {
+      integrations.github = new GithubIntegration(false, { status: () => ({}) as never });
+      const row = {
+        ...survivingNonTerminalRow(),
+        id: "gc",
+        source: "github",
+        kind: "comment",
+        reply_targets: [
+          {
+            id: "555",
+            spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: 555 },
+          },
+        ],
+      };
+      const markFailed = mock(() => Promise.resolve([{ id: "gc" }]));
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([row]);
+      Object.assign(inboxRepo, { getById: mock(() => Promise.resolve(row)), markFailed });
+      // The real dead-letter path in place of the stub.
+      Object.assign(service, {
+        inboxService: new RealInboxService(inboxRepo, sandboxManager, integrations, hooks, {
+          followUp: mock(),
+        }),
+      });
+
+      await (
+        service as unknown as { handleTaskError(t: Task, e: unknown): Promise<void> }
+      ).handleTaskError(
+        makeTask({ sandboxId: null, pvcName: "pvc-1" }),
+        new PvcNotFoundError("pvc-1"),
+      );
+
+      expect(postIssueComment).not.toHaveBeenCalled();
+      expect(holds.stats()).toEqual({});
+      expect(markFailed).toHaveBeenCalledWith({
+        inboxId: "gc",
+        ownerId: "pod-test",
+        reason: "workspace_missing",
+        userMessage: WORKSPACE_MISSING_MESSAGE,
+      });
+      expect(releaseLease).toHaveBeenCalledWith({
+        taskId: "task-1",
+        ownerId: "pod-test",
+        alsoClearSandbox: true,
+      });
+    });
   });
 
   describe("dispatch", () => {
@@ -882,6 +931,29 @@ describe("TaskProcessorService", () => {
       expect(postIssueComment.mock.calls as unknown[]).toEqual([
         ["o", "r", 7, MSG, expect.any(AbortSignal)],
       ]);
+      expect(releaseLease).toHaveBeenCalledWith({
+        taskId: "task-1",
+        ownerId: "pod-test",
+        alsoClearSandbox: true,
+      });
+    });
+
+    it("a row whose integration is disabled gets no notice; it is still dead-lettered and the lease released", async () => {
+      integrations.github = new GithubIntegration(false, { status: () => ({}) as never });
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+        row("gc", "comment", "github", [issueComment("555", 7, 555)]),
+      ]);
+      failTaskInbox.mockResolvedValue([{ id: "gc" }]);
+
+      await failTask(makeTask());
+
+      expect(postIssueComment).not.toHaveBeenCalled();
+      expect(holds.stats()).toEqual({});
+      expect(failTaskInbox).toHaveBeenCalledWith({
+        taskId: "task-1",
+        ownerId: "pod-test",
+        reason: MSG,
+      });
       expect(releaseLease).toHaveBeenCalledWith({
         taskId: "task-1",
         ownerId: "pod-test",

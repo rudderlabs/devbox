@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { sql } from "drizzle-orm";
+import { sql, TransactionRollbackError } from "drizzle-orm";
 
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://devbox:devbox@localhost:5432/devbox";
@@ -177,6 +177,39 @@ describe("InboxRepository", () => {
       expect(review).toBeNull();
       const kinds = await db.execute<{ kind: string }>(sql`SELECT kind FROM inbox`);
       expect([...kinds]).toEqual([{ kind: "comment" }]);
+    });
+
+    it("dedupes on (source, kind, external_id) once the old index is gone", async () => {
+      // Phase 3 drops inbox_source_external_uniq; here it goes in a
+      // transaction that is rolled back, so the insert's conflict target
+      // must be the new index.
+      const task = await insertTask();
+      const review = {
+        source: "github" as const,
+        kind: "review" as const,
+        external_id: "555",
+        payload: {
+          review_body: { target_id: "555", body: "@bot" },
+          inline_comments: [],
+          task_id: "task-1",
+          task_key: "T-1",
+          pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+          created_at: "",
+        },
+      };
+      const results: unknown[] = [];
+      await expect(
+        db.transaction(async (tx) => {
+          await tx.execute(sql`DROP INDEX inbox_source_external_uniq`);
+          for (const message of [ghComment("555"), ghComment("555"), review]) {
+            results.push(
+              await repo.appendInbox({ taskId: task.id, message, replyTargets: [] }, tx),
+            );
+          }
+          tx.rollback();
+        }),
+      ).rejects.toThrow(TransactionRollbackError);
+      expect(results).toEqual([{ id: expect.any(String) }, null, { id: expect.any(String) }]);
     });
   });
 

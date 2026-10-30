@@ -44,7 +44,7 @@ export class AgentSessionService {
         // the freshly-provisioned sandbox); a new one is a re-delegation, which
         // preempts any in-flight run and restarts from a clean slate (intake
         // kills the preempted sandbox).
-        const { taskId, result } = await this.intake.assign({
+        const { taskId, result, previousTargetId } = await this.intake.assign({
           source: "linear",
           externalId: event.issue.id,
           key: { hint: requireLinearTicketId(event.issue.url) },
@@ -61,6 +61,7 @@ export class AgentSessionService {
         } else if (result === "restarted") {
           logger.info("re-delegation detected; restarting task from clean slate", {
             taskId,
+            previousSessionId: previousTargetId,
             currentSessionId: event.agentSessionId,
           });
           this.fireAndForgetEmitResponse(event.agentSessionId, RESTARTED_BODY, "restart-ack");

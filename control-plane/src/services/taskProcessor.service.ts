@@ -868,7 +868,9 @@ export class TaskProcessorService {
       this.hooks.detach(
         task.id,
         "slack",
-        this.slackNotifier.notifyTerminal(task, "failed", message),
+        this.slackNotifier
+          .notifyTerminal(task, "failed", message)
+          .catch((e) => logErr(`slack failure notify failed for task ${task.id}`, e)),
       );
     }
     await this.taskRepo.releaseLease({

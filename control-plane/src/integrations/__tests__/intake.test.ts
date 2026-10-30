@@ -219,7 +219,12 @@ describe("Intake", () => {
         flags: ["NEW"],
       });
 
-      expect(res).toEqual({ taskId, key: "ISS-1", result: "restarted" });
+      expect(res).toEqual({
+        taskId,
+        key: "ISS-1",
+        result: "restarted",
+        previousTargetId: "sess-1",
+      });
       expect(killSandbox).toHaveBeenCalledTimes(1);
       expect(killSandbox).toHaveBeenCalledWith("sb-old");
       // In the tracked detached set, so shutdown drains it.
@@ -235,6 +240,41 @@ describe("Intake", () => {
         sandbox_id: null,
         pvc_name: null,
       });
+    });
+
+    it("concurrent deliveries of one re-delegation restart the task once", async () => {
+      // The task row lock serializes them: the first restarts, the rest read
+      // the new target after it commits. Another transaction holds the
+      // assignment row, so the first restart waits while the rest pile up.
+      const { taskId } = await assignLinear(session("S0"));
+      await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-old' WHERE id = ${taskId}`);
+      const other = new SQL(TEST_DATABASE_URL);
+      try {
+        let release!: () => void;
+        const gate = new Promise<void>((r) => {
+          release = r;
+        });
+        let locked!: () => void;
+        const ready = new Promise<void>((r) => {
+          locked = r;
+        });
+        const holder = other.begin(async (tx) => {
+          await tx`SELECT 1 FROM inbox WHERE task_id = ${taskId} FOR UPDATE`;
+          locked();
+          await gate;
+        });
+        await ready;
+        const pending = Promise.all(Array.from({ length: 6 }, () => assignLinear(session("S1"))));
+        await new Promise((r) => setTimeout(r, 150));
+        release();
+        await holder;
+        const results = (await pending).map((r) => r.result).sort();
+        expect(results).toEqual([...Array(5).fill("duplicate"), "restarted"]);
+      } finally {
+        await other.close();
+      }
+      expect(killSandbox).toHaveBeenCalledTimes(1);
+      expect(killSandbox).toHaveBeenCalledWith("sb-old");
     });
 
     it("rejects a target of another integration, and a hint without an external id", async () => {
