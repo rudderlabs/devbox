@@ -298,6 +298,156 @@ describe("InboxService", () => {
       expect(emitError).not.toHaveBeenCalled();
       expect(markFailed).not.toHaveBeenCalled();
     });
+
+    // One open row per kind on a Linear task. getById echoes each row so the
+    // per-row status re-check passes.
+    const stageRows = (rows: InboxRow[]) => {
+      listNonTerminalByTask.mockResolvedValue(rows);
+      getById.mockImplementation((id: string) =>
+        Promise.resolve(rows.find((r) => r.id === id) ?? null),
+      );
+    };
+    const linearRow = (id: string, sessionId: string, kind = "comment"): InboxRow =>
+      ({
+        ...ghCommentRow(id),
+        source: "linear",
+        kind,
+        reply_targets: [{ id: sessionId, spec: { kind: "linear_session" } }],
+      }) as InboxRow;
+
+    it("notifies each row by kind: Linear session error, review-comment reply + 😕, review body as a PR comment, CI silent", async () => {
+      stageRows([
+        linearRow("lin", "sess-2"),
+        {
+          ...ghCommentRow("rc"),
+          reply_targets: [
+            {
+              id: "556",
+              spec: {
+                kind: "review_comment",
+                owner: "o",
+                repo: "r",
+                prNumber: 7,
+                commentId: 556,
+                inReplyTo: 556,
+                path: "a.ts",
+                line: 3,
+              },
+            },
+          ],
+        },
+        {
+          ...ghCommentRow("rev"),
+          kind: "review",
+          reply_targets: [
+            {
+              id: "11",
+              spec: {
+                kind: "review_comment",
+                owner: "o",
+                repo: "r",
+                prNumber: 8,
+                commentId: 11,
+                inReplyTo: 11,
+                path: "b.ts",
+                line: 9,
+              },
+            },
+            {
+              id: "88",
+              spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 8, reviewId: 88 },
+            },
+          ],
+        } as InboxRow,
+        {
+          ...ghCommentRow("ci"),
+          kind: "ci_result",
+          reply_targets: [
+            {
+              id: "9001",
+              spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 9, commentId: 0 },
+            },
+          ],
+        } as InboxRow,
+      ]);
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+
+      expect(emitError).toHaveBeenCalledTimes(1);
+      expect(emitError).toHaveBeenCalledWith(
+        expect.anything(),
+        "sess-2",
+        WORKSPACE_MISSING_MESSAGE,
+      );
+      expect(postReviewCommentReply).toHaveBeenCalledTimes(1);
+      expect(postReviewCommentReply).toHaveBeenCalledWith(
+        "o",
+        "r",
+        7,
+        556,
+        WORKSPACE_MISSING_MESSAGE,
+      );
+      expect(addReviewCommentReaction).toHaveBeenCalledTimes(1);
+      expect(addReviewCommentReaction).toHaveBeenCalledWith("o", "r", 556, "confused");
+      // Only the review body posts; its inline comments and the CI row get nothing.
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
+      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 8, WORKSPACE_MISSING_MESSAGE);
+      expect(addIssueCommentReaction).not.toHaveBeenCalled();
+      expect(markFailed.mock.calls.map((c) => (c[0] as { inboxId: string }).inboxId)).toEqual([
+        "lin",
+        "rc",
+        "rev",
+        "ci",
+      ]);
+    });
+
+    it("posts per row, not per target: two Linear rows on one session get two errors", async () => {
+      // failTask dedupes by target id; this path does not.
+      stageRows([linearRow("a", "sess-1", "assignment"), linearRow("b", "sess-1")]);
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+
+      expect(emitError).toHaveBeenCalledTimes(2);
+      expect(markFailed).toHaveBeenCalledTimes(2);
+    });
+
+    it("posts before marking the row, and posts even when markFailed transitions nothing", async () => {
+      // characterization: changes in phase 1a (spec §4 I15 / §15 bug 7)
+      const order: string[] = [];
+      postIssueComment.mockImplementation(() => {
+        order.push("post");
+        return Promise.resolve({ id: 1, url: "u" });
+      });
+      addIssueCommentReaction.mockImplementation(() => {
+        order.push("react");
+        return Promise.resolve();
+      });
+      markFailed.mockImplementation(() => {
+        order.push("mark");
+        return Promise.resolve([]);
+      });
+      listNonTerminalByTask.mockResolvedValue([ghCommentRow("a")]);
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+
+      expect(order).toEqual(["post", "react", "mark"]);
+    });
+
+    it("a Linear token failure escapes: that row is still marked failed, later rows are untouched", async () => {
+      // characterization: changes in phase 1a (spec §15 bug 2)
+      stageRows([linearRow("a", "sess-1"), ghCommentRow("b")]);
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        new Error("token refresh failed"),
+      );
+
+      await expect(
+        service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null })),
+      ).rejects.toThrow("token refresh failed");
+
+      expect(markFailed).toHaveBeenCalledTimes(1);
+      expect(markFailed).toHaveBeenCalledWith(expect.objectContaining({ inboxId: "a" }));
+      expect(postIssueComment).not.toHaveBeenCalled();
+    });
   });
 
   describe("enqueueComment", () => {

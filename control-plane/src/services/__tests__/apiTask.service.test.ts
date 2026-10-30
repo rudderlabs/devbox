@@ -208,6 +208,64 @@ describe("ApiTaskService", () => {
     expect(killSandbox).toHaveBeenCalledWith("sbx-old");
   });
 
+  it("restart resets the run, re-pends a failed assignment and only kills the old sandbox", async () => {
+    const { id } = await service.create(principal, {
+      title: "T",
+      description: null,
+      experimentalFlags: ["FOO"],
+    });
+    await db.execute(sql`
+      UPDATE tasks
+         SET owner_id = 'pod-a', heartbeat_at = now(), sandbox_id = 'sbx-old', pvc_name = 'pvc-old',
+             last_observed_event_seq = 9, metadata = metadata || '{"retryCount":2}'::jsonb,
+             pr_urls = '[{"repo":"r","url":"https://github.com/o/r/pull/1","branch":"b","commit_sha":"c"}]'::jsonb
+       WHERE id = ${id}`);
+    await db.execute(sql`
+      UPDATE inbox SET status = 'failed', failure_reason = 'boom', outcome = 'failed'
+       WHERE task_id = ${id}`);
+    const [before] = await db.execute<{ id: string }>(sql`SELECT id FROM inbox`);
+
+    await service.restart("DBX-API-1", { title: "T2", description: null, experimentalFlags: [] });
+
+    const [task] = await db.execute(sql`
+      SELECT key, external_url, created_by, owner_id, heartbeat_at, sandbox_id, pvc_name,
+             last_observed_event_seq::int AS seq, pr_urls, metadata
+        FROM tasks WHERE id = ${id}`);
+    expect(task).toEqual({
+      key: "DBX-API-1",
+      external_url: "https://api.example/api/tasks/DBX-API-1",
+      created_by: principal.tokenId,
+      owner_id: null,
+      heartbeat_at: null,
+      sandbox_id: null,
+      pvc_name: null,
+      seq: 0,
+      pr_urls: [],
+      metadata: { experimentalFlags: [] },
+    });
+    const rows = await db.execute<{ id: string }>(
+      sql`SELECT id, status, failure_reason, outcome FROM inbox`,
+    );
+    expect([...rows]).toEqual([
+      { id: expect.any(String), status: "pending", failure_reason: null, outcome: null },
+    ]);
+    expect(rows[0]?.id).not.toBe((before as { id: string }).id);
+    // The old workspace volume is not deleted, only unlinked (spec §15 bug 6, out of scope).
+    expect(killSandbox).toHaveBeenCalledTimes(1);
+    expect(killSandbox).toHaveBeenCalledWith("sbx-old");
+  });
+
+  it("sendMessage is not idempotent: the same body twice queues two rounds", async () => {
+    await service.create(null, { title: "T", description: null, experimentalFlags: [] });
+    const a = await service.sendMessage("DBX-API-1", "again");
+    const b = await service.sendMessage("DBX-API-1", "again");
+    expect(a.round_id).not.toBe(b.round_id);
+    const queued = await db.execute(
+      sql`SELECT type FROM task_events WHERE type = 'message_queued'`,
+    );
+    expect(queued).toHaveLength(2);
+  });
+
   it("restart with no previous sandbox kills nothing", async () => {
     await service.create(null, { title: "T", description: null, experimentalFlags: [] });
     await service.restart("DBX-API-1", { title: "T2", description: null, experimentalFlags: [] });

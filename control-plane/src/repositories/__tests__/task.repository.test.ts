@@ -200,9 +200,111 @@ describe("TaskRepository", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]?.reply_targets[0]?.id).toBe("sess-1");
     });
+
+    // The Linear `created` handler runs this upsert first and restarts only when
+    // the stored session id differs, so a same-session redelivery ends here.
+    it("a duplicate created (same session) refreshes title, URL and flags but leaves the run alone", async () => {
+      // characterization: changes in phase 2 (spec §13: a duplicate created no longer refreshes title and URL)
+      // Only the title / URL / flags assertions flip; the run stays untouched.
+      const { taskId } = await repo.upsertFromAgentSessionWithInbox({
+        taskKey: "ISS-1",
+        taskExternalId: "issue-1",
+        taskTitle: "Fix auth",
+        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
+        inboxPayload: assignmentContent,
+        inboxReplyTargets: [linearTarget("sess-1")],
+        metadata: { experimentalFlags: ["OLD"] },
+      });
+      await db.execute(sql`
+        UPDATE tasks
+           SET owner_id = 'pod-a', heartbeat_at = now(), sandbox_id = 'sb-1', pvc_name = 'pvc-1',
+               last_observed_event_seq = 7,
+               pr_urls = '[{"repo":"r","url":"https://github.com/o/r/pull/1","branch":"b","commit_sha":"c"}]'::jsonb
+         WHERE id = ${taskId};
+      `);
+      await db.execute(sql`UPDATE inbox SET status = 'delivered'`);
+      const [before] = await db.execute<{ id: string }>(sql`SELECT id FROM inbox`);
+
+      await repo.upsertFromAgentSessionWithInbox({
+        taskKey: "ISS-1",
+        taskExternalId: "issue-1",
+        taskTitle: "Fix auth (edited)",
+        taskExternalUrl: "https://linear.app/x/issue/ISS-1/fix-auth-edited",
+        inboxPayload: { ...assignmentContent, title: "Fix auth (edited)" },
+        inboxReplyTargets: [linearTarget("sess-1")],
+        metadata: { experimentalFlags: ["NEW"] },
+      });
+
+      const task = await repo.getById(taskId);
+      expect({ title: task?.title, url: task?.externalUrl, metadata: task?.metadata }).toEqual({
+        title: "Fix auth (edited)",
+        url: "https://linear.app/x/issue/ISS-1/fix-auth-edited",
+        metadata: { experimentalFlags: ["NEW"] },
+      });
+      expect({
+        ownerId: task?.ownerId,
+        sandboxId: task?.sandboxId,
+        pvcName: task?.pvcName,
+        seq: Number(task?.lastObservedEventSeq),
+        prs: task?.prUrls,
+      }).toEqual({
+        ownerId: "pod-a",
+        sandboxId: "sb-1",
+        pvcName: "pvc-1",
+        seq: 7,
+        prs: [{ repo: "r", url: "https://github.com/o/r/pull/1", branch: "b", commit_sha: "c" }],
+      });
+      const rows = await db.execute<{ id: string; status: string; payload: { title: string } }>(
+        sql`SELECT id, status, payload FROM inbox`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: (before as { id: string }).id,
+        status: "delivered",
+        payload: { title: "Fix auth" },
+      });
+    });
   });
 
   describe("restartTaskWithInbox", () => {
+    it("re-delegation: the conflict upsert refreshes title, URL and flags; the restart drops retryCount", async () => {
+      const { taskId } = await repo.upsertFromAgentSessionWithInbox({
+        taskKey: "ISS-1",
+        taskExternalId: "issue-1",
+        taskTitle: "Fix auth",
+        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
+        inboxPayload: assignmentContent,
+        inboxReplyTargets: [linearTarget("sess-1")],
+        metadata: { experimentalFlags: ["OLD"] },
+      });
+      await db.execute(sql`
+        UPDATE tasks SET metadata = metadata || '{"retryCount":2}'::jsonb WHERE id = ${taskId};
+      `);
+      const next = {
+        taskKey: "ISS-1",
+        taskExternalId: "issue-1",
+        taskTitle: "Fix auth v2",
+        taskExternalUrl: "https://linear.app/x/issue/ISS-1/v2",
+        inboxPayload: { ...assignmentContent, title: "Fix auth v2", target_id: "sess-2" },
+        inboxReplyTargets: [linearTarget("sess-2")],
+        metadata: { experimentalFlags: ["NEW"] },
+      };
+
+      await repo.upsertFromAgentSessionWithInbox(next);
+      await repo.restartTaskWithInbox({
+        taskId,
+        inboxPayload: next.inboxPayload,
+        inboxReplyTargets: next.inboxReplyTargets,
+      });
+
+      const task = await repo.getById(taskId);
+      expect({ title: task?.title, url: task?.externalUrl, metadata: task?.metadata }).toEqual({
+        title: "Fix auth v2",
+        url: "https://linear.app/x/issue/ISS-1/v2",
+        metadata: { experimentalFlags: ["NEW"] },
+      });
+    });
+
     it("stamps task_id/task_key on the assignment payload from the task row", async () => {
       const { taskId } = await repo.upsertFromAgentSessionWithInbox({
         taskExternalId: "issue-1",
@@ -872,6 +974,21 @@ describe("TaskRepository", () => {
       const [row] = await db.select().from(schema.tasks);
       const urls = (row?.prUrls as Array<{ url: string }> | undefined)?.map((e) => e.url);
       expect(urls).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+    });
+
+    it("re-appending a known url still returns the row (no first-time signal)", async () => {
+      // characterization: changes in phase 1b (spec §15 bug 4, I11 firstTime)
+      const t = await insertTask({ ownerId: "pod-a" });
+      const pr = {
+        taskId: t.id,
+        ownerId: "pod-a",
+        prUrl: "https://github.com/o/r/pull/1",
+        repo: "r",
+        branch: "b",
+        commitSha: "abc",
+      };
+      await repo.appendPrUrl(pr);
+      expect(await repo.appendPrUrl(pr)).toEqual([{ id: t.id }]);
     });
 
     it("owner-guarded: returns 0 rows on stale-lease takeover", async () => {

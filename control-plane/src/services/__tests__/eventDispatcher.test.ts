@@ -150,6 +150,7 @@ describe("EventDispatcher", () => {
   let getByIdForTask: ReturnType<typeof mock>;
   let markResponded: ReturnType<typeof mock>;
   let notifyTerminal: ReturnType<typeof mock>;
+  let extractArchive: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
   let dispatcher: InstanceType<typeof EventDispatcher>;
 
@@ -161,6 +162,7 @@ describe("EventDispatcher", () => {
       emitError,
       setIssueStarted,
       attachUrlToIssue,
+      uploadIssueAttachment,
     ]) {
       m.mockReset();
       m.mockResolvedValue(undefined);
@@ -188,7 +190,8 @@ describe("EventDispatcher", () => {
       markResponded,
     } as unknown as InboxRepository;
 
-    sandboxManager = {} as unknown as SandboxManager;
+    extractArchive = mock(() => Promise.resolve(null as Uint8Array | null));
+    sandboxManager = { extractArchive } as unknown as SandboxManager;
     linearTokenProvider = {
       getAuthorizedLinearClient: mock(() => Promise.resolve({} as unknown as LinearClient)),
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
@@ -435,6 +438,27 @@ describe("EventDispatcher", () => {
       expect(emitThought).not.toHaveBeenCalled();
     });
 
+    it("Linear task: a token fetch failure rejects handle() before any side effect (cursor held)", async () => {
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        new Error("token refresh failed"),
+      );
+      await expect(
+        dispatcher.handle(
+          {
+            seq: 1,
+            ts: "t",
+            type: "agent_thought",
+            inbox_id: "inbox-1",
+            target_id: "sess-1",
+            body: "x",
+          },
+          makeTask(),
+        ),
+      ).rejects.toThrow("token refresh failed");
+      expect(getByIdForTask).not.toHaveBeenCalled();
+      expect(emitThought).not.toHaveBeenCalled();
+    });
+
     it("foreign / unknown inbox_id → cross-task leak: aborts, no emit", async () => {
       // A foreign inbox_id resolving to null means this task's stream is
       // carrying an event it doesn't own (cross-task leak). The dispatcher
@@ -456,6 +480,55 @@ describe("EventDispatcher", () => {
       expect(result).toBe("abort");
       expect(emitThought).not.toHaveBeenCalled();
       expect(getByIdForTask).toHaveBeenCalledWith("foreign-inbox", "task-1");
+    });
+  });
+
+  describe("agent_error routing", () => {
+    // The harness's round-crash format (_emit_round_failure), aimed at the
+    // round's primary target.
+    const errorEvent = (targetId: string): Extract<HarnessEvent, { type: "agent_error" }> => ({
+      seq: 1,
+      ts: "t",
+      type: "agent_error",
+      inbox_id: "inbox-1",
+      target_id: targetId,
+      body: "⚠ Something went wrong — RuntimeError: boom",
+    });
+    const ghRow = (kind: string, target: InboxRow["reply_targets"][number]): InboxRow =>
+      ({ ...linearRow(), source: "github", kind, reply_targets: [target] }) as InboxRow;
+
+    it("a GitHub comment or review round failure is posted nowhere", async () => {
+      // characterization: changes in phase 1a (spec §13, §15 bug 1)
+      getByIdForTask.mockResolvedValueOnce(
+        ghRow("comment", {
+          id: "555",
+          spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 555 },
+        }),
+      );
+      expect(await dispatcher.handle(errorEvent("555"), makeTask())).toBe("ok");
+      getByIdForTask.mockResolvedValueOnce(
+        ghRow("review", {
+          id: "88",
+          spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 1, reviewId: 88 },
+        }),
+      );
+      expect(await dispatcher.handle(errorEvent("88"), makeTask())).toBe("ok");
+
+      expect(postIssueComment).not.toHaveBeenCalled();
+      expect(postReviewCommentReply).not.toHaveBeenCalled();
+      expect(emitError).not.toHaveBeenCalled();
+    });
+
+    it("a CI round failure is posted nowhere", async () => {
+      getByIdForTask.mockResolvedValue(
+        ghRow("ci_result", {
+          id: "9001",
+          spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 0 },
+        }),
+      );
+      expect(await dispatcher.handle(errorEvent("9001"), makeTask())).toBe("ok");
+      expect(postIssueComment).not.toHaveBeenCalled();
+      expect(emitError).not.toHaveBeenCalled();
     });
   });
 
@@ -720,6 +793,39 @@ describe("EventDispatcher", () => {
       expect(emitResponse).toHaveBeenCalledWith(expect.anything(), "sess-1", "good catch, fixing");
     });
 
+    it("a failed GitHub reply is logged and dropped: handle() resolves ok, so the cursor advances", async () => {
+      // characterization: changes in phase 1b (spec §13, §4 I14: pre-send failures hold)
+      getByIdForTask.mockResolvedValue(ghCommentRow());
+      postIssueComment.mockRejectedValue(new Error("GitHub 429"));
+      expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("ok");
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
+    });
+
+    it("still posts GitHub replies when GitHub webhooks are off", async () => {
+      // characterization: changes in phase 2 (spec §13: a disabled integration's replies are skipped)
+      const webhooks = mockedConfig.github.webhooks;
+      mockedConfig.github.webhooks = undefined;
+      try {
+        getByIdForTask.mockResolvedValue(ghCommentRow());
+        await dispatcher.handle(responseEvent("555"), makeTask());
+        expect(postIssueComment).toHaveBeenCalledWith("o", "r", 1, "good catch, fixing");
+      } finally {
+        mockedConfig.github.webhooks = webhooks;
+      }
+    });
+
+    it("a Linear token failure also holds a GitHub round's reply on a Linear task", async () => {
+      // characterization: changes in phase 1a (spec §4 routes by round.source; not listed in §13)
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        new Error("token refresh failed"),
+      );
+      getByIdForTask.mockResolvedValue(ghCommentRow());
+      await expect(dispatcher.handle(responseEvent("555"), makeTask())).rejects.toThrow(
+        "token refresh failed",
+      );
+      expect(postIssueComment).not.toHaveBeenCalled();
+    });
+
     it("drops a target_id absent from reply_targets (no throw, no post)", async () => {
       getByIdForTask.mockResolvedValue(ghCommentRow());
       const result = await dispatcher.handle(responseEvent("not-a-target"), makeTask());
@@ -829,6 +935,22 @@ describe("EventDispatcher", () => {
       getByIdForTask.mockResolvedValue(linearRow({ status: "responded" }));
       await dispatcher.handle(completedEvent(), makeTask());
       expect(markResponded).not.toHaveBeenCalled();
+    });
+
+    it("uploads the run archive to the Linear issue for an assignment round", async () => {
+      extractArchive.mockResolvedValue(new Uint8Array([1, 2]));
+      await dispatcher.handle(completedEvent(), makeTask());
+      await flushMicrotasks();
+      expect(extractArchive).toHaveBeenCalledWith("sbx-1");
+      expect(uploadIssueAttachment).toHaveBeenCalledWith(expect.anything(), {
+        issueId: "issue-1",
+        title: "Harness run archive",
+        subtitle: "Task task-1",
+        filename: "harness-run-task-1.tar.gz",
+        contentType: "application/gzip",
+        bytes: new Uint8Array([1, 2]),
+        metadata: { taskId: "task-1" },
+      });
     });
 
     it("posts a Slack completion update on the first transition (assignment round)", async () => {
@@ -1009,6 +1131,69 @@ describe("EventDispatcher", () => {
       );
       await dispatcher.handle(completedEvent(), makeTask());
       expect(markResponded).toHaveBeenCalled();
+    });
+  });
+
+  // reconcileOne advances the cursor only after handle() returns, so a lost
+  // lease or a crash in between dispatches the same events again.
+  describe("replay (same event dispatched again)", () => {
+    it("completed: the run archive upload re-fires on the already-responded row", async () => {
+      // characterization: changes in phase 1b (spec §15 bug 3, I11 firstTransition)
+      extractArchive.mockResolvedValue(new Uint8Array([1]));
+      const done: HarnessEvent = {
+        seq: 5,
+        ts: "t",
+        type: "completed",
+        inbox_id: "inbox-1",
+        status: "completed",
+      };
+      await dispatcher.handle(done, makeTask());
+      getByIdForTask.mockResolvedValue(linearRow({ status: "responded" }));
+      await dispatcher.handle(done, makeTask());
+      await flushMicrotasks();
+
+      expect(markResponded).toHaveBeenCalledTimes(1);
+      expect(uploadIssueAttachment).toHaveBeenCalledTimes(2);
+    });
+
+    it("pr_opened: the Linear attach re-runs (appendPrUrl returns the row for a known URL)", async () => {
+      await dispatcher.handle(prEvent(), makeTask());
+      await dispatcher.handle(prEvent(), makeTask());
+      expect(appendPrUrl).toHaveBeenCalledTimes(2);
+      expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
+    });
+
+    it("pr_opened: the onboarding comment and the PR assignee mirror re-run", async () => {
+      // characterization: changes in phase 1b (spec §13, §15 bug 4, I11 firstTime)
+      getIssueHumanAssignee.mockResolvedValue({
+        id: "usr-1",
+        name: "Ada Lovelace",
+        displayName: "ada",
+        email: "ada@acme.com",
+        gitHubUserId: "octocat",
+      });
+      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
+      await dispatcher.handle(prEvent(), makeTask());
+      await dispatcher.handle(prEvent(), makeTask());
+      await flushMicrotasks();
+
+      expect(postIssueComment).toHaveBeenCalledTimes(2);
+      expect(addPrAssignees).toHaveBeenCalledTimes(2);
+    });
+
+    it("agent_response and agent_error post again on every dispatch", async () => {
+      const reply: HarnessEvent = {
+        seq: 2,
+        ts: "t",
+        type: "agent_response",
+        inbox_id: "inbox-1",
+        target_id: "sess-1",
+        body: "done",
+      };
+      const error: HarnessEvent = { ...reply, seq: 3, type: "agent_error", body: "bad" };
+      for (const e of [reply, reply, error, error]) await dispatcher.handle(e, makeTask());
+      expect(emitResponse).toHaveBeenCalledTimes(2);
+      expect(emitError).toHaveBeenCalledTimes(2);
     });
   });
 });

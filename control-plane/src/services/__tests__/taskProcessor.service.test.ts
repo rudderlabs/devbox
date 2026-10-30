@@ -73,11 +73,13 @@ mock.module("../../clients/linear", () => ({
 // only). Mock the barrel before importing, like the other consumers' tests.
 // The mock leaks to later files too, so it stubs every export they import.
 // See control-plane/README.md (Conventions).
+const postIssueComment = mock(() => Promise.resolve({ id: 1, url: "u" }));
+const postReviewCommentReply = mock(() => Promise.resolve({ id: 1, url: "u" }));
 mock.module("../../clients/github", () => ({
   addIssueCommentReaction: mock(() => Promise.resolve()),
   addReviewCommentReaction: mock(() => Promise.resolve()),
-  postIssueComment: mock(() => Promise.resolve({ id: 1, url: "u" })),
-  postReviewCommentReply: mock(() => Promise.resolve({ id: 1, url: "u" })),
+  postIssueComment,
+  postReviewCommentReply,
   getReviewComments: mock(() => Promise.resolve([])),
   fetchOrgMembers: mock(() => Promise.resolve(new Set())),
   addPrAssignees: mock(() => Promise.resolve({ assigned: [] })),
@@ -183,6 +185,10 @@ describe("TaskProcessorService", () => {
     emitThought.mockResolvedValue(undefined);
     emitError.mockReset();
     emitError.mockResolvedValue(undefined);
+    postIssueComment.mockReset();
+    postIssueComment.mockResolvedValue({ id: 1, url: "u" });
+    postReviewCommentReply.mockReset();
+    postReviewCommentReply.mockResolvedValue({ id: 1, url: "u" });
 
     heartbeatOwnedBy = mock(() => Promise.resolve());
     claimNext = mock(() => Promise.resolve(null));
@@ -347,6 +353,12 @@ describe("TaskProcessorService", () => {
       });
       expect(setIssueStarted).toHaveBeenCalledWith(expect.anything(), "issue-1");
       expect(emitAction).toHaveBeenCalledWith(expect.anything(), "sess-1", "Provisioning", "infra");
+      // characterization: changes in phase 1b (spec §13: the "Sandbox provisioned" thought is removed)
+      expect(emitThought).toHaveBeenCalledWith(
+        expect.anything(),
+        "sess-1",
+        "Sandbox provisioned.\n- sandboxId: `sbx-1`\n- pvcName: `devbox-pvc-task-1-aaaaaa`",
+      );
     });
 
     it("logs and still provisions when the team has no started state", async () => {
@@ -622,6 +634,137 @@ describe("TaskProcessorService", () => {
         retryCount: 1,
       });
       expect(failTaskInbox).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("handleTaskError — pruned workspace", () => {
+    it("a throwing workspace-missing dead-letter (Linear token) escapes before the lease is released", async () => {
+      // characterization: changes in phase 1a (spec §15 bug 2)
+      deadLetterWorkspaceMissing.mockRejectedValue(new Error("token refresh failed"));
+      const task = makeTask({ sandboxId: null, pvcName: "pvc-1" });
+
+      await expect(
+        (
+          service as unknown as { handleTaskError(t: Task, e: unknown): Promise<void> }
+        ).handleTaskError(task, new PvcNotFoundError("pvc-1")),
+      ).rejects.toThrow("token refresh failed");
+
+      expect(releaseLease).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("failTask — failure broadcast", () => {
+    const MSG = "Task failed — check control-plane logs for details.";
+    const failTask = (task: Task): Promise<void> =>
+      (service as unknown as { failTask(t: Task, m: string): Promise<void> }).failTask(task, MSG);
+    // biome-ignore lint/suspicious/noExplicitAny: test stub shape, cast at use site
+    const row = (id: string, kind: string, source: string, replyTargets: unknown[]): any => ({
+      ...survivingNonTerminalRow(),
+      id,
+      kind,
+      source,
+      reply_targets: replyTargets,
+    });
+    const reviewComment = (id: number, prNumber: number) => ({
+      id: String(id),
+      spec: {
+        kind: "review_comment",
+        owner: "o",
+        repo: "r",
+        prNumber,
+        commentId: id,
+        inReplyTo: id,
+        path: "a.ts",
+        line: 1,
+      },
+    });
+    const issueComment = (id: string, prNumber: number, commentId: number) => ({
+      id,
+      spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber, commentId },
+    });
+
+    it("posts once per distinct target id across every open row, by target kind", async () => {
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+        row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
+        // Same session as the assignment → deduped.
+        row("lc", "comment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
+        row("gc", "comment", "github", [issueComment("555", 7, 555)]),
+        row("rv", "review", "github", [
+          reviewComment(11, 8),
+          reviewComment(12, 8),
+          {
+            id: "88",
+            spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 8, reviewId: 88 },
+          },
+        ]),
+        // CI target: commentId 0 = "post a new PR comment".
+        row("ci", "ci_result", "github", [issueComment("9001", 9, 0)]),
+      ]);
+
+      await failTask(makeTask());
+
+      expect(emitError).toHaveBeenCalledTimes(1);
+      expect(emitError).toHaveBeenCalledWith(expect.anything(), "sess-1", MSG);
+      // PR comments for the comment, the review body and the CI row, in row order.
+      expect(postIssueComment.mock.calls as unknown[]).toEqual([
+        ["o", "r", 7, MSG],
+        ["o", "r", 8, MSG],
+        ["o", "r", 9, MSG],
+      ]);
+      expect(postReviewCommentReply.mock.calls as unknown[]).toEqual([
+        ["o", "r", 8, 11, MSG],
+        ["o", "r", 8, 12, MSG],
+      ]);
+      expect(failTaskInbox).toHaveBeenCalledWith({
+        taskId: "task-1",
+        ownerId: "pod-test",
+        reason: MSG,
+      });
+    });
+
+    it("posts before dead-lettering, and posts even when failTaskInbox transitions no row", async () => {
+      // characterization: changes in phase 1a (spec §4 I15 / §15 bug 7)
+      const order: string[] = [];
+      emitError.mockImplementation(() => {
+        order.push("post");
+        return Promise.resolve();
+      });
+      getByIdOwnedBy.mockResolvedValue(makeTask({ sandboxId: "sbx-live" }));
+      killSandbox.mockImplementation(() => {
+        order.push("kill");
+        return Promise.resolve();
+      });
+      failTaskInbox.mockImplementation(() => {
+        order.push("mark");
+        return Promise.resolve([]);
+      });
+      releaseLease.mockImplementation(() => {
+        order.push("release");
+        return Promise.resolve([{ id: "task-1" }]);
+      });
+
+      await failTask(makeTask());
+
+      expect(order).toEqual(["post", "kill", "mark", "release"]);
+    });
+
+    it("a Linear token failure skips only the Linear post; GitHub posts, dead-letter and release go on", async () => {
+      getAuthorizedLinearClient.mockRejectedValue(new Error("token refresh failed"));
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+        row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
+        row("gc", "comment", "github", [issueComment("555", 7, 555)]),
+      ]);
+
+      await failTask(makeTask());
+
+      expect(emitError).not.toHaveBeenCalled();
+      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 7, MSG);
+      expect(failTaskInbox).toHaveBeenCalled();
+      expect(releaseLease).toHaveBeenCalledWith({
+        taskId: "task-1",
+        ownerId: "pod-test",
+        alsoClearSandbox: true,
+      });
     });
   });
 
@@ -921,6 +1064,30 @@ describe("TaskProcessorService", () => {
 
       // Only the first event was dispatched; loop self-evicted before the 2nd.
       expect(dispatcherHandle.mock.calls.length).toBe(1);
+    });
+
+    it("a dispatcher throw (e.g. a Linear token outage) holds the cursor and fails nothing", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
+      readEvents
+        .mockResolvedValueOnce([
+          { seq: 1, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "x" },
+          { seq: 2, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "y" },
+        ] as HarnessEvent[])
+        .mockResolvedValue([]);
+      dispatcherHandle.mockRejectedValueOnce(new Error("token refresh failed"));
+
+      service.start();
+      await waitFor(() => dispatcherHandle.mock.calls.length >= 1);
+      await new Promise<void>((r) => setTimeout(r, 30));
+      await service.stop();
+
+      // The throw ends this task's tick: seq 2 is not dispatched and seq 1 is
+      // re-read next tick from the unchanged cursor.
+      expect(dispatcherHandle).toHaveBeenCalledTimes(1);
+      expect(recordEventCursor).not.toHaveBeenCalled();
+      expect(failTaskInbox).not.toHaveBeenCalled();
+      expect(requeueForRetry).not.toHaveBeenCalled();
     });
 
     it("calls sweepUndelivered before reading events", async () => {

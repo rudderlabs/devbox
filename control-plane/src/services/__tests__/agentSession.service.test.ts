@@ -285,6 +285,15 @@ describe("AgentSessionService", () => {
       expect(emitAction).toHaveBeenCalledWith(expect.anything(), "sess-1", "Evaluating", "");
     });
 
+    it("a redelivered prompted re-acks and enqueues again (the inbox drops the duplicate row)", async () => {
+      await service.handleEvent(promptedEvent());
+      await service.handleEvent(promptedEvent());
+      await flushMicrotasks();
+      expect(enqueueLinearComment).toHaveBeenCalledTimes(2);
+      expect(enqueueLinearComment.mock.calls[1]).toEqual(enqueueLinearComment.mock.calls[0]);
+      expect(emitAction).toHaveBeenCalledTimes(2);
+    });
+
     it("fires the Evaluating ack even when the task is not yet known (session_not_found)", async () => {
       findByLinearIssueId.mockResolvedValue(null);
 

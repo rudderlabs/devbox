@@ -127,6 +127,12 @@ describe("SlackNotifierService", () => {
     expect(text).toContain("sandbox ran out of memory");
   });
 
+  it("labels the ticket link 'Linear ticket' when the task has no title", async () => {
+    getById.mockResolvedValue(makeTask({ title: "", prUrls: [PR] }));
+    await make().notifyTerminal(client, makeTask({ title: "" }), "completed");
+    expect(postedText()).toContain("<https://linear.app/acme/issue/ABC-1/fix|Linear ticket>");
+  });
+
   it("re-reads the task for the freshest pr_urls (stale in-memory task had none)", async () => {
     // The task handed in predates the pr_opened write; getById returns the PR.
     await make().notifyTerminal(client, makeTask({ prUrls: [] }), "completed");

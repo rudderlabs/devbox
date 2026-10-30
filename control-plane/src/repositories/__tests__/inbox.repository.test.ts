@@ -116,6 +116,66 @@ describe("InboxRepository", () => {
       const rows = await db.execute<{ n: string }>(sql`SELECT count(*) AS n FROM inbox`);
       expect(Number(rows[0]?.n)).toBe(1);
     });
+
+    const ghComment = (externalId: string) => ({
+      source: "github" as const,
+      kind: "comment" as const,
+      external_id: externalId,
+      payload: {
+        target_id: externalId,
+        body: "@bot fix",
+        task_id: "task-1",
+        task_key: "T-1",
+        pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+        created_at: "",
+      },
+    });
+
+    it("a redelivered comment adds nothing, even after its round finished", async () => {
+      const task = await insertTask();
+      const first = await repo.appendInbox({
+        taskId: task.id,
+        message: ghComment("555"),
+        replyTargets: [],
+      });
+      await db.execute(sql`UPDATE inbox SET status = 'responded'`);
+
+      expect(
+        await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] }),
+      ).toBeNull();
+      const rows = await db.execute<{ id: string; status: string }>(
+        sql`SELECT id, status FROM inbox`,
+      );
+      expect([...rows]).toEqual([{ id: first?.id as string, status: "responded" }]);
+    });
+
+    it("dedupes across kinds: a review whose id equals a stored comment id is dropped", async () => {
+      // characterization: changes in phase 2 (spec I9: unique on (source, kind, external_id))
+      const task = await insertTask();
+      await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
+
+      const review = await repo.appendInbox({
+        taskId: task.id,
+        message: {
+          source: "github",
+          kind: "review",
+          external_id: "555",
+          payload: {
+            review_body: { target_id: "555", body: "@bot" },
+            inline_comments: [],
+            task_id: "task-1",
+            task_key: "T-1",
+            pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+            created_at: "",
+          },
+        },
+        replyTargets: [],
+      });
+
+      expect(review).toBeNull();
+      const kinds = await db.execute<{ kind: string }>(sql`SELECT kind FROM inbox`);
+      expect([...kinds]).toEqual([{ kind: "comment" }]);
+    });
   });
 
   describe("listPendingByTask", () => {

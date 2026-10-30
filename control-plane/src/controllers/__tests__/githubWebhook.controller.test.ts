@@ -462,6 +462,17 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(addIssueCommentReaction).toHaveBeenCalledWith("o", "r", 555, "eyes");
   });
 
+  // No delivery-id dedupe here: the inbox's ON CONFLICT drops the duplicate row.
+  it("a redelivered comment enqueues and reacts again", async () => {
+    const body = commentBody("alice");
+    expect((await post(body, "issue_comment", sign(body))).status).toBe(200);
+    expect((await post(body, "issue_comment", sign(body))).status).toBe(200);
+    await flushMicrotasks();
+    expect(enqueueComment).toHaveBeenCalledTimes(2);
+    expect(enqueueComment.mock.calls[1]).toEqual(enqueueComment.mock.calls[0]);
+    expect(addIssueCommentReaction).toHaveBeenCalledTimes(2);
+  });
+
   it("does not react to a shortened alias of the bot login", async () => {
     const body = commentBody("alice", "acme-bot[bot]", "@bot fix");
     const res = await post(body, "issue_comment", sign(body));
@@ -687,6 +698,29 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(addReviewCommentReaction).toHaveBeenCalledTimes(2);
     expect(addReviewCommentReaction).toHaveBeenCalledWith("o", "r", 11, "eyes");
     expect(addReviewCommentReaction).toHaveBeenCalledWith("o", "r", 12, "eyes");
+  });
+
+  it("a redelivered review refetches its inline comments, enqueues and reacts again", async () => {
+    getReviewComments.mockResolvedValue([
+      { id: 11, path: "a.ts", line: 3, body: "nit", user: { login: "reviewer" } },
+    ]);
+    const body = JSON.stringify({
+      action: "submitted",
+      repository: { name: "r", owner: { login: "o" } },
+      pull_request: { number: 7, user: { login: "acme-bot[bot]" } },
+      review: {
+        id: 88,
+        body: "@acme-bot please handle this review",
+        user: { login: "a", id: 2 },
+        submitted_at: "2026-04-23T12:00:00Z",
+      },
+    });
+    expect((await post(body, "pull_request_review", sign(body))).status).toBe(200);
+    expect((await post(body, "pull_request_review", sign(body))).status).toBe(200);
+    await flushMicrotasks();
+    expect(getReviewComments).toHaveBeenCalledTimes(2);
+    expect(enqueueReview).toHaveBeenCalledTimes(2);
+    expect(addReviewCommentReaction).toHaveBeenCalledTimes(2);
   });
 
   it("enqueues a review on an API task's PR without parsing its URL", async () => {

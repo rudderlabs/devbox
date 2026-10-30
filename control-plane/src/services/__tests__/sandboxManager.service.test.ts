@@ -833,6 +833,29 @@ describe("SandboxManager", () => {
       expect(err.body.length).toBeLessThanOrEqual(2001);
     });
 
+    it("drops the harness's retryable_assignment_failure flag from an agent_error", async () => {
+      // characterization: changes in phase 1a (spec §4: validateHarnessEvent copies it when === true)
+      const raw = JSON.stringify({
+        seq: 1,
+        ts: "t",
+        type: "agent_error",
+        inbox_id: "i",
+        target_id: "tgt",
+        body: "RuntimeError: boom",
+        retryable_assignment_failure: true,
+      });
+      expect(await mgrWith(raw).readEvents("sbx", 0)).toEqual([
+        {
+          seq: 1,
+          ts: "t",
+          type: "agent_error",
+          inbox_id: "i",
+          target_id: "tgt",
+          body: "RuntimeError: boom",
+        },
+      ]);
+    });
+
     it("agent_thought/action/response use the wider 60k cap (plan markdown + completion summaries can run long)", async () => {
       const huge = "y".repeat(5000);
       const raw = [
