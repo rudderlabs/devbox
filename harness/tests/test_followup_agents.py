@@ -141,6 +141,12 @@ class TestPresetWiring(unittest.TestCase):
         self.assertEqual(memory.stage, "ci")
         self.assertEqual(rerun.run, RUN)
 
+    def test_ci_without_an_actions_run_has_no_rerun_tool(self) -> None:
+        with round_events("t-ci") as events:
+            got = self._init_kwargs(fa.CiAgent, _ci(events, run=None))
+        self.assertEqual(got["system_prompt"], fa.CI_SYSTEM_PROMPT_NO_RERUN)
+        self.assertNotIn(CiRerunMiddleware, [type(m) for m in got["middleware"]])
+
     def test_optional_middleware_is_left_out(self) -> None:
         with round_events("c-1") as events:
             got = self._init_kwargs(
