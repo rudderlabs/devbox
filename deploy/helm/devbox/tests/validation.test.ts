@@ -73,6 +73,12 @@ describe("chart validation", () => {
     }
   });
 
+  it("refuses an unknown task source in integrations.slack.notifySources", async () => {
+    const stderr = await failure(["integrations.slack.notifySources={linear,github}"]);
+    expect(stderr).toContain("values don't meet the specifications of the schema");
+    expect(stderr).toContain("notifySources");
+  });
+
   it("refuses the removed integrations.githubWebhooks", async () => {
     const stderr = await failure(["integrations.githubWebhooks.enabled=true"]);
     expect(stderr).toContain("values don't meet the specifications of the schema");

@@ -60,6 +60,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | integrations.linear.enabled | bool | `false` | Turns Linear on (LINEAR_ENABLED). Its secrets go in the integrations Secret. |
 | integrations.slack.channelId | string | `""` | Required when enabled: the Slack channel ID. |
 | integrations.slack.enabled | bool | `false` | Turns Slack on (SLACK_ENABLED). SLACK_BOT_TOKEN goes in the integrations Secret. |
+| integrations.slack.notifySources | list | `[]` | Task sources whose finished tasks post (SLACK_NOTIFY_SOURCES): `linear`, `api`. Empty: `linear`. |
 | ironProxy.clusterIP | string | `""` | Required. A free address in the cluster's Service range; sandboxes use it as their DNS server. `bun run k8s:install` picks one. |
 | ironProxy.extraAllowlist | list | `[]` | Extra allowlist rules ({host, methods, paths}), appended as-is. |
 | ironProxy.image.repository | string | `"ironsh/iron-proxy"` |  |

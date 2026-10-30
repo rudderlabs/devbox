@@ -100,6 +100,21 @@ describe("parseIntegrations", () => {
     );
   });
 
+  it("slack notifySources: a non-empty list of task sources", () => {
+    expect(
+      parseIntegrations(
+        { slack: { enabled: true, channelId: "C1", notifySources: ["linear", "api"] } },
+        fail,
+        K8S,
+      ),
+    ).toEqual({ slack: { enabled: true, channelId: "C1", notifySources: ["linear", "api"] } });
+    for (const notifySources of [[], ["github"], "linear"]) {
+      expect(failure({ slack: { enabled: true, channelId: "C1", notifySources } })).toBe(
+        "integrations.slack.notifySources: must be a non-empty list of: linear, api",
+      );
+    }
+  });
+
   it("slack refused on Compose", () => {
     expect(failure({ slack: { enabled: true, channelId: "C123" } }, COMPOSE)).toBe(
       "integrations.slack: supported on Kubernetes only (the target file)",
@@ -133,7 +148,7 @@ describe("parseIntegrations", () => {
       'integrations.linear: unknown key "clientSecret" (allowed: enabled, clientId)',
     );
     expect(failure({ slack: { enabled: true, channelId: "C1", botToken: "t" } })).toBe(
-      'integrations.slack: unknown key "botToken" (allowed: enabled, channelId)',
+      'integrations.slack: unknown key "botToken" (allowed: enabled, channelId, notifySources)',
     );
     expect(failure({ githubApp: { enabled: false, privateKey: "s" } })).toBe(
       'integrations.githubApp: unknown key "privateKey" (allowed: enabled, appId, slug, installationId, botUserId, tokens, tokenScope, ciResults, tokenFile, org, pending)',

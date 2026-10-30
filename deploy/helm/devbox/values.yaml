@@ -112,6 +112,8 @@ integrations:
     enabled: false
     # -- Required when enabled: the Slack channel ID.
     channelId: ""
+    # -- Task sources whose finished tasks post (SLACK_NOTIFY_SOURCES): `linear`, `api`. Empty: `linear`.
+    notifySources: []
   githubApp:
     # -- Turns the GitHub App on: webhooks at /webhook/github (GITHUB_WEBHOOKS_ENABLED) and, with
     # `tokens: devbox`, the token minter. GITHUB_WEBHOOK_SECRET goes in the integrations Secret.

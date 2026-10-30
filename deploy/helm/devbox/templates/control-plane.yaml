@@ -144,6 +144,9 @@ spec:
             {{- with $slack.channelId }}
             - { name: SLACK_CHANNEL_ID, value: {{ . | quote }} }
             {{- end }}
+            {{- with $slack.notifySources }}
+            - { name: SLACK_NOTIFY_SOURCES, value: {{ join "," . | quote }} }
+            {{- end }}
             {{- /* A disabled App block may hold an App not yet installed: none of it renders. */}}
             {{- if $app.enabled }}
             - { name: GITHUB_WEBHOOKS_ENABLED, value: "true" }
