@@ -8,13 +8,15 @@ const DEVBOX_URL = "https://github.com/rudderlabs/devbox";
 const DESCRIPTION = "devbox coding agent";
 
 // From the calls devbox makes: push and contents, PRs and their reviews,
-// issue comments and reactions, CI jobs, logs and re-runs, and the trusted
-// org members.
+// issue comments and reactions, CI jobs, logs and re-runs, check runs and
+// commit statuses, and the trusted org members.
 const PERMISSIONS = {
   contents: "write",
   pull_requests: "write",
   issues: "write",
   actions: "write",
+  checks: "read",
+  statuses: "read",
   metadata: "read",
   members: "read",
 } as const;
@@ -25,6 +27,8 @@ const EVENTS = [
   "pull_request_review",
   "pull_request_review_comment",
   "workflow_run",
+  "check_run",
+  "status",
 ] as const;
 
 export function githubManifest(opts: {
