@@ -183,10 +183,10 @@ export class InboxRepository {
       const result = await (tx ? tx.transaction(insert) : insert(db));
       return asRows<{ id: string }>(result)[0] ?? null;
     } catch (err) {
-      // Until phase 3 drops it, the old (source, external_id) index also
-      // rejects a row whose id another kind of the same source already uses,
-      // with a 23505 instead of DO NOTHING. Dedupe it as before; phase 3
-      // removes this with the index.
+      // Until a later release drops it, the old (source, external_id) index
+      // also rejects a row whose id another kind of the same source already
+      // uses, with a 23505 instead of DO NOTHING. Dedupe it as before; this
+      // goes with the index.
       if (isUniqueViolation(err, "inbox_source_external_uniq")) return null;
       throw err;
     }

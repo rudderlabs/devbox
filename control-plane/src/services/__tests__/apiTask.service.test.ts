@@ -252,7 +252,7 @@ describe("ApiTaskService", () => {
       { id: expect.any(String), status: "pending", failure_reason: null, outcome: null },
     ]);
     expect(rows[0]?.id).not.toBe((before as { id: string }).id);
-    // The old workspace volume is not deleted, only unlinked (spec §15 bug 6, out of scope).
+    // The old workspace volume is not deleted, only unlinked (a known leak).
     expect(killSandbox).toHaveBeenCalledTimes(1);
     expect(killSandbox).toHaveBeenCalledWith("sbx-old");
   });

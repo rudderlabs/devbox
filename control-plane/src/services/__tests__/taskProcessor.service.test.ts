@@ -390,7 +390,7 @@ describe("TaskProcessorService", () => {
       });
       expect(setIssueStarted).toHaveBeenCalledWith(expect.anything(), "issue-1");
       expect(emitAction).toHaveBeenCalledWith(expect.anything(), "sess-1", "Provisioning", "infra");
-      // The post-create "Sandbox provisioned" thought is gone (spec §13).
+      // The post-create "Sandbox provisioned" thought is gone.
       expect(emitThought).not.toHaveBeenCalled();
     });
 
@@ -996,7 +996,7 @@ describe("TaskProcessorService", () => {
         ownerId: "pod-test",
         alsoClearSandbox: true,
       });
-      // Sent without the assignee mention (its lookup fails; §13).
+      // Sent without the assignee mention (its lookup fails).
       expect(notifyTerminal).toHaveBeenCalledWith(
         expect.objectContaining({ id: "task-1" }),
         "failed",

@@ -17,7 +17,7 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 // - `ok`: handled; reconcileOne advances the cursor and goes on.
 // - `dropped`: the event's send timed out or failed for good. reconcileOne
 //   advances past it, then stops this task's events for the tick, so a slow
-//   or failing platform can't eat the tick (§4 I14).
+//   or failing platform can't eat the tick.
 // - `hold`: a send (or the owner's onPrOpened) failed before anything went out
 //   (RetryableError); the hold is recorded in ReplyHolds. reconcileOne stops
 //   this task's events BEFORE advancing the cursor, so the event is retried

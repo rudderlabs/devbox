@@ -997,7 +997,7 @@ describe("EventDispatcher", () => {
       expect(postIssueComment).toHaveBeenCalledTimes(2);
     });
 
-    it("skips GitHub replies when GitHub webhooks are off: not posted, not held (§13)", async () => {
+    it("skips GitHub replies when GitHub webhooks are off: not posted, not held", async () => {
       const integrations = makeIntegrations(false);
       const d = new EventDispatcher(
         taskRepo,
@@ -1390,7 +1390,7 @@ describe("EventDispatcher", () => {
       expect(markResponded).toHaveBeenCalled();
     });
 
-    it("Linear assignment: a token fetch failure no longer holds; it marks and notifies Slack (§13)", async () => {
+    it("Linear assignment: a token fetch failure no longer holds; it marks and notifies Slack", async () => {
       // Slack's mention comes from assignee(), which fails (logged) and the
       // post goes out without it; completed needs no Linear client.
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(

@@ -14,7 +14,7 @@ type Hold = {
   warnedAt: number;
 };
 
-// Events whose send failed before anything went out (§4 I14). A held task
+// Events whose send failed before anything went out. A held task
 // stops at that event, so it holds at most one: keyed by task, the hold is
 // (taskId, inboxId, seq) and a different event starts a new one. In memory and
 // with no time limit: the reconcile loop drops a hold when the cursor moves

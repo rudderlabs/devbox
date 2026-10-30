@@ -168,7 +168,7 @@ describe("TaskRepository", () => {
       expect(result.result).toBe("duplicate");
 
       const [task] = await db.select().from(schema.tasks);
-      // A duplicate changes nothing, not even the title (spec §13).
+      // A duplicate changes nothing, not even the title.
       expect(task?.title).toBe("Fix auth");
       // retryCount survives the duplicate redelivery.
       expect((task?.metadata as { retryCount?: number })?.retryCount).toBe(2);
@@ -184,7 +184,7 @@ describe("TaskRepository", () => {
     });
 
     it("a duplicate created (same session) changes nothing: not the title, URL or flags, nor the run", async () => {
-      // Flipped in phase 2 (spec §13): it used to refresh title, URL and flags.
+      // It used to refresh title, URL and flags.
       const { id: taskId } = await assignLinear({ session: "sess-1", flags: ["OLD"] });
       await db.execute(sql`
         UPDATE tasks
@@ -1018,7 +1018,7 @@ describe("TaskRepository", () => {
     });
   });
 
-  describe("source filter (§10: an image never works a source it doesn't know)", () => {
+  describe("source filter (an image never works a source it doesn't know)", () => {
     it("claimNext and listInFlightOwnedBy skip a task whose source is not in the list", async () => {
       const api = await insertTask({ source: "api", externalId: "api-unclaimed" });
       await insertInboxRow(api.id);

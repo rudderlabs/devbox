@@ -14,7 +14,7 @@ import type { SandboxManager } from "../services/sandboxManager.service";
 import type { InboxMessage, TaskIdentity } from "../types/inboxMessage";
 import type { IntegrationName, Person, TaskSource } from "./types";
 
-// The only way modules create work (§3, §5).
+// The only way modules create work.
 
 export type TaskRef = { id: string; key: string };
 type Draft<M> = M extends InboxMessage
@@ -151,7 +151,7 @@ export class Intake implements TaskIntake {
   }
 
   // A restart's preempted sandbox, killed after commit in the tracked detached
-  // set so shutdown drains it. The old workspace volume is kept (§15 bug 6).
+  // set so shutdown drains it. The old workspace volume is kept (a known leak).
   private killPreempted(taskId: string, sandboxId: string | null, why: string): void {
     if (!sandboxId) return;
     this.hooks.detach(

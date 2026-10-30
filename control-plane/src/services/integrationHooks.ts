@@ -12,7 +12,7 @@ import type {
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 
-// Upper bound on one hook call (§4).
+// Upper bound on one hook call.
 const HOOK_TIMEOUT_MS = {
   onTaskStarted: 20_000,
   onPrOpened: 30_000,
@@ -23,7 +23,7 @@ type HookName = keyof typeof HOOK_TIMEOUT_MS;
 // What a detached promise is doing, for the shutdown log.
 type DetachedWork = HookName | "killSandbox" | "slack";
 
-// Runs integrations' lifecycle hooks (§4). onTaskStarted, onPrOpened and
+// Runs integrations' lifecycle hooks. onTaskStarted, onPrOpened and
 // assignee go to the task's own integration; onRoundFinished goes to the
 // round's. A disabled integration's hooks are skipped (logged). Each call runs
 // under its hook's timeout with an abort signal and never throws: a failure is

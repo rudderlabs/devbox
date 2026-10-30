@@ -6,7 +6,7 @@ import type { Integration, IntegrationName } from "./types";
 // Shared rules for integrations' outbound HTTP (I16): the typed errors clients
 // throw, which failures may be retried, and how long one send may take.
 
-// Upper bound on one deliver() call (§4 I14).
+// Upper bound on one deliver() call.
 export const SEND_TIMEOUT_MS = 20_000;
 
 // A non-2xx answer. The message keeps the client's own wording (tests and logs
@@ -26,7 +26,7 @@ export class HttpError extends Error {
 
 // How long a rate limit without Retry-After waits: until the platform's reset
 // time (epoch ms), and at least a minute. GitHub may ban integrations that
-// retry sooner (§4).
+// retry sooner.
 export function rateLimitWaitMs(resetAtMs?: number): number {
   const untilReset =
     resetAtMs !== undefined && Number.isFinite(resetAtMs) ? resetAtMs - Date.now() : 0;
@@ -53,10 +53,10 @@ const NOTHING_SENT = new Set([
   "ERR_TLS_CERT_ALTNAME_INVALID",
 ]);
 
-// The failure as a RetryableError when it is one of the exact retryable cases
-// (§4): a rate limit (429), connection refused, DNS, TLS handshake, token
-// fetch. Anything else (timeouts, 5xx, other 4xx) is undefined: the caller
-// logs and drops it.
+// The failure as a RetryableError when it is one of the exact retryable
+// cases, where nothing was sent yet: a rate limit (429), connection refused,
+// DNS, TLS handshake, token fetch. Anything else (timeouts, 5xx, other 4xx)
+// is undefined: the caller logs and drops it.
 export function retryable(err: unknown): RetryableError | undefined {
   if (err instanceof RetryableError) return err;
   if (err instanceof TokenFetchError) return new RetryableError(err.message);
@@ -102,8 +102,8 @@ export async function withTimeout<T>(
   }
 }
 
-// Hands `message` for one of `round`'s targets to the round's integration
-// (§4), under the send timeout. An integration this build doesn't know (rows
+// Hands `message` for one of `round`'s targets to the round's integration,
+// under the send timeout. An integration this build doesn't know (rows
 // written by a newer build before a rollback) or a disabled one is skipped and
 // logged: that counts as sent. Any other failure is logged and the message
 // dropped, except a RetryableError (nothing was sent), which is rethrown: each

@@ -127,8 +127,9 @@ export const inbox = pgTable(
     // Idempotency anchor: webhook retries / LB reroutes collapse via this.
     // Every ON CONFLICT targets (source, kind, external_id).
     uniqueIndex("inbox_source_kind_external_uniq").on(t.source, t.kind, t.externalId),
-    // The stricter pre-phase-2 index, kept for one release so older pods'
-    // ON CONFLICT (source, external_id) still has its arbiter. Phase 3 drops it.
+    // The older, stricter index, kept for one release so older pods'
+    // ON CONFLICT (source, external_id) still has its arbiter. A later release
+    // drops it.
     uniqueIndex("inbox_source_external_uniq").on(t.source, t.externalId),
     // Pending = not yet delivered or dead-lettered. Sweep + claimNext filter on this.
     index("inbox_pending_idx").on(t.taskId).where(sql`${t.status} = 'pending'`),

@@ -94,7 +94,7 @@ export function createApp(): AppBundle {
   const integrations = createIntegrations(config, linearTokenProvider, linearStatus, githubStatus);
   // The registered integrations that create tasks (github creates none). Only
   // these sources are claimed and reconciled, so an older image never works a
-  // task whose source it doesn't know (§10).
+  // task whose source it doesn't know.
   const taskSources = taskSource.enumValues.filter((s) => s in integrations);
   // Sends held because they failed before anything went out; each
   // integration's status reports its own.
@@ -214,7 +214,7 @@ export function createIntegrations(
   } satisfies Record<IntegrationName, Integration>;
 }
 
-// Each integration's own status body, plus its held sends (§4 I14).
+// Each integration's own status body, plus its held sends.
 export function statusesWithHolds(
   integrations: ReturnType<typeof createIntegrations>,
   replyHolds: Pick<ReplyHolds, "of">,

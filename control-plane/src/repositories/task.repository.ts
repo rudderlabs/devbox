@@ -24,7 +24,7 @@ function asRows<T>(result: unknown): T[] {
 }
 
 export class TaskRepository {
-  // TaskIntake.assign's transaction (§5). Inserts the task, or finds it by
+  // TaskIntake.assign's transaction. Inserts the task, or finds it by
   // (source, external_id) and locks it, then compares the stored delegation
   // (the assignment row's reply target) with the incoming one: when both carry
   // an order, one not above the stored order is a duplicate; otherwise the
@@ -391,7 +391,7 @@ export class TaskRepository {
   //
   // Only tasks of `sources` (the sources this build has an integration for) are
   // claimed, so an older image never takes a task of a source it doesn't know:
-  // rollbacks and rolling overlaps stay safe without draining (§10).
+  // rollbacks and rolling overlaps stay safe without draining.
   async claimNext(params: {
     ownerId: string;
     leaseTimeoutMs: number;

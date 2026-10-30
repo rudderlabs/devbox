@@ -246,7 +246,7 @@ describe("Intake", () => {
       const [task] = await db.execute(
         sql`SELECT title, external_url, metadata, sandbox_id, pvc_name FROM tasks`,
       );
-      // The old workspace volume is only unlinked, not deleted (§15 bug 6).
+      // The old workspace volume is only unlinked, not deleted (a known leak).
       expect(task).toEqual({
         title: "Fix auth v2",
         external_url: "https://linear.app/x/issue/ISS-1/v2",
@@ -328,7 +328,7 @@ describe("Intake", () => {
     });
 
     it("a review whose id equals a stored comment id is a duplicate while the old index exists", async () => {
-      // characterization: changes in phase 3 (spec I9: the old (source, external_id) index goes)
+      // characterization: changes once the old (source, external_id) index is dropped
       const task = await insertTask({ key: "DBX-API-1" });
       await intake.followUp({ task, message: ghComment("555"), targets: [ghTarget("555")] });
       const review = await intake.followUp({

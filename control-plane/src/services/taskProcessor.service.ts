@@ -49,7 +49,7 @@ export class TaskProcessorService {
   private readonly integrations: Record<IntegrationName, Integration>;
   private readonly holds: ReplyHolds;
   // Sources this build has an integration for; claimNext and
-  // listInFlightOwnedBy see only these tasks (§10).
+  // listInFlightOwnedBy see only these tasks.
   private readonly taskSources: Task["source"][];
   private readonly hooks: IntegrationHooks;
 
@@ -134,7 +134,7 @@ export class TaskProcessorService {
     const owned = await this.taskRepo.listInFlightOwnedBy(config.podId, this.taskSources);
     for (const task of owned) {
       // Shutting down: leave the rest to siblings (stop() backdates our
-      // heartbeats), so shutdown waits for one task's reconcile at most (§10).
+      // heartbeats), so shutdown waits for one task's reconcile at most.
       if (!this.running) break;
       if (!(await this.leaseHeld(task.id))) {
         logger.info("lease lost before reconcile; skipping", { taskId: task.id });
@@ -405,7 +405,7 @@ export class TaskProcessorService {
     for (const event of events) {
       if (currentTask === null) break; // self-evict: lease lost or task gone
       // Shutting down: stop after the event in hand (the cursor is persisted
-      // per event), so shutdown waits for one event, not the backlog (§10).
+      // per event), so shutdown waits for one event, not the backlog.
       if (!this.running) break;
       // A long run of slow sends must not let any lease expire; ours lost
       // means a sibling took this task over.

@@ -150,9 +150,9 @@ describe("InboxRepository", () => {
     });
 
     it("dedupes across kinds: a review whose id equals a stored comment id is dropped", async () => {
-      // characterization: changes in phase 3 (spec I9: phase 2 adds the
-      // (source, kind, external_id) index, but the old (source, external_id)
-      // one still rejects this row until phase 3 drops it)
+      // characterization: changes once the old index is dropped. The
+      // (source, kind, external_id) index allows this row, but the old
+      // (source, external_id) one still rejects it.
       const task = await insertTask();
       await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
 
@@ -180,7 +180,7 @@ describe("InboxRepository", () => {
     });
 
     it("dedupes on (source, kind, external_id) once the old index is gone", async () => {
-      // Phase 3 drops inbox_source_external_uniq; here it goes in a
+      // A later release drops inbox_source_external_uniq; here it goes in a
       // transaction that is rolled back, so the insert's conflict target
       // must be the new index.
       const task = await insertTask();
