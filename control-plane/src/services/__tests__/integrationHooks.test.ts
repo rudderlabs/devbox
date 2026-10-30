@@ -15,7 +15,7 @@ const row = (id: string, kind = "assignment", source = "linear") =>
     source,
     reply_targets: [{ id: "sess-1", spec: { kind: "linear_session" } }],
   }) as unknown as InboxRow;
-const noop: Integration = { name: "api", async deliver() {} };
+const noop: Integration = { name: "api", enabled: true, async deliver() {}, async status() {} };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function hooksWith(
@@ -54,6 +54,26 @@ describe("IntegrationHooks", () => {
       );
     } finally {
       error.mockRestore();
+    }
+  });
+
+  it("skips a disabled integration's hooks: logged, never called, never held", async () => {
+    const info = spyOn(logger, "info").mockImplementation(() => logger);
+    try {
+      const assignee = mock(() => Promise.resolve(null));
+      const onPrOpened = mock(() => Promise.reject(new RetryableError("429")));
+      const { hooks } = hooksWith({ enabled: false, assignee, onPrOpened });
+      const pr = { url: "u", repo: "r", branch: "b" };
+      expect(await hooks.assignee(task, row("a-1"), {})).toBeUndefined();
+      expect(await hooks.prOpened(task, row("a-1"), pr, true)).toBeUndefined();
+      expect(assignee).not.toHaveBeenCalled();
+      expect(onPrOpened).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledWith(
+        "assignee skipped: integration disabled",
+        expect.objectContaining({ taskId: "task-1", integration: "linear" }),
+      );
+    } finally {
+      info.mockRestore();
     }
   });
 

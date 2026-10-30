@@ -68,8 +68,8 @@ mock.module("../../clients/github", () => ({
 
 const { InboxService, WORKSPACE_MISSING_MESSAGE } = await import("../inbox.service");
 const { LinearIntegration } = await import("../../integrations/linear");
-const { githubIntegration } = await import("../../integrations/github");
-const { apiIntegration } = await import("../../integrations/api");
+const { GithubIntegration } = await import("../../integrations/github");
+const { ApiIntegration } = await import("../../integrations/api");
 const { IntegrationHooks } = await import("../integrationHooks");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
@@ -176,8 +176,14 @@ describe("InboxService", () => {
       getAuthorizedLinearClient: mock(() => Promise.resolve({})),
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
-    linear = new LinearIntegration(linearTokenProvider);
-    const integrations = { linear, api: apiIntegration, github: githubIntegration };
+    linear = new LinearIntegration(linearTokenProvider, true, {
+      status: async () => ({ configured: false }),
+    });
+    const integrations = {
+      linear,
+      api: new ApiIntegration(true),
+      github: new GithubIntegration(true, { status: () => ({}) as never }),
+    };
     service = new InboxService(
       inboxRepo,
       sandboxManager,

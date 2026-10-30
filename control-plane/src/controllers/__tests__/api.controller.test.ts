@@ -57,8 +57,11 @@ function setup(opts: { authEnabled: boolean; allowedHosts?: string[] }) {
   const app = createApiRoutes(controller, auth, {
     authEnabled: opts.authEnabled,
     allowedHosts: opts.allowedHosts ?? [],
-    linearStatus: async () => LINEAR_STATUS,
-    githubStatus: () => GITHUB_STATUS,
+    integrations: {
+      linear: { status: async () => LINEAR_STATUS },
+      github: { status: async () => GITHUB_STATUS },
+      api: { status: async () => ({ enabled: true }) },
+    },
   });
   const req = (path: string, init: RequestInit & { json?: unknown } = {}) =>
     app.request(path, {
@@ -101,6 +104,7 @@ const routes: Array<[string, string, unknown?]> = [
   ["GET", "/api/me"],
   ["GET", "/api/integrations/linear"],
   ["GET", "/api/integrations/github"],
+  ["GET", "/api/integrations/api"],
 ];
 
 describe("ApiController", () => {
@@ -116,6 +120,14 @@ describe("ApiController", () => {
     const res = await req("/api/integrations/github");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(GITHUB_STATUS);
+  });
+
+  it("GET /api/integrations/api returns the status body; an unknown name is 404", async () => {
+    const { req } = setup({ authEnabled: true });
+    expect(await (await req("/api/integrations/api")).json()).toEqual({ enabled: true });
+    for (const name of ["jira", "constructor"]) {
+      expect((await req(`/api/integrations/${name}`)).status).toBe(404);
+    }
   });
 
   describe("auth on", () => {

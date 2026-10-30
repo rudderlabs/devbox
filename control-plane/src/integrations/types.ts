@@ -1,8 +1,10 @@
+import type { Context } from "hono";
 import type { Task, taskSource } from "../db/schema";
 import type { logger } from "../logger";
 import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
 import type { ApiTaskSource } from "../types/api";
 import type { InboxSource } from "../types/inboxMessage";
+import type { TaskIntake } from "./intake";
 import type { Outbound, SendCtx } from "./outbound";
 
 type Logger = typeof logger;
@@ -23,8 +25,15 @@ export type SourceChecks = [
   Assert<Equal<ApiTaskSource, TaskSource>>,
 ];
 
-export interface Integration {
+export interface Integration<S = unknown> {
   name: IntegrationName;
+  // Core never calls webhook, deliver, hooks or assignee of a disabled module:
+  // it logs and skips (a skipped send counts as sent, never held).
+  enabled: boolean;
+
+  // Incoming. Core mounts POST /webhook/<name> only when enabled (404
+  // otherwise), behind the shared body limit and raw-body read.
+  webhook?(c: Context, intake: TaskIntake): Promise<Response>;
 
   // Outgoing. Core labels each message; the integration decides where (or
   // whether) it shows up. Throws RetryableError only before anything was sent.
@@ -41,6 +50,10 @@ export interface Integration {
     outcome: Outcome | null,
   ): Promise<void>;
   assignee?(ctx: HookCtx, task: Task): Promise<Person | null>; // throws when the lookup itself fails
+
+  // Health. Core serves GET /api/integrations/<name> (behind API auth, only
+  // when the API is enabled) with this body plus the integration's held sends.
+  status(): Promise<S>;
 }
 
 // isCurrent() is false once a restart rotated the task's assignment id.

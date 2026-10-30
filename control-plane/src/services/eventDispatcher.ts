@@ -1,4 +1,3 @@
-import type { LinearClient } from "@linear/sdk";
 import { addPrAssignees, parsePrUrl, postIssueComment } from "../clients/github";
 import { config } from "../config";
 import type { Task } from "../db/schema";
@@ -10,7 +9,6 @@ import type { InboxRepository, InboxRow } from "../repositories/inbox.repository
 import type { TaskRepository } from "../repositories/task.repository";
 import type { AgentEmit, HarnessEvent } from "../types/harnessEvent";
 import type { IntegrationHooks } from "./integrationHooks";
-import type { LinearTokenProvider } from "./linearTokenProvider";
 import type { ReplyHolds } from "./replyHolds";
 import type { SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
@@ -62,8 +60,7 @@ export class EventDispatcher {
     private taskRepo: TaskRepository,
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
-    private slackNotifier: SlackNotifierService,
+    private slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">,
     private integrations: Record<IntegrationName, Integration>,
     private holds: ReplyHolds,
     private hooks: IntegrationHooks,
@@ -74,8 +71,7 @@ export class EventDispatcher {
     try {
       return await this.apply(event, task);
     } catch (err) {
-      // A task-scoped call (the owner's onPrOpened, or the Linear client for
-      // Slack on completed) failed before anything was sent: hold on the
+      // The owner's onPrOpened failed before anything was sent: hold on the
       // task's own integration. deliver holds on the round's integration itself.
       if (!(err instanceof RetryableError)) throw err;
       this.holds.hold(task.id, event, task.source, err);
@@ -171,12 +167,6 @@ export class EventDispatcher {
       }
 
       case "completed": {
-        // The Slack notify below needs a Linear client for a Linear task's
-        // assignment round (until Slack moves to assignee()). Fetched before
-        // marking, so a Linear token failure holds the event with the row
-        // still open.
-        const linearClient =
-          inboxRow?.kind === "assignment" ? await this.linearClientFor(task) : null;
         // Bare terminal marker — the user-facing message already went out via
         // the preceding agent_response / agent_error emit. Mark the inbox row
         // responded so the reaper guard clears and the sandbox can be freed.
@@ -194,15 +184,18 @@ export class EventDispatcher {
         this.hooks.roundFinished(task, inboxRow, outcome, marked, async () =>
           sandboxId ? this.sandboxManager.extractArchive(sandboxId) : null,
         );
-        // Slack completion update to the configured channel.
-        // Assignment-only (the top-level task, not comment/review rounds) and
-        // gated on the first inbox transition so a cursor-replay can't double-
-        // post. Fire-and-forget: a Slack outage must not stall the dispatch
-        // loop. The notifier no-ops when Slack is disabled.
-        if (marked && linearClient) {
-          void this.slackNotifier
-            .notifyTerminal(linearClient, task, event.status ?? "completed")
-            .catch((err) => logErr("slack completion notify failed", err));
+        // Slack completion update to the configured channel, for a task
+        // whose source is opted in (SLACK_NOTIFY_SOURCES). Assignment-only
+        // (the top-level task, not comment/review rounds) and gated on the
+        // first inbox transition so a cursor-replay can't double-post.
+        // Detached: a Slack outage (or the assignee lookup for its mention)
+        // must not stall the dispatch loop.
+        if (marked && inboxRow.kind === "assignment" && this.slackNotifier.notifies(task.source)) {
+          this.hooks.detach(
+            task.id,
+            "slack",
+            this.slackNotifier.notifyTerminal(task, event.status ?? "completed"),
+          );
         }
         break;
       }
@@ -219,24 +212,14 @@ export class EventDispatcher {
     return "ok";
   }
 
-  // Nothing has been sent when the token fetch fails, so handle() holds.
-  private async linearClientFor(task: Task): Promise<LinearClient | null> {
-    if (task.source !== "linear") return null;
-    try {
-      return await this.linearTokenProvider.getAuthorizedLinearClient();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new RetryableError(`Linear token fetch failed: ${msg}`);
-    }
-  }
-
   // Delivers one agent emit to one thread: looks up the target on the inbox
   // row's reply_targets[] by target_id, labels the emit, and hands both to the
   // round's integration, which decides where (or whether) it shows up. Core
-  // never checks what an integration can show. The send runs under
-  // sendTimeoutMs (SEND_TIMEOUT_MS). A RetryableError (nothing was sent) holds
-  // the event on the round's integration; a timeout or any other failure is
-  // logged and the event dropped.
+  // never checks what an integration can show. A disabled integration's send
+  // is skipped and counts as sent. The send runs under sendTimeoutMs
+  // (SEND_TIMEOUT_MS). A RetryableError (nothing was sent) holds the event on
+  // the round's integration; a timeout or any other failure is logged and the
+  // event dropped.
   private async deliver(
     event: AgentEmit,
     inboxRow: InboxRow | null,
@@ -259,13 +242,20 @@ export class EventDispatcher {
       return "ok"; // cursor still advances — drop
     }
 
+    // A source this build has no integration for (rows written by a newer
+    // build before a rollback) is skipped like a disabled one.
+    const integration: Integration | undefined = this.integrations[inboxRow.source];
+    if (!integration?.enabled) {
+      logger.info(`${event.type} skipped: integration unknown or disabled`, {
+        taskId: task.id,
+        inboxId: inboxRow.id,
+        source: inboxRow.source,
+      });
+      return "ok";
+    }
     try {
       await withTimeout(this.sendTimeoutMs, (signal) =>
-        this.integrations[inboxRow.source].deliver(
-          { signal, log: logger },
-          target,
-          labelAgentEmit(event, inboxRow),
-        ),
+        integration.deliver({ signal, log: logger }, target, labelAgentEmit(event, inboxRow)),
       );
       return "ok";
     } catch (err) {

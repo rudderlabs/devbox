@@ -123,11 +123,16 @@ function setup(o: {
     {
       authEnabled: false,
       allowedHosts: [],
-      linearStatus: async () => ({ configured: false }),
-      githubStatus: () => ({
-        token: { source: "env", expiresAt: null, readAt: null, lastError: null },
-        webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
-      }),
+      integrations: {
+        linear: { status: async () => ({ configured: false }) },
+        github: {
+          status: async () => ({
+            token: { source: "env", expiresAt: null, readAt: null, lastError: null },
+            webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
+          }),
+        },
+        api: { status: async () => ({ enabled: true }) },
+      },
     },
   );
   return { app, service, controller, clock };

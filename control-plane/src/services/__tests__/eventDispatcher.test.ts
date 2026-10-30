@@ -79,8 +79,8 @@ mock.module("../../clients/github", () => ({
 
 const { EventDispatcher } = await import("../eventDispatcher");
 const { LinearIntegration } = await import("../../integrations/linear");
-const { githubIntegration } = await import("../../integrations/github");
-const { apiIntegration } = await import("../../integrations/api");
+const { GithubIntegration } = await import("../../integrations/github");
+const { ApiIntegration } = await import("../../integrations/api");
 const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
@@ -161,6 +161,15 @@ describe("EventDispatcher", () => {
   let holds: InstanceType<typeof ReplyHolds>;
   let dispatcher: InstanceType<typeof EventDispatcher>;
 
+  // The registry, with GitHub's webhooks (and so its integration) on or off.
+  const makeIntegrations = (githubEnabled: boolean) => ({
+    linear: new LinearIntegration(linearTokenProvider, true, {
+      status: async () => ({ configured: false }),
+    }),
+    api: new ApiIntegration(true),
+    github: new GithubIntegration(githubEnabled, { status: () => ({}) as never }),
+  });
+
   beforeEach(() => {
     for (const m of [
       emitThought,
@@ -205,19 +214,18 @@ describe("EventDispatcher", () => {
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
     notifyTerminal = mock(() => Promise.resolve());
-    slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
+    // Slack on with the default SLACK_NOTIFY_SOURCES (linear).
+    slackNotifier = {
+      notifyTerminal,
+      notifies: (source: string) => source === "linear",
+    } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
-    const integrations = {
-      linear: new LinearIntegration(linearTokenProvider),
-      api: apiIntegration,
-      github: githubIntegration,
-    };
+    const integrations = makeIntegrations(true);
     dispatcher = new EventDispatcher(
       taskRepo,
       inboxRepo,
       sandboxManager,
-      linearTokenProvider,
       slackNotifier,
       integrations,
       holds,
@@ -589,6 +597,8 @@ describe("EventDispatcher", () => {
       const delivered: unknown[] = [];
       const record = (name: "linear" | "api" | "github") => ({
         name,
+        enabled: true,
+        status: async () => ({}),
         deliver: async (_ctx: unknown, target: unknown, message: unknown) => {
           delivered.push([name, target, message]);
         },
@@ -602,7 +612,6 @@ describe("EventDispatcher", () => {
         taskRepo,
         inboxRepo,
         sandboxManager,
-        linearTokenProvider,
         slackNotifier,
         integrations,
         new ReplyHolds(),
@@ -986,23 +995,21 @@ describe("EventDispatcher", () => {
       expect(postIssueComment).toHaveBeenCalledTimes(2);
     });
 
-    it("still posts GitHub replies when GitHub webhooks are off", async () => {
-      // characterization: changes in phase 2 (spec §13: a disabled integration's replies are skipped)
-      const webhooks = mockedConfig.github.webhooks;
-      mockedConfig.github.webhooks = undefined;
-      try {
-        getByIdForTask.mockResolvedValue(ghCommentRow());
-        await dispatcher.handle(responseEvent("555"), makeTask());
-        expect(postIssueComment).toHaveBeenCalledWith(
-          "o",
-          "r",
-          1,
-          "good catch, fixing",
-          expect.any(AbortSignal),
-        );
-      } finally {
-        mockedConfig.github.webhooks = webhooks;
-      }
+    it("skips GitHub replies when GitHub webhooks are off: not posted, not held (§13)", async () => {
+      const integrations = makeIntegrations(false);
+      const d = new EventDispatcher(
+        taskRepo,
+        inboxRepo,
+        sandboxManager,
+        slackNotifier,
+        integrations,
+        holds,
+        new IntegrationHooks(integrations, inboxRepo),
+      );
+      getByIdForTask.mockResolvedValue(ghCommentRow());
+      expect(await d.handle(responseEvent("555"), makeTask())).toBe("ok");
+      expect(postIssueComment).not.toHaveBeenCalled();
+      expect(holds.stats()).toEqual({});
     });
 
     it("a Linear token failure does not hold a GitHub round's reply or completion on a Linear task", async () => {
@@ -1189,7 +1196,6 @@ describe("EventDispatcher", () => {
       await dispatcher.handle(completedEvent(), makeTask());
       expect(notifyTerminal).toHaveBeenCalledTimes(1);
       expect(notifyTerminal).toHaveBeenCalledWith(
-        expect.anything(),
         expect.objectContaining({ id: "task-1" }),
         "completed",
       );
@@ -1197,11 +1203,7 @@ describe("EventDispatcher", () => {
 
     it("forwards the event status to the Slack notify (partial_failure)", async () => {
       await dispatcher.handle({ ...completedEvent(), status: "partial_failure" }, makeTask());
-      expect(notifyTerminal).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        "partial_failure",
-      );
+      expect(notifyTerminal).toHaveBeenCalledWith(expect.anything(), "partial_failure");
     });
 
     it("does NOT post to Slack on an idempotent re-fire (already responded)", async () => {
@@ -1385,12 +1387,18 @@ describe("EventDispatcher", () => {
       expect(markResponded).toHaveBeenCalled();
     });
 
-    it("Linear assignment: a token fetch failure holds the event before markResponded", async () => {
+    it("Linear assignment: a token fetch failure no longer holds; it marks and notifies Slack (§13)", async () => {
+      // Slack's mention comes from assignee(), which fails (logged) and the
+      // post goes out without it; completed needs no Linear client.
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
-      expect(await dispatcher.handle(completedEvent(), makeTask())).toBe("hold");
-      expect(markResponded).not.toHaveBeenCalled();
+      expect(await dispatcher.handle(completedEvent(), makeTask())).toBe("ok");
+      expect(markResponded).toHaveBeenCalled();
+      expect(notifyTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "task-1" }),
+        "completed",
+      );
     });
 
     it("still marks responded when linearClient is null", async () => {

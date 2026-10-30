@@ -1,3 +1,4 @@
+import type { Context } from "hono";
 import {
   addIssueCommentReaction,
   addReviewCommentReaction,
@@ -7,8 +8,10 @@ import {
   requestReviewers,
 } from "../../clients/github";
 import { config } from "../../config";
+import type { GitHubWebhookController } from "../../controllers/githubWebhook.controller";
 import type { Task } from "../../db/schema";
-import type { InboxRow, ReplyTargetSpec } from "../../repositories/inbox.repository";
+import type { InboxRow, ReplyTarget, ReplyTargetSpec } from "../../repositories/inbox.repository";
+import type { GithubStatus, GithubStatusService } from "../../services/githubStatus.service";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
@@ -21,9 +24,32 @@ type GithubSpec = Extract<
 
 // GitHub rounds (comments, reviews, CI results) post on the PR. A PR shows no
 // live progress, and it is public: a failure's raw detail never goes there.
-export const githubIntegration: Integration = {
-  name: "github",
-  async deliver(ctx, target, message) {
+// GitHub creates no tasks: its rounds come only from its webhooks, so it is
+// enabled exactly when they are, and disabling them skips open rounds' replies.
+export class GithubIntegration implements Integration<GithubStatus> {
+  readonly name = "github";
+  // Today's webhook controller. It enqueues through InboxService, which needs
+  // this registry, so app.ts attaches it afterwards (only when enabled).
+  controller?: GitHubWebhookController;
+
+  constructor(
+    // GITHUB_WEBHOOKS_ENABLED.
+    readonly enabled: boolean,
+    private statusService: Pick<GithubStatusService, "status">,
+  ) {}
+
+  // Today's responses: 403 for untrusted actors, 503 when the trusted set
+  // can't be fetched. The controller already holds the intake.
+  async webhook(c: Context): Promise<Response> {
+    if (!this.controller) return c.notFound();
+    return this.controller.handleWebhook(c);
+  }
+
+  async status(): Promise<GithubStatus> {
+    return this.statusService.status();
+  }
+
+  async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
     const spec = target.spec;
     if (spec.kind === "linear_session" || spec.kind === "api_session") {
       throw new Error(`github cannot deliver to a ${spec.kind} target`);
@@ -38,16 +64,20 @@ export const githubIntegration: Integration = {
         await deliverFailure(ctx, spec, message);
         return;
     }
-  },
+  }
 
   // A finished review re-requests review from its reviewer, once (a replayed
   // `completed` doesn't). Best-effort: a failure is logged, nothing waits on it.
-  async onRoundFinished(ctx, task, round) {
+  async onRoundFinished(
+    ctx: HookCtx & { firstTransition: boolean },
+    task: Task,
+    round: InboxRow,
+  ): Promise<void> {
     if (ctx.firstTransition && round.kind === "review") {
       await requestReviewFromOriginalReviewer(ctx, round, task);
     }
-  },
-};
+  }
+}
 
 async function requestReviewFromOriginalReviewer(
   ctx: HookCtx,

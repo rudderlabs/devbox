@@ -21,12 +21,13 @@ const HOOK_TIMEOUT_MS = {
 } as const;
 type HookName = keyof typeof HOOK_TIMEOUT_MS;
 // What a detached promise is doing, for the shutdown log.
-type DetachedWork = HookName | "killSandbox";
+type DetachedWork = HookName | "killSandbox" | "slack";
 
 // Runs integrations' lifecycle hooks (§4). onTaskStarted, onPrOpened and
 // assignee go to the task's own integration; onRoundFinished goes to the
-// round's. Each call runs under its hook's timeout with an abort signal and
-// never throws: a failure is logged and the caller goes on. The one exception
+// round's. A disabled integration's hooks are skipped (logged). Each call runs
+// under its hook's timeout with an abort signal and never throws: a failure is
+// logged and the caller goes on. The one exception
 // is a RetryableError from onPrOpened, which escapes so the dispatcher holds
 // pr_opened as it holds a send (the hook must be idempotent). Detached work is
 // tracked so TaskProcessor.stop() can drain it.
@@ -69,7 +70,8 @@ export class IntegrationHooks {
   }
 
   // The task's assignee, for detached work. undefined when the integration
-  // has no assignee or the lookup failed (logged here, with `logMeta`).
+  // has no assignee, is disabled, or the lookup failed (logged here, with
+  // `logMeta`).
   assignee(
     task: Task,
     round: InboxRow | null,
@@ -141,6 +143,10 @@ export class IntegrationHooks {
   ): Promise<T | undefined> {
     if (!owner[hook]) return undefined;
     const meta = { ...logMeta, taskId: task.id, integration: owner.name };
+    if (!owner.enabled) {
+      logger.info(`${hook} skipped: integration disabled`, meta);
+      return undefined;
+    }
     try {
       return await withTimeout(this.timeoutsMs[hook], async (signal) => {
         // A failed lookup still runs the hook; isCurrent() then answers false.

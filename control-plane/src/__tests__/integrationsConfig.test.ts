@@ -107,7 +107,21 @@ describe("parseSlackConfig", () => {
     expect(parseSlackConfig({ ...SLACK_ENV, SLACK_ENABLED: "true" })).toEqual({
       botToken: "xoxb-test",
       channel: "C123",
+      notifySources: ["linear"],
     });
+  });
+
+  it("SLACK: SLACK_NOTIFY_SOURCES lists task sources; an unknown one fails", () => {
+    const on = { ...SLACK_ENV, SLACK_ENABLED: "true" };
+    expect(parseSlackConfig({ ...on, SLACK_NOTIFY_SOURCES: "linear, api" })?.notifySources).toEqual(
+      ["linear", "api"],
+    );
+    expect(parseSlackConfig({ ...on, SLACK_NOTIFY_SOURCES: " " })?.notifySources).toEqual([
+      "linear",
+    ]);
+    expect(() => parseSlackConfig({ ...on, SLACK_NOTIFY_SOURCES: "linear,github" })).toThrow(
+      new Error('SLACK_NOTIFY_SOURCES: unknown task source "github" (allowed: linear, api)'),
+    );
   });
 
   it("SLACK: on with a setting missing", () => {

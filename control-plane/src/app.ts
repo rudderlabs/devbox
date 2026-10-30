@@ -8,8 +8,8 @@ import { HealthController } from "./controllers/health.controller";
 import { LinearWebhookController } from "./controllers/linearWebhook.controller";
 import { db } from "./db";
 import { taskSource } from "./db/schema";
-import { apiIntegration } from "./integrations/api";
-import { githubIntegration } from "./integrations/github";
+import { ApiIntegration } from "./integrations/api";
+import { GithubIntegration } from "./integrations/github";
 import { Intake } from "./integrations/intake";
 import { LinearIntegration } from "./integrations/linear";
 import type { Integration, IntegrationName } from "./integrations/types";
@@ -81,18 +81,31 @@ export function createApp(): AppBundle {
     trustedUsers: joinIfAny(config.github.trustedUsers),
   });
 
-  // Every outbound message goes through integrations[round.source].deliver.
+  const linearStatus = new LinearStatusService(
+    config.linear ? linearTokenProvider : undefined,
+    logger,
+  );
+  const githubStatus = new GithubStatusService(githubTokenState, {
+    enabled: config.github.webhooks !== undefined,
+    ciResults: config.github.ciResultEnabled,
+    lastWebhookAt: (): string | null => integrations.github.controller?.lastWebhookAt() ?? null,
+  });
+
+  // The registry. Every outbound message goes through
+  // integrations[round.source].deliver, and core skips a disabled
+  // integration's webhook, sends and hooks.
   const integrations = {
-    linear: new LinearIntegration(linearTokenProvider),
-    api: apiIntegration,
-    github: githubIntegration,
+    linear: new LinearIntegration(linearTokenProvider, config.linear !== undefined, linearStatus),
+    api: new ApiIntegration(config.api.enabled),
+    // GitHub rounds come only from its webhooks.
+    github: new GithubIntegration(config.github.webhooks !== undefined, githubStatus),
   } satisfies Record<IntegrationName, Integration>;
   // The registered integrations that create tasks (github creates none). Only
   // these sources are claimed and reconciled, so an older image never works a
   // task whose source it doesn't know (§10).
   const taskSources = taskSource.enumValues.filter((s) => s in integrations);
-  // Sends held because they failed before anything went out; the status
-  // routes will report them per integration (phase 2).
+  // Sends held because they failed before anything went out; each
+  // integration's status reports its own.
   const replyHolds = new ReplyHolds();
   // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.
   const hooks = new IntegrationHooks(integrations, inboxRepository);
@@ -111,19 +124,34 @@ export function createApp(): AppBundle {
     intake,
   );
 
-  const agentSessionService = new AgentSessionService(intake, linearTokenProvider, inboxService);
+  // Today's webhook controllers enqueue through InboxService, which needs the
+  // registry, so each is attached to its module here, only when enabled.
+  if (config.linear) {
+    integrations.linear.controller = new LinearWebhookController(
+      new AgentSessionService(intake, linearTokenProvider, inboxService),
+      (at) => linearStatus.recordWebhook(at),
+    );
+  }
+  if (config.github.webhooks) {
+    integrations.github.controller = new GitHubWebhookController(
+      inboxService,
+      intake,
+      config.github.webhooks,
+    );
+  }
 
   const slackNotifier = new SlackNotifierService(
     taskRepository,
     config.slack?.botToken ?? "",
     config.slack?.channel ?? "",
+    config.slack?.notifySources ?? [],
+    hooks,
   );
 
   const eventDispatcher = new EventDispatcher(
     taskRepository,
     inboxRepository,
     sandboxManager,
-    linearTokenProvider,
     slackNotifier,
     integrations,
     replyHolds,
@@ -144,31 +172,11 @@ export function createApp(): AppBundle {
     hooks,
   );
 
-  const linearStatus = new LinearStatusService(
-    config.linear ? linearTokenProvider : undefined,
-    logger,
-  );
-
-  // Each webhook exists only when its integration is configured.
-  const linearWebhookController = config.linear
-    ? new LinearWebhookController(agentSessionService, (at) => linearStatus.recordWebhook(at))
-    : undefined;
-  const githubWebhookController = config.github.webhooks
-    ? new GitHubWebhookController(inboxService, intake, config.github.webhooks)
-    : undefined;
-  const githubStatus = new GithubStatusService(githubTokenState, {
-    enabled: githubWebhookController !== undefined,
-    ciResults: config.github.ciResultEnabled,
-    lastWebhookAt: () => githubWebhookController?.lastWebhookAt() ?? null,
-  });
   const healthController = new HealthController(db);
 
   const app = new Hono();
   app.route("/", createHealthRoutes(healthController));
-  app.route(
-    "/",
-    createWebhookRoutes({ linear: linearWebhookController, github: githubWebhookController }),
-  );
+  app.route("/", createWebhookRoutes(Object.values(integrations), intake));
 
   // /api only mounts when explicitly enabled: a CP deployed before the
   // internal ingress exists must expose nothing.
@@ -184,13 +192,19 @@ export function createApp(): AppBundle {
       sseMaxDurationMs: config.api.sseMaxDurationMs,
       clock: realClock,
     });
+    // Each integration's own status body, plus its held sends (§4 I14).
+    const statuses = Object.fromEntries(
+      Object.values(integrations).map((i) => [
+        i.name,
+        { status: async () => ({ ...(await i.status()), holds: replyHolds.of(i.name) }) },
+      ]),
+    ) as Record<IntegrationName, Pick<Integration, "status">>;
     app.route(
       "/",
       createApiRoutes(apiController, new ApiAuthService(apiTokenRepository), {
         authEnabled: config.api.authEnabled,
         allowedHosts: config.api.allowedHosts,
-        linearStatus: () => linearStatus.status(),
-        githubStatus: () => githubStatus.status(),
+        integrations: statuses,
       }),
     );
     stopApiStreams = () => apiController.closeStreams();

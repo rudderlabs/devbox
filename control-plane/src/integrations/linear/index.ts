@@ -1,4 +1,5 @@
 import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
+import type { Context } from "hono";
 import { getUserById } from "../../clients/github";
 import {
   attachUrlToIssue,
@@ -9,9 +10,11 @@ import {
   getIssueHumanAssignee,
   uploadIssueAttachment,
 } from "../../clients/linear";
+import type { LinearWebhookController } from "../../controllers/linearWebhook.controller";
 import type { Task } from "../../db/schema";
 import type { InboxRow, ReplyTarget } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
+import type { LinearStatus, LinearStatusService } from "../../services/linearStatus.service";
 import type { LinearTokenProvider } from "../../services/linearTokenProvider";
 import { rateLimitWaitMs, retryable } from "../http";
 import { type Outbound, RetryableError, type SendCtx } from "../outbound";
@@ -20,12 +23,29 @@ import type { HookCtx, Integration, Person, PrRef } from "../types";
 // Linear rounds post to the agent session. target.id IS the agent session id
 // by construction (the enqueue paths stamp the live session id). The session
 // is private to the workspace, so a failure shows its raw detail.
-export class LinearIntegration implements Integration {
+export class LinearIntegration implements Integration<LinearStatus> {
   readonly name = "linear";
+  // Today's webhook controller. It enqueues through InboxService, which needs
+  // this registry, so app.ts attaches it afterwards (only when enabled).
+  controller?: Pick<LinearWebhookController, "handleWebhook">;
 
   constructor(
     private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
+    // LINEAR_ENABLED.
+    readonly enabled: boolean,
+    private statusService: Pick<LinearStatusService, "status">,
   ) {}
+
+  // Today's responses, including 503 session_not_found when a prompt arrives
+  // before its session (Linear retries). The controller already holds the intake.
+  async webhook(c: Context): Promise<Response> {
+    if (!this.controller) return c.notFound();
+    return this.controller.handleWebhook(c);
+  }
+
+  status(): Promise<LinearStatus> {
+    return this.statusService.status();
+  }
 
   async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
     if (target.spec.kind !== "linear_session") {

@@ -2,6 +2,9 @@
 // testable without mocking ../config. config.ts calls these at startup; a bad
 // combination fails boot with an error that names what is missing.
 
+import { taskSource } from "./db/schema";
+import type { TaskSource } from "./integrations/types";
+
 export type LinearConfig = {
   clientId: string;
   clientSecret: string;
@@ -13,6 +16,8 @@ export type SlackConfig = {
   botToken: string;
   // Channel id (C…) the updates are posted to.
   channel: string;
+  // The task sources whose tasks post (SLACK_NOTIFY_SOURCES; default linear).
+  notifySources: TaskSource[];
 };
 
 export type GithubWebhooksConfig = {
@@ -80,7 +85,8 @@ export function parseLinearConfig(env: Env): LinearConfig | undefined {
 }
 
 // Slack is on only with SLACK_ENABLED=true; then the token and channel are
-// required.
+// required. SLACK_NOTIFY_SOURCES lists the task sources that post (comma- or
+// whitespace-separated, default linear); an unknown source fails startup.
 export function parseSlackConfig(env: Env): SlackConfig | undefined {
   if (!parseSwitch(env, "SLACK_ENABLED")) return undefined;
   const botToken = present(env, "SLACK_BOT_TOKEN");
@@ -89,7 +95,16 @@ export function parseSlackConfig(env: Env): SlackConfig | undefined {
   if (!botToken) missing.push("SLACK_BOT_TOKEN");
   if (!channel) missing.push("SLACK_CHANNEL_ID");
   if (!botToken || !channel) throw missingError("SLACK_ENABLED", missing);
-  return { botToken, channel };
+  const sources = parseTrustList(env.SLACK_NOTIFY_SOURCES);
+  const known: readonly string[] = taskSource.enumValues;
+  const unknown = sources.find((s) => !known.includes(s));
+  if (unknown !== undefined) {
+    throw new Error(
+      `SLACK_NOTIFY_SOURCES: unknown task source "${unknown}" (allowed: ${known.join(", ")})`,
+    );
+  }
+  const notifySources: TaskSource[] = sources.length > 0 ? (sources as TaskSource[]) : ["linear"];
+  return { botToken, channel, notifySources };
 }
 
 export function parseGithubConfig(env: Env): GithubIntegrationConfig {

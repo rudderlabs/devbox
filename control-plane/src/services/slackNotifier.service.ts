@@ -1,8 +1,8 @@
-import type { LinearClient } from "@linear/sdk";
-import { getIssueHumanAssignee } from "../clients/linear";
 import { lookupSlackUserIdByEmail, postSlackMessage } from "../clients/slack";
 import type { Task } from "../db/schema";
+import type { TaskSource } from "../integrations/types";
 import type { TaskRepository } from "../repositories/task.repository";
+import type { IntegrationHooks } from "./integrationHooks";
 
 // Terminal-state granularity. `completed | partial_failure | no_action` come
 // from the sandbox `completed` event's status field; `failed` is used by both
@@ -13,11 +13,12 @@ export type TerminalStatus = "completed" | "partial_failure" | "no_action" | "fa
 type PrUrlEntry = { repo: string; url: string };
 
 // Posts a single task-completion update to the configured Slack channel (a
-// message per Linear-sourced task). Disabled unless both a bot token and a
-// channel are configured.
+// message per task whose source is opted in). Disabled unless both a bot token
+// and a channel are configured.
 //
-// Best-effort by contract: callers fire-and-forget with a `.catch`. A Slack
-// outage or a missing thread must never affect task dispatch or teardown.
+// Best-effort by contract: callers detach it (IntegrationHooks.detach logs a
+// failure). A Slack outage or a missing thread must never affect task dispatch
+// or teardown.
 export class SlackNotifierService {
   constructor(
     private readonly taskRepo: TaskRepository,
@@ -27,19 +28,24 @@ export class SlackNotifierService {
     private readonly botToken: string,
     // config.slack.channel in production. Empty ⇒ Slack disabled (no-op).
     private readonly channel: string,
+    // config.slack.notifySources (SLACK_NOTIFY_SOURCES): the task sources
+    // whose tasks post.
+    private readonly notifySources: readonly TaskSource[],
+    // The owner integration's assignee(), for the connect-GitHub nudge.
+    private readonly hooks: Pick<IntegrationHooks, "assignee">,
     // Injected for testability; default to the real implementations.
     private readonly post: typeof postSlackMessage = postSlackMessage,
-    private readonly resolveAssignee: typeof getIssueHumanAssignee = getIssueHumanAssignee,
     private readonly lookupSlackUser: typeof lookupSlackUserIdByEmail = lookupSlackUserIdByEmail,
   ) {}
 
-  async notifyTerminal(
-    linearClient: LinearClient,
-    task: Task,
-    status: TerminalStatus,
-    message?: string,
-  ): Promise<void> {
-    if (!this.enabledFor(task)) return;
+  // Common gate for every Slack post: a token and a channel are provisioned
+  // and the source is opted in. Callers check it before notifyTerminal.
+  notifies(source: TaskSource): boolean {
+    return Boolean(this.botToken && this.channel) && this.notifySources.includes(source);
+  }
+
+  async notifyTerminal(task: Task, status: TerminalStatus, message?: string): Promise<void> {
+    if (!this.notifies(task.source)) return;
 
     // Re-read for the freshest pr_urls — the in-memory task handed in from the
     // reconcile loop can predate the pr_opened write that appended the PR. This
@@ -49,52 +55,41 @@ export class SlackNotifierService {
     const fresh = await this.taskRepo.getById(task.id).catch(() => null);
     const t = fresh ?? task;
     const prUrls = parsePrUrls(t.prUrls);
-    // Nudge shown alongside PR links when the ticket's human assignee hasn't
-    // connected GitHub in Linear — the PR couldn't be assigned to them
+    // Nudge shown alongside PR links when a Linear ticket's human assignee
+    // hasn't connected GitHub in Linear — the PR couldn't be assigned to them
     // (eventDispatcher's pr_opened mirror skipped with no_github_mapping) and
     // self-service is the only fix. Re-checked lazily here so a user who
     // connected mid-run isn't nagged. Skipped for no_action, whose message
     // renders no PR section for the nudge to ride on.
-    const wantsNudge = status !== "no_action" && prUrls.length > 0;
-    const connectNote = wantsNudge ? await this.connectGitHubNote(linearClient, t) : "";
+    const wantsNudge = t.source === "linear" && status !== "no_action" && prUrls.length > 0;
+    const connectNote = wantsNudge ? await this.connectGitHubNote(t) : "";
 
     const text = buildMessage(status, t, prUrls, connectNote, message);
     await this.post({ channel: this.channel, text });
   }
 
   // "" when there is nothing to nag about: no human assignee, already mapped,
-  // or the Linear lookup failed (best-effort — never blocks the post).
-  private async connectGitHubNote(linearClient: LinearClient, task: Task): Promise<string> {
-    try {
-      const human = await this.resolveAssignee(linearClient, task.externalId);
-      if (!human || human.gitHubUserId) return "";
-      // @-mention the assignee so the nudge notifies them (Slack only pings
-      // members of the channel — a non-member renders un-notified). Linear and
-      // Slack share the org email, so lookupByEmail is reliable here (it's only
-      // GitHub where personal emails diverge — the whole reason for this nudge).
-      // Degrades to the plain display name on any lookup miss (users_not_found,
-      // bot missing the users:read.email scope, transport error). displayName
-      // is member-editable — escape it so it can't inject mrkdwn (<!channel>,
-      // forged <@mentions>, disguised links) into a trusted bot message.
-      const slackId = human.email
-        ? await this.lookupSlackUser(human.email).catch(() => null)
-        : null;
-      const mention = slackId ? `<@${slackId}>` : escapeMrkdwn(human.displayName);
-      return (
-        `\n⚠️ ${mention}: I couldn't assign the PR to you — your GitHub account ` +
-        "isn't connected in Linear. Connect it under *Linear → Settings → Connected accounts* " +
-        "and future PRs will be assigned to you automatically."
-      );
-    } catch {
-      return "";
-    }
-  }
-
-  // Common gate for every Slack post: a token and a channel are provisioned
-  // and the task is Linear-sourced.
-  private enabledFor(task: Task): boolean {
-    if (!this.botToken || !this.channel) return false;
-    return task.source === "linear";
+  // or the lookup failed (IntegrationHooks logs it; never blocks the post).
+  private async connectGitHubNote(task: Task): Promise<string> {
+    const person = await this.hooks.assignee(task, null, { purpose: "slack_nudge" });
+    if (person?.codeHost !== "unlinked") return "";
+    // @-mention the assignee so the nudge notifies them (Slack only pings
+    // members of the channel — a non-member renders un-notified). Linear and
+    // Slack share the org email, so lookupByEmail is reliable here (it's only
+    // GitHub where personal emails diverge — the whole reason for this nudge).
+    // Degrades to the plain display name on any lookup miss (users_not_found,
+    // bot missing the users:read.email scope, transport error). displayName
+    // is member-editable — escape it so it can't inject mrkdwn (<!channel>,
+    // forged <@mentions>, disguised links) into a trusted bot message.
+    const slackId = person.email
+      ? await this.lookupSlackUser(person.email).catch(() => null)
+      : null;
+    const mention = slackId ? `<@${slackId}>` : escapeMrkdwn(person.displayName);
+    return (
+      `\n⚠️ ${mention}: I couldn't assign the PR to you — your GitHub account ` +
+      "isn't connected in Linear. Connect it under *Linear → Settings → Connected accounts* " +
+      "and future PRs will be assigned to you automatically."
+    );
   }
 }
 
@@ -149,10 +144,12 @@ function prSection(prUrls: PrUrlEntry[]): string {
   return `\nHere are the PRs for review:\n${list}`;
 }
 
-// The Linear-ticket link fragment shared by every message ("<url|title>", or
-// the bare title when the task has no external URL).
+// The task's link fragment shared by every message ("<url|title>", or the
+// bare title when the task has no external URL). An untitled task is labelled
+// "Linear ticket" on Linear and by its key elsewhere.
 function ticketLink(task: Task): string {
-  return task.externalUrl ? link(task.externalUrl, task.title || "Linear ticket") : task.title;
+  const label = task.title || (task.source === "linear" ? "Linear ticket" : task.key);
+  return task.externalUrl ? link(task.externalUrl, label) : task.title;
 }
 
 function buildMessage(

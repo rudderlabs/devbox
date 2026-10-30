@@ -307,13 +307,17 @@ export class InboxService {
     const target = entry.reply_targets[0];
     if (!target) return;
     // A source this build has no integration for (say, rows written by a newer
-    // build before a rollback) gets no notice; its row is still failed.
+    // build before a rollback), or a disabled one, gets no notice; its row is
+    // still failed.
     const integration: Integration | undefined = this.integrations[entry.source];
-    if (!integration) {
-      logger.warn("workspace_missing: no integration for the row's source; notice skipped", {
-        inboxId: entry.id,
-        source: entry.source,
-      });
+    if (!integration?.enabled) {
+      logger.warn(
+        "workspace_missing: the row's integration is unknown or disabled; notice skipped",
+        {
+          inboxId: entry.id,
+          source: entry.source,
+        },
+      );
       return;
     }
     await withTimeout(SEND_TIMEOUT_MS, (signal) =>

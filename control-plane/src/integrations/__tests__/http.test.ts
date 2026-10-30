@@ -193,10 +193,14 @@ describe("Linear deliver: SDK failures", () => {
   const target: ReplyTarget = { id: "sess-1", spec: { kind: "linear_session" } };
   const reply = { type: "reply", body: "hi" } as const;
   const integrationFor = (apiUrl: string) =>
-    new LinearIntegration({
-      getAuthorizedLinearClient: (signal?: AbortSignal) =>
-        Promise.resolve(new LinearClient({ accessToken: "t", apiUrl, signal })),
-    });
+    new LinearIntegration(
+      {
+        getAuthorizedLinearClient: (signal?: AbortSignal) =>
+          Promise.resolve(new LinearClient({ accessToken: "t", apiUrl, signal })),
+      },
+      true,
+      { status: async () => ({ configured: false }) },
+    );
   const deliverTo = (apiUrl: string, signal = new AbortController().signal) =>
     integrationFor(apiUrl)
       .deliver({ signal, log: logger }, target, reply)

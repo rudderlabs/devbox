@@ -92,8 +92,8 @@ mock.module("../../clients/github", () => ({
 
 const { TaskProcessorService } = await import("../taskProcessor.service");
 const { LinearIntegration } = await import("../../integrations/linear");
-const { githubIntegration } = await import("../../integrations/github");
-const { apiIntegration } = await import("../../integrations/api");
+const { GithubIntegration } = await import("../../integrations/github");
+const { ApiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
@@ -288,13 +288,19 @@ describe("TaskProcessorService", () => {
     inboxService = { sweepUndelivered, deadLetterWorkspaceMissing } as unknown as InboxService;
 
     notifyTerminal = mock(() => Promise.resolve());
-    slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
+    // Slack on with the default SLACK_NOTIFY_SOURCES (linear).
+    slackNotifier = {
+      notifyTerminal,
+      notifies: (source: string) => source === "linear",
+    } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
     integrations = {
-      linear: new LinearIntegration(linearTokenProvider),
-      api: apiIntegration,
-      github: githubIntegration,
+      linear: new LinearIntegration(linearTokenProvider, true, {
+        status: async () => ({ configured: false }),
+      }),
+      api: new ApiIntegration(true),
+      github: new GithubIntegration(true, { status: () => ({}) as never }),
     };
     hooks = new IntegrationHooks(integrations, inboxRepo);
     service = new TaskProcessorService(
@@ -581,7 +587,6 @@ describe("TaskProcessorService", () => {
       await service.stop();
 
       expect(notifyTerminal).toHaveBeenCalledWith(
-        expect.anything(),
         expect.objectContaining({ id: "task-1" }),
         "failed",
         expect.stringContaining("control-plane logs"),
@@ -884,7 +889,7 @@ describe("TaskProcessorService", () => {
       });
     });
 
-    it("a Linear token failure skips only the Linear post; GitHub posts, dead-letter and release go on", async () => {
+    it("a Linear token failure skips only the Linear post; GitHub and Slack posts, dead-letter and release go on", async () => {
       getAuthorizedLinearClient.mockRejectedValue(new Error("token refresh failed"));
       (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
@@ -902,8 +907,12 @@ describe("TaskProcessorService", () => {
         ownerId: "pod-test",
         alsoClearSandbox: true,
       });
-      // characterization: changes in phase 2 (Slack notifier sends without the assignee mention; spec §13)
-      expect(notifyTerminal).not.toHaveBeenCalled();
+      // Sent without the assignee mention (its lookup fails; §13).
+      expect(notifyTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "task-1" }),
+        "failed",
+        MSG,
+      );
     });
   });
 
@@ -1238,9 +1247,11 @@ describe("TaskProcessorService", () => {
           taskRepo,
           { getByIdForTask: mock(() => Promise.resolve(round)) } as unknown as InboxRepository,
           sandboxManager,
-          linearTokenProvider,
           slackNotifier,
-          { ...integrations, github: { name: "github", deliver } },
+          {
+            ...integrations,
+            github: { name: "github", enabled: true, status: async () => ({}), deliver },
+          },
           holds,
           hooks,
           20, // send timeout (ms)

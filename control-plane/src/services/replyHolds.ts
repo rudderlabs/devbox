@@ -66,8 +66,13 @@ export class ReplyHolds {
     for (const id of this.byTask.keys()) if (!ownedIds.has(id)) this.byTask.delete(id);
   }
 
-  // Held tasks and the oldest hold's age, per integration (for phase 2's
-  // status routes).
+  // One integration's held tasks and oldest hold age, for its status body.
+  of(integration: IntegrationName): { heldTasks: number; oldestHoldAgeMs: number } {
+    const s = this.stats()[integration];
+    return { heldTasks: s?.heldTasks ?? 0, oldestHoldAgeMs: s?.oldestHoldMs ?? 0 };
+  }
+
+  // Held tasks and the oldest hold's age, per integration.
   stats(): Partial<Record<IntegrationName, { heldTasks: number; oldestHoldMs: number }>> {
     const now = Date.now();
     const out: Partial<Record<IntegrationName, { heldTasks: number; oldestHoldMs: number }>> = {};
