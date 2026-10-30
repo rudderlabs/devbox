@@ -87,6 +87,12 @@ export class Intake implements TaskIntake {
       target: (ref) => {
         const target = p.target(ref);
         checkTargets(p.source, [target]);
+        // A NaN order is never "not above" the stored one, so every
+        // redelivery would restart the task.
+        const { order } = target;
+        if (order !== undefined && !(Number.isSafeInteger(order) && order >= 0)) {
+          throw new Error(`assign: target.order must be a non-negative integer, not ${order}`);
+        }
         return target;
       },
     });
@@ -102,6 +108,7 @@ export class Intake implements TaskIntake {
   ): Promise<void> {
     const task = await this.taskRepo.getById(taskId);
     if (!task) throw new Error(`restart: task ${taskId} not found`);
+    if (task.source !== "api") throw new Error(`restart: task ${taskId} is not an API task`);
     const { prevSandboxId } = await this.taskRepo.restartTaskWithInbox({
       taskId,
       inboxPayload: {

@@ -720,7 +720,7 @@ describe("EventDispatcher", () => {
       expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
       expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
       expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
-      expect(holds.stats().linear?.heldTasks).toBe(1);
+      expect(holds.of("linear").heldTasks).toBe(1);
     });
 
     it("self-evicts when appendPrUrl returns 0 rows (lease lost); skips attachUrlToIssue", async () => {
@@ -1011,7 +1011,7 @@ describe("EventDispatcher", () => {
       getByIdForTask.mockResolvedValue(ghCommentRow());
       expect(await d.handle(responseEvent("555"), makeTask())).toBe("ok");
       expect(postIssueComment).not.toHaveBeenCalled();
-      expect(holds.stats()).toEqual({});
+      expect(holds.of("github").heldTasks).toBe(0);
     });
 
     it("a Linear token failure does not hold a GitHub round's reply or completion on a Linear task", async () => {
@@ -1053,13 +1053,14 @@ describe("EventDispatcher", () => {
       getByIdForTask.mockResolvedValue(ghCommentRow());
       postIssueComment.mockRejectedValueOnce(new HttpError("HTTP 429", 429));
       expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("hold");
-      expect(Object.keys(holds.stats())).toEqual(["github"]);
+      expect(holds.of("github").heldTasks).toBe(1);
+      expect(holds.of("linear").heldTasks).toBe(0);
       // pr_opened's Linear client fetch is the task's (Linear's) hold.
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
       expect(await dispatcher.handle(prEvent(), makeTask({ id: "task-2" }))).toBe("hold");
-      expect(holds.stats().linear?.heldTasks).toBe(1);
+      expect(holds.of("linear").heldTasks).toBe(1);
     });
 
     it("a Linear send gets a per-call client bound to the send's signal", async () => {

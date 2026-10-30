@@ -748,7 +748,7 @@ describe("TaskProcessorService", () => {
       );
 
       expect(postIssueComment).not.toHaveBeenCalled();
-      expect(holds.stats()).toEqual({});
+      expect(holds.of("github").heldTasks).toBe(0);
       expect(markFailed).toHaveBeenCalledWith({
         inboxId: "gc",
         ownerId: "pod-test",
@@ -966,7 +966,7 @@ describe("TaskProcessorService", () => {
       await failTask(makeTask());
 
       expect(postIssueComment).not.toHaveBeenCalled();
-      expect(holds.stats()).toEqual({});
+      expect(holds.of("github").heldTasks).toBe(0);
       expect(failTaskInbox).toHaveBeenCalledWith({
         taskId: "task-1",
         ownerId: "pod-test",
@@ -1405,7 +1405,7 @@ describe("TaskProcessorService", () => {
       await waitFor(() => attachSandbox.mock.calls.length > 0);
       await service.stop();
 
-      expect(holds.stats()).toEqual({});
+      expect(holds.of("github").heldTasks).toBe(0);
     });
 
     it("once shutdown starts, reconciles no further owned task and claims nothing", async () => {
@@ -1458,7 +1458,7 @@ describe("TaskProcessorService", () => {
       await service.stop();
 
       expect(readEvents).not.toHaveBeenCalled();
-      expect(holds.stats().github?.heldTasks).toBe(1);
+      expect(holds.of("github").heldTasks).toBe(1);
     });
 
     it("a dropped send advances the cursor, then ends this task's events for the tick", async () => {
@@ -1502,7 +1502,7 @@ describe("TaskProcessorService", () => {
       await new Promise<void>((r) => setTimeout(r, 30));
       await service.stop();
 
-      expect(holds.stats()).toEqual({});
+      expect(holds.of("linear").heldTasks).toBe(0);
     });
 
     it("renews every lease this pod holds right before each reconcile; a lost lease skips that task", async () => {

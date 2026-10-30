@@ -196,6 +196,20 @@ describe("Intake", () => {
       expect(round?.reply_targets).toEqual([session("d:7", 7)]);
     });
 
+    it("rejects an order that isn't a non-negative integer; a valid order still dedupes", async () => {
+      await assignLinear(session("d:5", 5));
+      for (const bad of [Number.NaN, -1, 1.5]) {
+        await expect(assignLinear(session("d:5", bad))).rejects.toThrow(
+          "target.order must be a non-negative integer",
+        );
+      }
+      expect((await assignLinear(session("d:5", 5))).result).toBe("duplicate");
+      const [round] = await db.execute<{ reply_targets: ReplyTarget[] }>(
+        sql`SELECT reply_targets FROM inbox`,
+      );
+      expect(round?.reply_targets).toEqual([session("d:5", 5)]);
+    });
+
     it("a duplicate kills nothing", async () => {
       const { taskId } = await assignLinear(session("sess-1"));
       await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-1' WHERE id = ${taskId}`);
@@ -314,7 +328,7 @@ describe("Intake", () => {
     });
 
     it("a review whose id equals a stored comment id is a duplicate while the old index exists", async () => {
-      // changes in phase 3 (spec I9: the old (source, external_id) index goes)
+      // characterization: changes in phase 3 (spec I9: the old (source, external_id) index goes)
       const task = await insertTask({ key: "DBX-API-1" });
       await intake.followUp({ task, message: ghComment("555"), targets: [ghTarget("555")] });
       const review = await intake.followUp({
@@ -423,6 +437,14 @@ describe("Intake", () => {
       });
       expect(review).toEqual({ roundId: expect.any(String) });
     });
+  });
+
+  it("restart is API-only", async () => {
+    const task = await insertTask({ source: "linear", externalId: "issue-1", key: "ISS-1" });
+    const def = { title: "T2", description: null, flags: [] };
+    await expect(intake.restart(task.id, def)).rejects.toThrow("is not an API task");
+    const [row] = await db.execute(sql`SELECT title FROM tasks`);
+    expect(row).toEqual({ title: "t" });
   });
 
   it("findTask matches on source and external id", async () => {

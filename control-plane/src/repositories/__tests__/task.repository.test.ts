@@ -119,7 +119,7 @@ describe("TaskRepository", () => {
   });
 
   describe("assign (Linear created)", () => {
-    it("inserts task + inbox row in one tx, created=true on fresh insert", async () => {
+    it("inserts task + inbox row in one tx; a fresh insert is created", async () => {
       const result = await assignLinear({ session: "sess-1", flags: ["FAST_PATH"] });
 
       expect(result.result).toBe("created");
@@ -152,7 +152,7 @@ describe("TaskRepository", () => {
       });
     });
 
-    it("created=false on conflict; inbox INSERT is a no-op; existing reply_targets persist", async () => {
+    it("a redelivery is a duplicate; inbox INSERT is a no-op; existing reply_targets persist", async () => {
       await assignLinear({ session: "sess-1" });
 
       // Seed a durable retry budget on the existing row. A duplicate `created`

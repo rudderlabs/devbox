@@ -58,7 +58,7 @@ describe("ReplyHolds", () => {
       at(15 * 60_000);
       holds.hold("t1", event(6), "github", err);
       expect(warn).toHaveBeenCalledTimes(3);
-      expect(holds.stats()).toEqual({ github: { heldTasks: 1, oldestHoldMs: 0 } });
+      expect(holds.of("github")).toEqual({ heldTasks: 1, oldestHoldAgeMs: 0 });
     } finally {
       warn.mockRestore();
     }
@@ -73,13 +73,12 @@ describe("ReplyHolds", () => {
     holds.hold("b", event(1), "linear", err);
     holds.hold("c", event(1), "github", err);
     at(120_000);
-    expect(holds.stats()).toEqual({
-      linear: { heldTasks: 2, oldestHoldMs: 120_000 },
-      github: { heldTasks: 1, oldestHoldMs: 60_000 },
-    });
+    expect(holds.of("linear")).toEqual({ heldTasks: 2, oldestHoldAgeMs: 120_000 });
+    expect(holds.of("github")).toEqual({ heldTasks: 1, oldestHoldAgeMs: 60_000 });
 
     holds.release("a");
     holds.retain(new Set(["a", "b"]));
-    expect(holds.stats()).toEqual({ linear: { heldTasks: 1, oldestHoldMs: 60_000 } });
+    expect(holds.of("linear")).toEqual({ heldTasks: 1, oldestHoldAgeMs: 60_000 });
+    expect(holds.of("github")).toEqual({ heldTasks: 0, oldestHoldAgeMs: 0 });
   });
 });

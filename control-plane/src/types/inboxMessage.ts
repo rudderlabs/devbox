@@ -33,8 +33,8 @@ export type AssignmentPayload = TaskIdentity & {
   title: string;
   description: string | null;
   external_url: string;
-  // Linear agent session id. Matches the row's reply_targets[0].id (a
-  // linear_session target); daemon stamps it as the per-round `--target` for
+  // The delegation id (Linear: the agent session id). Matches the row's
+  // reply_targets[0].id; daemon stamps it as the per-round `--target` for
   // emits.
   target_id: string;
 };

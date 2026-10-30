@@ -13,7 +13,8 @@
 //
 // `target_id` is always present and matches an inbox row's reply_targets[]
 // entry:
-//   - assignment: the Linear agent session id (AssignmentPayload.target_id)
+//   - assignment: the delegation id (AssignmentPayload.target_id; Linear's
+//     is the agent session id)
 //   - comment: the GH comment id (CommentPayload.target_id)
 //   - review: a review_body or inline-comment target_id (the agent picks one
 //     per item for response; for thought/action it conventionally targets

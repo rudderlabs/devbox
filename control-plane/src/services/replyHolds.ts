@@ -68,19 +68,12 @@ export class ReplyHolds {
 
   // One integration's held tasks and oldest hold age, for its status body.
   of(integration: IntegrationName): { heldTasks: number; oldestHoldAgeMs: number } {
-    const s = this.stats()[integration];
-    return { heldTasks: s?.heldTasks ?? 0, oldestHoldAgeMs: s?.oldestHoldMs ?? 0 };
-  }
-
-  // Held tasks and the oldest hold's age, per integration.
-  stats(): Partial<Record<IntegrationName, { heldTasks: number; oldestHoldMs: number }>> {
     const now = Date.now();
-    const out: Partial<Record<IntegrationName, { heldTasks: number; oldestHoldMs: number }>> = {};
+    const out = { heldTasks: 0, oldestHoldAgeMs: 0 };
     for (const h of this.byTask.values()) {
-      const s = out[h.integration] ?? { heldTasks: 0, oldestHoldMs: 0 };
-      s.heldTasks += 1;
-      s.oldestHoldMs = Math.max(s.oldestHoldMs, now - h.since);
-      out[h.integration] = s;
+      if (h.integration !== integration) continue;
+      out.heldTasks += 1;
+      out.oldestHoldAgeMs = Math.max(out.oldestHoldAgeMs, now - h.since);
     }
     return out;
   }
