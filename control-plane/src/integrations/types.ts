@@ -1,12 +1,27 @@
-import type { Task } from "../db/schema";
+import type { Task, taskSource } from "../db/schema";
 import type { logger } from "../logger";
 import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
+import type { ApiTaskSource } from "../types/api";
+import type { InboxSource } from "../types/inboxMessage";
 import type { Outbound, SendCtx } from "./outbound";
 
 type Logger = typeof logger;
 
-// One per task/round source (today's InboxSource).
+// The sources a task can have (the task_source enum).
+export type TaskSource = (typeof taskSource.enumValues)[number];
+// One per task/round source (InboxSource).
 export type IntegrationName = "linear" | "api" | "github";
+
+// Compile-time checks: the literal unions kept where db/schema can't be
+// imported (types/api.ts is bundled into the CLI) match what they mirror, so a
+// new source fails the build until each is updated.
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type Assert<T extends true> = T;
+export type SourceChecks = [
+  Assert<Equal<InboxSource, IntegrationName>>,
+  Assert<Equal<ApiTaskSource, TaskSource>>,
+];
 
 export interface Integration {
   name: IntegrationName;

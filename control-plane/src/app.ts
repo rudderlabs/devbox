@@ -10,6 +10,7 @@ import { db } from "./db";
 import { taskSource } from "./db/schema";
 import { apiIntegration } from "./integrations/api";
 import { githubIntegration } from "./integrations/github";
+import { Intake } from "./integrations/intake";
 import { LinearIntegration } from "./integrations/linear";
 import type { Integration, IntegrationName } from "./integrations/types";
 import { logger } from "./logger";
@@ -95,16 +96,22 @@ export function createApp(): AppBundle {
   const replyHolds = new ReplyHolds();
   // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.
   const hooks = new IntegrationHooks(integrations, inboxRepository);
+  // The only way tasks and rounds are created; a restart's preempted sandbox
+  // is killed in the hooks' tracked detached set.
+  const intake = new Intake(taskRepository, inboxRepository, sandboxManager, hooks, {
+    apiKeyPrefix: config.api.taskKeyPrefix,
+    ciResultMaxPerTask: config.github.ciResultMaxPerTask,
+  });
 
-  const inboxService = new InboxService(inboxRepository, sandboxManager, integrations, hooks);
-
-  const agentSessionService = new AgentSessionService(
-    taskRepository,
+  const inboxService = new InboxService(
     inboxRepository,
-    linearTokenProvider,
     sandboxManager,
-    inboxService,
+    integrations,
+    hooks,
+    intake,
   );
+
+  const agentSessionService = new AgentSessionService(intake, linearTokenProvider, inboxService);
 
   const slackNotifier = new SlackNotifierService(
     taskRepository,
@@ -147,7 +154,7 @@ export function createApp(): AppBundle {
     ? new LinearWebhookController(agentSessionService, (at) => linearStatus.recordWebhook(at))
     : undefined;
   const githubWebhookController = config.github.webhooks
-    ? new GitHubWebhookController(inboxService, taskRepository, config.github.webhooks)
+    ? new GitHubWebhookController(inboxService, intake, config.github.webhooks)
     : undefined;
   const githubStatus = new GithubStatusService(githubTokenState, {
     enabled: githubWebhookController !== undefined,
@@ -167,17 +174,10 @@ export function createApp(): AppBundle {
   // internal ingress exists must expose nothing.
   let stopApiStreams = () => {};
   if (config.api.enabled) {
-    const apiTaskService = new ApiTaskService(
-      apiTaskRepository,
-      taskRepository,
-      taskEventRepository,
-      sandboxManager,
-      {
-        keyPrefix: config.api.taskKeyPrefix,
-        publicBaseUrl: config.api.publicBaseUrl,
-        now: () => new Date(),
-      },
-    );
+    const apiTaskService = new ApiTaskService(apiTaskRepository, intake, taskEventRepository, {
+      publicBaseUrl: config.api.publicBaseUrl,
+      now: () => new Date(),
+    });
     const apiController = new ApiController(apiTaskService, {
       authEnabled: config.api.authEnabled,
       ssePollMs: config.api.ssePollMs,

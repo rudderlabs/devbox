@@ -4,12 +4,11 @@ import type { InboxRepository, InboxRow } from "../../repositories/inbox.reposit
 import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
 
-// Pin the two config values InboxService reads (podId, the ci_result cap) so
-// results do not depend on the environment the suite runs in.
+// Pin the config value InboxService reads (podId) so results do not depend on
+// the environment the suite runs in.
 mock.module("../../config", () => ({
   config: {
     podId: "pod-test",
-    github: { ciResultMaxPerTask: 20 },
   },
 }));
 
@@ -128,8 +127,7 @@ describe("InboxService", () => {
   let listNonTerminalByTask: ReturnType<typeof mock>;
   let markDelivered: ReturnType<typeof mock>;
   let markFailed: ReturnType<typeof mock>;
-  let appendInbox: ReturnType<typeof mock>;
-  let countCiResultsByTask: ReturnType<typeof mock>;
+  let followUp: ReturnType<typeof mock>;
   let writeHarnessFile: ReturnType<typeof mock>;
   let killSandbox: ReturnType<typeof mock>;
   let getById: ReturnType<typeof mock>;
@@ -157,8 +155,7 @@ describe("InboxService", () => {
     listNonTerminalByTask = mock(() => Promise.resolve([] as InboxRow[]));
     markDelivered = mock(() => Promise.resolve());
     markFailed = mock(() => Promise.resolve([{ id: "x" }]));
-    appendInbox = mock(() => Promise.resolve({ id: "inbox-new" }));
-    countCiResultsByTask = mock(() => Promise.resolve(0));
+    followUp = mock(() => Promise.resolve({ roundId: "inbox-new" }));
     getById = mock((id: string) => Promise.resolve(ghCommentRow(id)));
     inboxRepo = {
       listPendingByTask,
@@ -166,8 +163,6 @@ describe("InboxService", () => {
       getById,
       markDelivered,
       markFailed,
-      appendInbox,
-      countCiResultsByTask,
     } as unknown as InboxRepository;
 
     writeHarnessFile = mock(() => Promise.resolve());
@@ -188,6 +183,7 @@ describe("InboxService", () => {
       sandboxManager,
       integrations,
       new IntegrationHooks(integrations, inboxRepo),
+      { followUp },
     );
   });
 
@@ -526,26 +522,28 @@ describe("InboxService", () => {
         createdAt: "2026-04-23T10:00:00Z",
       });
 
-      const arg = appendInbox.mock.calls[0]?.[0] as {
+      const arg = followUp.mock.calls[0]?.[0] as {
+        task: { id: string; key: string };
         message: {
           source: string;
           kind: string;
           external_id: string;
-          payload: { target_id: string; task_key: string; created_at: string };
+          payload: { target_id: string; created_at: string };
         };
-        replyTargets: Array<{ id: string }>;
+        targets: Array<{ id: string }>;
+        prUrl: string;
       };
       expect(arg.message.source).toBe("github");
       expect(arg.message.kind).toBe("comment");
       expect(arg.message.external_id).toBe("555");
       expect(arg.message.payload.target_id).toBe("555");
-      expect(arg.message.payload).toMatchObject({
-        task_id: "task-1",
-        task_key: "XYZ-1",
-      });
+      // followUp stamps task_id / task_key from the task.
+      expect(arg.task).toMatchObject({ id: "task-1", key: "XYZ-1" });
       // The comment's created_at is carried into the payload for temporal scoping.
       expect(arg.message.payload.created_at).toBe("2026-04-23T10:00:00Z");
-      expect(arg.replyTargets[0]?.id).toBe("555");
+      expect(arg.targets[0]?.id).toBe("555");
+      // Dropped as stale if a restart has since cleared the PR from the task.
+      expect(arg.prUrl).toBe("https://github.com/o/r/pull/7");
     });
   });
 
@@ -566,7 +564,7 @@ describe("InboxService", () => {
         createdAt: "2026-04-23T10:00:00Z",
       });
 
-      const arg = appendInbox.mock.calls[0]?.[0] as {
+      const arg = followUp.mock.calls[0]?.[0] as {
         message: {
           kind: string;
           payload: {
@@ -582,7 +580,7 @@ describe("InboxService", () => {
             }>;
           };
         };
-        replyTargets: Array<{
+        targets: Array<{
           id: string;
           spec: {
             kind: string;
@@ -601,7 +599,7 @@ describe("InboxService", () => {
         pr_url: "https://github.com/o/r/pull/7",
       });
       // 2 inline + 1 review_body
-      expect(arg.replyTargets).toHaveLength(3);
+      expect(arg.targets).toHaveLength(3);
       expect(arg.message.payload.inline_comments[0]).toMatchObject({
         target_id: "11",
         path: "a.ts",
@@ -609,11 +607,11 @@ describe("InboxService", () => {
         start_line: 1,
       });
       expect(arg.message.payload.inline_comments[1]?.start_line).toBeUndefined();
-      expect(arg.replyTargets[0]).toMatchObject({
+      expect(arg.targets[0]).toMatchObject({
         id: "11",
         spec: { kind: "review_comment", startLine: 1 },
       });
-      expect(arg.replyTargets[1]?.spec.startLine).toBeUndefined();
+      expect(arg.targets[1]?.spec.startLine).toBeUndefined();
     });
   });
 
@@ -626,24 +624,22 @@ describe("InboxService", () => {
         body: "any update?",
       });
 
-      const arg = appendInbox.mock.calls[0]?.[0] as {
+      const arg = followUp.mock.calls[0]?.[0] as {
+        task: { id: string; key: string };
         message: {
           source: string;
           external_id: string;
-          payload: { task_key: string; target_id: string };
+          payload: { target_id: string };
         };
-        replyTargets: Array<{ id: string; spec: { kind: string } }>;
+        targets: Array<{ id: string; spec: { kind: string } }>;
       };
       expect(arg.message.source).toBe("linear");
       expect(arg.message.external_id).toBe("act-1");
-      expect(arg.message.payload).toMatchObject({
-        task_id: "task-1",
-        task_key: "XYZ-1",
-      });
+      expect(arg.task).toMatchObject({ id: "task-1", key: "XYZ-1" });
       // Replies route to the session, not the activity.
       expect(arg.message.payload.target_id).toBe("sess-1");
-      expect(arg.replyTargets[0]?.id).toBe("sess-1");
-      expect(arg.replyTargets[0]?.spec.kind).toBe("linear_session");
+      expect(arg.targets[0]?.id).toBe("sess-1");
+      expect(arg.targets[0]?.spec.kind).toBe("linear_session");
     });
   });
 
@@ -664,7 +660,8 @@ describe("InboxService", () => {
         prNumber: 42,
       });
 
-      const arg = appendInbox.mock.calls[0]?.[0] as {
+      const arg = followUp.mock.calls[0]?.[0] as {
+        task: { id: string; key: string };
         message: {
           source: string;
           kind: string;
@@ -677,11 +674,10 @@ describe("InboxService", () => {
             run_url: string;
             head_sha: string;
             head_branch: string;
-            task_key: string;
             pr: { repo: string; pr_url: string };
           };
         };
-        replyTargets: Array<{
+        targets: Array<{
           id: string;
           spec: { kind: string; owner: string; repo: string; prNumber: number; commentId: number };
         }>;
@@ -696,57 +692,27 @@ describe("InboxService", () => {
       expect(arg.message.payload.run_url).toBe("https://github.com/o/r/actions/runs/123456789");
       expect(arg.message.payload.head_sha).toBe("abc123");
       expect(arg.message.payload.head_branch).toBe("devbox/XYZ-1234-fix");
-      expect(arg.message.payload).toMatchObject({
-        task_id: "task-1",
-        task_key: "XYZ-1",
-      });
+      expect(arg.task).toMatchObject({ id: "task-1", key: "XYZ-1" });
       expect(arg.message.payload.pr).toEqual({
         repo: "r",
         pr_url: "https://github.com/o/r/pull/42",
       });
-      expect(arg.replyTargets).toHaveLength(1);
-      expect(arg.replyTargets[0]).toMatchObject({
+      expect(arg.targets).toHaveLength(1);
+      expect(arg.targets[0]).toMatchObject({
         id: "123456789",
         spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 42, commentId: 0 },
       });
     });
-
-    const ciParams = {
-      task: makeTask(),
-      runId: 123456789,
-      runAttempt: 2,
-      workflowName: "CI",
-      workflowPath: ".github/workflows/ci.yml",
-      conclusion: "failure",
-      runUrl: "https://github.com/o/r/actions/runs/123456789",
-      headSha: "abc123",
-      headBranch: "devbox/XYZ-1234-fix",
-      owner: "o",
-      repo: "r",
-      prNumber: 42,
-    };
-
-    it("enqueues when under the loop-breaker threshold", async () => {
-      countCiResultsByTask.mockResolvedValue(19); // < 20
-      await service.enqueueCiResult(ciParams);
-      expect(appendInbox).toHaveBeenCalledTimes(1);
-    });
-
-    it("drops the CI failure once the loop-breaker threshold is reached", async () => {
-      countCiResultsByTask.mockResolvedValue(20); // >= 20
-      await service.enqueueCiResult(ciParams);
-      expect(appendInbox).not.toHaveBeenCalled();
-    });
   });
 
-  describe("enqueue paths carry task_id and task_key from the task row", () => {
+  // followUp stamps task_id and task_key from the task it is handed.
+  describe("enqueue paths hand followUp the task row", () => {
     const apiTask = makeTask({
       id: "task-api",
       source: "api",
       key: "DBX-API-7",
       externalUrl: "https://cp.example/api/tasks/DBX-API-7",
     });
-    const identity = { task_id: "task-api", task_key: "DBX-API-7" };
     const spec = {
       kind: "issue_comment" as const,
       owner: "o",
@@ -763,8 +729,8 @@ describe("InboxService", () => {
         spec,
         createdAt: "2026-10-07T12:00:00Z",
       });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-api",
+      expect(followUp).toHaveBeenCalledWith({
+        task: apiTask,
         message: {
           source: "github",
           kind: "comment",
@@ -774,10 +740,10 @@ describe("InboxService", () => {
             body: "@harness fix",
             pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
             created_at: "2026-10-07T12:00:00Z",
-            ...identity,
           },
         },
-        replyTargets: [{ id: "555", spec }],
+        targets: [{ id: "555", spec }],
+        prUrl: "https://github.com/o/r/pull/7",
       });
     });
 
@@ -793,8 +759,8 @@ describe("InboxService", () => {
         reviewerLogin: "rev",
         createdAt: "2026-10-07T12:00:00Z",
       });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-api",
+      expect(followUp).toHaveBeenCalledWith({
+        task: apiTask,
         message: {
           source: "github",
           kind: "review",
@@ -807,10 +773,10 @@ describe("InboxService", () => {
             pr: { owner: "o", repo: "r", prNumber: 7, pr_url: "https://github.com/o/r/pull/7" },
             reviewer_login: "rev",
             created_at: "2026-10-07T12:00:00Z",
-            ...identity,
           },
         },
-        replyTargets: [
+        prUrl: "https://github.com/o/r/pull/7",
+        targets: [
           {
             id: "11",
             spec: {
@@ -848,8 +814,8 @@ describe("InboxService", () => {
         repo: "r",
         prNumber: 7,
       });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-api",
+      expect(followUp).toHaveBeenCalledWith({
+        task: apiTask,
         message: {
           source: "github",
           kind: "ci_result",
@@ -863,10 +829,10 @@ describe("InboxService", () => {
             head_sha: "abc",
             head_branch: "devbox/DBX-API-7-x",
             pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
-            ...identity,
           },
         },
-        replyTargets: [
+        prUrl: "https://github.com/o/r/pull/7",
+        targets: [
           {
             id: "9",
             spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: 0 },
@@ -876,14 +842,15 @@ describe("InboxService", () => {
     });
 
     it("enqueueLinearComment", async () => {
+      const task = makeTask({ id: "task-1", key: "XYZ-1" });
       await service.enqueueLinearComment({
-        task: makeTask({ id: "task-1", key: "XYZ-1" }),
+        task,
         agentActivityId: "act-1",
         agentSessionId: "sess-2",
         body: "follow-up",
       });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-1",
+      expect(followUp).toHaveBeenCalledWith({
+        task,
         message: {
           source: "linear",
           kind: "comment",
@@ -893,11 +860,9 @@ describe("InboxService", () => {
             body: "follow-up",
             pr: null,
             created_at: "",
-            task_id: "task-1",
-            task_key: "XYZ-1",
           },
         },
-        replyTargets: [{ id: "sess-2", spec: { kind: "linear_session" } }],
+        targets: [{ id: "sess-2", spec: { kind: "linear_session" } }],
       });
     });
   });

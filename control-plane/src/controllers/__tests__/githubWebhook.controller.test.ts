@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Hono } from "hono";
 import type { Task } from "../../db/schema";
+import type { TaskIntake } from "../../integrations/intake";
 import { logger } from "../../logger";
-import type { TaskRepository } from "../../repositories/task.repository";
 import type { InboxService } from "../../services/inbox.service";
 
 const WEBHOOK_SECRET = "gh-test-secret";
@@ -373,7 +373,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       enqueueReview,
       enqueueCiResult,
     } as unknown as InboxServiceLike as InboxService;
-    const taskRepo = { findByPrUrl } as unknown as TaskRepository;
+    const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskIntake;
     // Reset the module-mocked fetchOrgMembers so per-test mockImplementationOnce
     // overrides don't leak across cases. Default: resolves to the trusted-set
     // logins used across positive-path bodies. The bot login `acme-bot[bot]` is
@@ -384,7 +384,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     getUserIdByLogin.mockReset();
     getUserIdByLogin.mockResolvedValue(null);
     clock = { now: 1_000_000 };
-    controller = new GitHubWebhookController(inboxService, taskRepo, SETTINGS, () => clock.now);
+    controller = new GitHubWebhookController(inboxService, intake, SETTINGS, () => clock.now);
     const a = new Hono();
     a.post("/webhook/github", (c) => controller.handleWebhook(c));
     return a;
@@ -968,11 +968,11 @@ describe("GitHubWebhookController.handleWebhook", () => {
       enqueueReview: mock(() => Promise.resolve()),
       enqueueCiResult: flagOffEnqueueCiResult,
     } as unknown as InboxService;
-    const flagOffRepo = { findByPrUrl: flagOffFindByPrUrl } as unknown as TaskRepository;
+    const flagOffIntake = { findTaskByPrUrl: flagOffFindByPrUrl } as unknown as TaskIntake;
     fetchOrgMembers.mockResolvedValue(new Set([1, 2, 3]) as ReadonlySet<number>);
     const flagOffApp = new Hono();
     flagOffApp.post("/webhook/github", (c) =>
-      new Ctrl(flagOffService, flagOffRepo, SETTINGS).handleWebhook(c),
+      new Ctrl(flagOffService, flagOffIntake, SETTINGS).handleWebhook(c),
     );
 
     const body = workflowRunBody();
@@ -1136,10 +1136,10 @@ describe("GitHubWebhookController.handleWebhook", () => {
         enqueueReview,
         enqueueCiResult,
       } as unknown as InboxService;
-      const taskRepo = { findByPrUrl } as unknown as TaskRepository;
+      const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskIntake;
       controller = new GitHubWebhookController(
         inboxService,
-        taskRepo,
+        intake,
         { ...SETTINGS, ...settings },
         () => clock.now,
       );

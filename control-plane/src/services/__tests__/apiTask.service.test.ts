@@ -7,7 +7,9 @@ mock.module("../../config", () => ({ config: { databaseUrl: TEST_DATABASE_URL } 
 
 const { db } = await import("../../db");
 const { ApiTaskRepository } = await import("../../repositories/apiTask.repository");
+const { InboxRepository } = await import("../../repositories/inbox.repository");
 const { TaskRepository } = await import("../../repositories/task.repository");
+const { Intake } = await import("../../integrations/intake");
 const { TaskEventRepository } = await import("../../repositories/taskEvent.repository");
 const { ApiTaskService } = await import("../apiTask.service");
 const { ApiError } = await import("../../errors");
@@ -41,17 +43,17 @@ describe("ApiTaskService", () => {
     );
     principal.tokenId = (tok as { id: string }).id;
     killSandbox = mock(() => Promise.resolve());
-    service = new ApiTaskService(
-      new ApiTaskRepository(),
+    const intake = new Intake(
       new TaskRepository(),
-      new TaskEventRepository(),
+      new InboxRepository(),
       { killSandbox },
-      {
-        keyPrefix: "DBX-API-",
-        publicBaseUrl: "https://api.example",
-        now: () => new Date(T0),
-      },
+      { detach: () => {} },
+      { apiKeyPrefix: "DBX-API-", ciResultMaxPerTask: 20 },
     );
+    service = new ApiTaskService(new ApiTaskRepository(), intake, new TaskEventRepository(), {
+      publicBaseUrl: "https://api.example",
+      now: () => new Date(T0),
+    });
   });
 
   it("create returns the whole task resource", async () => {

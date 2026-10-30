@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "../db";
 import type { Task } from "../db/schema";
+import { logger } from "../logger";
 import type {
   AssignmentPayload,
   InboxKind,
@@ -8,7 +9,7 @@ import type {
   InboxSource,
   TaskIdentity,
 } from "../types/inboxMessage";
-import { insertCpEventIfApi } from "./taskEvent.repository";
+import { insertCpEventIfApi, type SqlExecutor, type Tx } from "./taskEvent.repository";
 
 // Re-export contract types so existing repo-import sites stay valid without
 // reaching into types/ directly.
@@ -65,7 +66,23 @@ export type ReplyTarget = {
   // event from the daemon routes to the right thread.
   id: string;
   spec: ReplyTargetSpec;
+  // An assignment's delegation order, when the platform has one: a delegation
+  // whose order is not above the stored one is a duplicate (TaskIntake.assign).
+  order?: number;
 };
+
+// A row to insert: the wire message without its id, per (source, kind) arm so
+// source, kind and payload stay paired.
+type WithoutId<M> = M extends InboxMessage ? Omit<M, "id"> : never;
+export type NewInboxMessage = WithoutId<InboxMessage>;
+
+// A Postgres unique violation (23505) on `constraint`. drizzle wraps the
+// driver's error in `cause`.
+export function isUniqueViolation(err: unknown, constraint: string): boolean {
+  const e = (err as { cause?: unknown })?.cause ?? err;
+  const pg = e as { errno?: unknown; constraint?: unknown };
+  return pg.errno === "23505" && pg.constraint === constraint;
+}
 
 // Assignment content as callers build it. The identity fields are stamped by
 // the repository from the tasks row (see TaskRepository).
@@ -137,44 +154,116 @@ function asRows<T>(result: unknown): T[] {
 
 export class InboxRepository {
   // INSERT (synthetic uuid PK auto-generated). Idempotent on
-  // (source, external_id) via the unique index. Returns the synthetic id on
-  // insert, null on conflict.
-  //
-  // `message` is the wire contract sans `id` — the tagged union forbids
-  // invalid (source, kind) combos at the type level.
-  async appendInbox(params: {
-    taskId: string;
-    message: Omit<InboxMessage, "id">;
-    replyTargets: ReplyTarget[];
-  }): Promise<{ id: string } | null> {
+  // (source, kind, external_id) via the unique index. Returns the synthetic id
+  // on insert, null on conflict. Given a transaction, it inserts in a
+  // savepoint, so a unique violation leaves that transaction usable.
+  async appendInbox(
+    params: {
+      taskId: string;
+      message: NewInboxMessage;
+      replyTargets: ReplyTarget[];
+    },
+    tx?: Tx,
+  ): Promise<{ id: string } | null> {
     const { source, kind, external_id, payload } = params.message;
     // bun-sql JSON-encodes a JS string param, so `${jsonStr}::jsonb` would
     // store a JSON *string scalar*, not the array/object. Casting via
     // `::text::jsonb` forces PG to parse the raw text into proper jsonb.
     const payloadJson = JSON.stringify(payload);
     const replyTargetsJson = JSON.stringify(params.replyTargets ?? []);
-    const result = await db.execute<{ id: string }>(sql`
-      INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
-           VALUES (${params.taskId}, ${source}, ${kind}, ${external_id},
-                   ${payloadJson}::text::jsonb, ${replyTargetsJson}::text::jsonb)
-      ON CONFLICT (source, external_id) DO NOTHING
-      RETURNING id;
-    `);
-    return asRows<{ id: string }>(result)[0] ?? null;
+    const insert = (ex: SqlExecutor) =>
+      ex.execute<{ id: string }>(sql`
+        INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
+             VALUES (${params.taskId}, ${source}, ${kind}, ${external_id},
+                     ${payloadJson}::text::jsonb, ${replyTargetsJson}::text::jsonb)
+        ON CONFLICT (source, kind, external_id) DO NOTHING
+        RETURNING id;
+      `);
+    try {
+      const result = await (tx ? tx.transaction(insert) : insert(db));
+      return asRows<{ id: string }>(result)[0] ?? null;
+    } catch (err) {
+      // Until phase 3 drops it, the old (source, external_id) index also
+      // rejects a row whose id another kind of the same source already uses,
+      // with a 23505 instead of DO NOTHING. Dedupe it as before; phase 3
+      // removes this with the index.
+      if (isUniqueViolation(err, "inbox_source_external_uniq")) return null;
+      throw err;
+    }
   }
 
-  // Count of ci_result rows already forwarded for a task — the loop breaker's
-  // denominator. Counts every ci_result row regardless of status: a 'failed'
-  // or 'responded' row still represents a CI failure harness already saw, so
-  // it must count toward the runaway threshold. Enqueue is idempotent on
-  // (source, external_id) = workflow_run:run:attempt:pr, so a redelivered
-  // webhook does not inflate this count.
-  async countCiResultsByTask(taskId: string): Promise<number> {
-    const result = await db.execute<{ n: number }>(sql`
-      SELECT COUNT(*)::int AS n FROM inbox
-       WHERE task_id = ${taskId} AND source = 'github' AND kind = 'ci_result';
-    `);
-    return asRows<{ n: number }>(result)[0]?.n ?? 0;
+  // TaskIntake.followUp's transaction. Locks the task row first: tasks before
+  // inbox, and task_events ids handed out in commit order per task. Drops the
+  // round when `prUrl` is no longer one of the task's PRs (a restart cleared
+  // it) or when the CI loop breaker trips, and as a duplicate when the round is
+  // already stored. message_queued is written for an inserted API message.
+  async appendFollowUp(p: {
+    taskId: string;
+    message: NewInboxMessage;
+    replyTargets: ReplyTarget[];
+    prUrl?: string;
+    ciResultMax: number;
+  }): Promise<{ roundId: string } | { dropped: "duplicate" | "stale" | "ci_limit" }> {
+    const { message } = p;
+    const hasPr =
+      p.prUrl === undefined
+        ? sql`true`
+        : sql`pr_urls @> jsonb_build_array(jsonb_build_object('url', ${p.prUrl}::text))`;
+    return db.transaction(async (tx) => {
+      const [task] = asRows<{ has_pr: boolean }>(
+        await tx.execute(
+          sql`SELECT ${hasPr} AS has_pr FROM tasks WHERE id = ${p.taskId} FOR NO KEY UPDATE`,
+        ),
+      );
+      if (!task) throw new Error(`appendFollowUp: task ${p.taskId} not found`);
+      if (!task.has_pr) {
+        logger.info("follow-up dropped: the PR is no longer on the task", {
+          taskId: p.taskId,
+          prUrl: p.prUrl,
+        });
+        return { dropped: "stale" };
+      }
+
+      // Loop breaker. harness fixes CI → pushes → CI re-runs → may fail again,
+      // ad infinitum. Once a task has accumulated `ciResultMax` ci_result rows,
+      // stop forwarding new failures. Every row counts regardless of status: a
+      // 'failed' or 'responded' row is still a CI failure the harness saw. The
+      // count runs under the task lock, so concurrent webhooks can't overshoot.
+      // 0 / negative disables the breaker.
+      if (message.kind === "ci_result" && p.ciResultMax > 0) {
+        const [count] = asRows<{ n: number }>(
+          await tx.execute(sql`
+            SELECT COUNT(*)::int AS n FROM inbox
+             WHERE task_id = ${p.taskId} AND source = 'github' AND kind = 'ci_result';
+          `),
+        );
+        const seen = count?.n ?? 0;
+        if (seen >= p.ciResultMax) {
+          logger.warn("ci_result loop breaker tripped — dropping CI failure", {
+            taskId: p.taskId,
+            seen,
+            max: p.ciResultMax,
+            externalId: message.external_id,
+          });
+          return { dropped: "ci_limit" };
+        }
+      }
+
+      const row = await this.appendInbox(
+        { taskId: p.taskId, message, replyTargets: p.replyTargets },
+        tx,
+      );
+      if (!row) return { dropped: "duplicate" };
+      if (message.source === "api" && message.kind === "comment") {
+        await insertCpEventIfApi(tx, {
+          taskId: p.taskId,
+          type: "message_queued",
+          inboxId: row.id,
+          data: { body: message.payload.body },
+        });
+      }
+      return { roundId: row.id };
+    });
   }
 
   // Rows still awaiting delivery to the sandbox (status = 'pending').

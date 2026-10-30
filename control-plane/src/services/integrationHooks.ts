@@ -20,6 +20,8 @@ const HOOK_TIMEOUT_MS = {
   assignee: 15_000,
 } as const;
 type HookName = keyof typeof HOOK_TIMEOUT_MS;
+// What a detached promise is doing, for the shutdown log.
+type DetachedWork = HookName | "killSandbox";
 
 // Runs integrations' lifecycle hooks (§4). onTaskStarted, onPrOpened and
 // assignee go to the task's own integration; onRoundFinished goes to the
@@ -29,7 +31,7 @@ type HookName = keyof typeof HOOK_TIMEOUT_MS;
 // pr_opened as it holds a send (the hook must be idempotent). Detached work is
 // tracked so TaskProcessor.stop() can drain it.
 export class IntegrationHooks {
-  private readonly detached = new Map<Promise<void>, { taskId: string; hook: HookName }>();
+  private readonly detached = new Map<Promise<void>, { taskId: string; hook: DetachedWork }>();
   // Assignment ids whose onTaskStarted already ran on this pod: a provision
   // deferred by a transient error runs again for the same assignment.
   // ponytail: one id per started task for the pod's lifetime; prune if that ever matters.
@@ -108,8 +110,9 @@ export class IntegrationHooks {
     );
   }
 
-  // Tracks detached work (a hook, or core work that calls one) for drain().
-  detach(taskId: string, hook: HookName, work: Promise<unknown>): void {
+  // Tracks detached work (a hook, core work that calls one, or a restart's
+  // sandbox kill) for drain().
+  detach(taskId: string, hook: DetachedWork, work: Promise<unknown>): void {
     const p: Promise<void> = work
       .then(
         () => {},

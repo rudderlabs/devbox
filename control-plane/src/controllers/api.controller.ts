@@ -1,7 +1,9 @@
 import type { Context } from "hono";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import type { Clock } from "../clock";
+import { taskSource } from "../db/schema";
 import { ApiError } from "../errors";
+import type { TaskSource } from "../integrations/types";
 import { logger } from "../logger";
 import type {
   ApiTaskService,
@@ -37,6 +39,7 @@ const TEXT_MAX_BYTES = 64 * 1024;
 const FLAGS_MAX = 16;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATES: readonly ApiTaskState[] = ["queued", "running", "idle", "failed"];
+const SOURCES: readonly string[] = taskSource.enumValues;
 
 export function errorBody(code: ApiErrorCode, message: string): ApiErrorBody {
   return { error: { code, message } };
@@ -142,7 +145,7 @@ export class ApiController {
   // Last-Event-ID / ?after=. Errors before the first byte are JSON; errors
   // after are logged and close the stream (no message to the client).
   async streamEvents(c: Context<ApiEnv>): Promise<Response> {
-    let target: { id: string; source: "linear" | "api" };
+    let target: { id: string; source: TaskSource };
     let start: number;
     try {
       start = parseStreamStart(c.req.header("last-event-id"), c.req.query("after"));
@@ -205,7 +208,7 @@ export class ApiController {
 
   private async runStream(
     stream: SSEStreamingApi,
-    target: { id: string; source: "linear" | "api" },
+    target: { id: string; source: TaskSource },
     start: number,
     signal: AbortSignal,
   ): Promise<void> {
@@ -369,8 +372,12 @@ function parseListQuery(c: Context): ListTasksInput {
   };
   const source = c.req.query("source");
   if (source !== undefined) {
-    if (source !== "linear" && source !== "api") throw invalid("source must be linear or api");
-    q.source = source;
+    if (!SOURCES.includes(source)) {
+      throw invalid(
+        `source must be ${SOURCES.slice(0, -1).join(", ")} or ${SOURCES[SOURCES.length - 1]}`,
+      );
+    }
+    q.source = source as TaskSource;
   }
   const state = c.req.query("state");
   if (state !== undefined) {

@@ -107,7 +107,7 @@ export type CiResultPayload = TaskIdentity & {
 //   external_id — Upstream identifier (GH comment/review id stringified,
 //                 Linear activity UUID, Linear issue UUID for assignment, the task key for an API assignment;
 //                 a new UUID for an API comment).
-//                 Drives idempotency at CP's `(source, external_id)` unique
+//                 Drives idempotency at CP's `(source, kind, external_id)` unique
 //                 index AND flows through to event reply-target routing.
 //   payload     — Kind-specific body. See the payload types above.
 export type InboxMessage =

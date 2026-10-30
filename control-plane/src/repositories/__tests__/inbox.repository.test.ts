@@ -150,7 +150,9 @@ describe("InboxRepository", () => {
     });
 
     it("dedupes across kinds: a review whose id equals a stored comment id is dropped", async () => {
-      // characterization: changes in phase 2 (spec I9: unique on (source, kind, external_id))
+      // characterization: changes in phase 3 (spec I9: phase 2 adds the
+      // (source, kind, external_id) index, but the old (source, external_id)
+      // one still rejects this row until phase 3 drops it)
       const task = await insertTask();
       await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
 
