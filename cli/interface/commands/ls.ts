@@ -15,6 +15,8 @@ export type LsArgs = CommonArgs & {
 };
 
 const HEADER = ["KEY", "STATE", "TITLE", "DESCRIPTION", "CREATOR", "AGE"];
+// Every task source; the compiler fails here until a new one is listed.
+const SOURCES = Object.keys({ api: true, linear: true } satisfies Record<ApiTaskSource, true>);
 
 export function render(
   tasks: ApiTask[],
@@ -73,7 +75,7 @@ export const ls: CommandModule = {
         .command("ls")
         .description("List tasks, newest first")
         .addOption(
-          new Option("--source <source>", "only tasks from this source").choices(["api", "linear"]),
+          new Option("--source <source>", "only tasks from this source").choices(SOURCES),
         )
         .option("--mine", "only tasks created with your token")
         .addOption(
