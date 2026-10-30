@@ -363,6 +363,18 @@ class GitHubClient:
             expected=(201,),
         )
 
+    # ── Checks ───────────────────────────────────────────────────────────
+    def get_check_run(self, owner: str, repo: str, check_run_id: int) -> dict[str, Any]:
+        return self._request("GET", f"/repos/{owner}/{repo}/check-runs/{check_run_id}")
+
+    def list_check_run_annotations(
+        self, owner: str, repo: str, check_run_id: int
+    ) -> list[dict[str, Any]]:
+        """List a check run's annotations: the file and line of each problem."""
+        return self._request_paginated_list(
+            f"/repos/{owner}/{repo}/check-runs/{check_run_id}/annotations"
+        )
+
 
 # ── Git helpers ──────────────────────────────────────────────────────────────
 
