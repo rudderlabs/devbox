@@ -8,6 +8,7 @@ import {
   emitResponse,
   emitThought,
   getIssueHumanAssignee,
+  setIssueStarted,
   uploadIssueAttachment,
 } from "../../clients/linear";
 import type { LinearWebhookController } from "../../controllers/linearWebhook.controller";
@@ -79,10 +80,29 @@ export class LinearIntegration implements Integration<LinearStatus> {
           if (text) await emitError(client, target.id, text);
           return;
         }
+        default: {
+          const _exhaustive: never = message;
+          void _exhaustive;
+        }
       }
     } catch (err) {
       throw linearRetryable(err) ?? err;
     }
+  }
+
+  // A fresh provision: moves the issue to its team's started state, then shows
+  // "Provisioning" on the session. Each is best-effort; a team without a
+  // started state still gets the action.
+  async onTaskStarted(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void> {
+    const client = await this.client(ctx.signal);
+    await setIssueStarted(client, task.externalId).catch((err: unknown) => {
+      const e = err instanceof Error ? err : new Error(String(err));
+      ctx.log.error(`setIssueStarted failed for task ${task.id}`, {
+        message: e.message,
+        stack: e.stack,
+      });
+    });
+    await emitAction(client, target.id, "Provisioning", "infra");
   }
 
   // Links the PR on the issue. Idempotent (Linear updates an existing link),

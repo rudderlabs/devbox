@@ -153,7 +153,6 @@ export function createApp(): AppBundle {
   const taskProcessor = new TaskProcessorService(
     taskRepository,
     inboxRepository,
-    linearTokenProvider,
     sandboxManager,
     eventDispatcher,
     inboxService,

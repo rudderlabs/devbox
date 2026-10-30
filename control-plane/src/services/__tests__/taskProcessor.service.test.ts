@@ -4,7 +4,8 @@ import { SandboxApiException } from "@alibaba-group/opensandbox";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../../errors";
-import type { Integration } from "../../integrations/types";
+import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import type { Integration, IntegrationName } from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
@@ -190,10 +191,8 @@ describe("TaskProcessorService", () => {
   let notifyTerminal: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
   let holds: InstanceType<typeof ReplyHolds>;
-  let integrations: {
+  let integrations: Record<IntegrationName, Integration> & {
     linear: InstanceType<typeof LinearIntegration>;
-    api: Integration;
-    github: Integration;
   };
   let hooks: InstanceType<typeof IntegrationHooks>;
   let service: InstanceType<typeof TaskProcessorService>;
@@ -243,7 +242,7 @@ describe("TaskProcessorService", () => {
     failTaskInbox = mock(() => Promise.resolve([] as Array<{ id: string }>));
     inboxRepo = {
       failTaskInbox,
-      getAssignmentReplyTargetId: mock(() => Promise.resolve("sess-1")),
+      getAssignment: mock(() => Promise.resolve(survivingNonTerminalRow())),
       // Default: one SURVIVING non-terminal row (with a Linear session reply
       // target). retryTask now treats "no surviving non-terminal row" as a clean
       // terminal (no requeue), so the retry-path tests need work left to resume;
@@ -296,18 +295,17 @@ describe("TaskProcessorService", () => {
     } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
-    integrations = {
+    integrations = fakeIntegrations({
       linear: new LinearIntegration(linearTokenProvider, true, {
         status: async () => ({ configured: false }),
       }),
       api: new ApiIntegration(true),
       github: new GithubIntegration(true, { status: () => ({}) as never }),
-    };
+    });
     hooks = new IntegrationHooks(integrations, inboxRepo);
     service = new TaskProcessorService(
       taskRepo,
       inboxRepo,
-      linearTokenProvider,
       sandboxManager,
       eventDispatcher,
       inboxService,
@@ -854,6 +852,18 @@ describe("TaskProcessorService", () => {
       });
     });
 
+    it("dedupes per integration: equal target ids of two sources each get a notice", async () => {
+      failTaskInbox.mockResolvedValue([
+        row("a", "assignment", "linear", [{ id: "555", spec: { kind: "linear_session" } }]),
+        row("gc", "comment", "github", [issueComment("555", 7, 555)]),
+      ]);
+
+      await failTask(makeTask());
+
+      expect(emitError).toHaveBeenCalledWith(expect.anything(), "555", MSG);
+      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 7, MSG, expect.any(AbortSignal));
+    });
+
     it("notices every row failTaskInbox dead-letters, whatever a separate read of the open rows saw", async () => {
       // A follow-up committed after such a read, or the read failing, must not
       // cost a dead-lettered row its notice, hook or Slack post.
@@ -1338,7 +1348,6 @@ describe("TaskProcessorService", () => {
         service = new TaskProcessorService(
           taskRepo,
           inboxRepo,
-          linearTokenProvider,
           sandboxManager,
           dispatcher,
           inboxService,

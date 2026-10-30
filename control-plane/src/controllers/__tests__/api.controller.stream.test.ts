@@ -1,6 +1,7 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type { Clock } from "../../clock";
 import { ApiError } from "../../errors";
+import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
 import { logger } from "../../logger";
 import { createApiRoutes } from "../../routes/api";
 import type { ApiEventEnvelope, SseStateData } from "../../types/api";
@@ -123,7 +124,7 @@ function setup(o: {
     {
       authEnabled: false,
       allowedHosts: [],
-      integrations: {
+      integrations: fakeIntegrations({
         linear: { status: async () => ({ configured: false }) },
         github: {
           status: async () => ({
@@ -132,7 +133,7 @@ function setup(o: {
           }),
         },
         api: { status: async () => ({ enabled: true }) },
-      },
+      }),
     },
   );
   return { app, service, controller, clock };

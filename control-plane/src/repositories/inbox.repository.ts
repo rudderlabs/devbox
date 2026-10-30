@@ -319,25 +319,6 @@ export class InboxRepository {
     return row ? mapRow(row) : null;
   }
 
-  // Reply target id for task-scoped CP-originated emits (provisioning
-  // lifecycle). Reads the first entry of the assignment row's reply_targets —
-  // the canonical store, written on `created` and overwritten on
-  // re-delegation. An assignment row carries exactly one reply target by
-  // construction. Returns null when the assignment row is missing or its
-  // reply_targets is empty.
-  async getAssignmentReplyTargetId(taskId: string): Promise<string | null> {
-    const result = await db.execute<{ target_id: string | null }>(sql`
-      SELECT reply_targets->0->>'id' AS target_id
-        FROM inbox
-       WHERE task_id = ${taskId} AND kind = 'assignment'
-       LIMIT 1;
-    `);
-    const row = Array.isArray(result)
-      ? (result[0] as { target_id: string | null } | undefined)
-      : undefined;
-    return row?.target_id ?? null;
-  }
-
   // pending → delivered. Owner-guarded (a stale-lease pod must not advance a
   // row it no longer owns) and status-guarded (a re-sweep can't regress a row
   // already past 'pending').

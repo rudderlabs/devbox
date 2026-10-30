@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
+import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
 import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
@@ -179,11 +180,11 @@ describe("InboxService", () => {
     linear = new LinearIntegration(linearTokenProvider, true, {
       status: async () => ({ configured: false }),
     });
-    const integrations = {
+    const integrations = fakeIntegrations({
       linear,
       api: new ApiIntegration(true),
       github: new GithubIntegration(true, { status: () => ({}) as never }),
-    };
+    });
     service = new InboxService(
       inboxRepo,
       sandboxManager,

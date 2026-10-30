@@ -1,6 +1,6 @@
 import { config } from "../config";
 import type { Task } from "../db/schema";
-import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
+import { deliverToRound } from "../integrations/http";
 import type { TaskIntake } from "../integrations/intake";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
@@ -306,27 +306,15 @@ export class InboxService {
     if (entry.kind === "assignment") this.hooks.roundFinished(task, entry, "failed", true);
     const target = entry.reply_targets[0];
     if (!target) return;
-    // A source this build has no integration for (say, rows written by a newer
-    // build before a rollback), or a disabled one, gets no notice; its row is
-    // still failed.
-    const integration: Integration | undefined = this.integrations[entry.source];
-    if (!integration?.enabled) {
-      logger.warn(
-        "workspace_missing: the row's integration is unknown or disabled; notice skipped",
-        {
-          inboxId: entry.id,
-          source: entry.source,
-        },
-      );
-      return;
-    }
-    await withTimeout(SEND_TIMEOUT_MS, (signal) =>
-      integration.deliver({ signal, log: logger }, target, {
-        type: "failure",
-        cause: "workspace_missing",
-        round: entry,
-      }),
-    ).catch((err) => logErr(`workspace_missing notice failed for inbox ${entry.id}`, err));
+    // A row whose integration is unknown or disabled gets no notice; it is
+    // still failed. No cursor to hold, so a RetryableError is dropped too.
+    await deliverToRound(
+      this.integrations,
+      entry,
+      target,
+      { type: "failure", cause: "workspace_missing", round: entry },
+      { taskId: task.id },
+    ).catch((err) => logErr(`workspace_missing notice for inbox ${entry.id} dropped`, err));
   }
 }
 

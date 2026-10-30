@@ -1,5 +1,6 @@
 import { lookupSlackUserIdByEmail, postSlackMessage } from "../clients/slack";
 import type { Task } from "../db/schema";
+import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import type { TaskSource } from "../integrations/types";
 import type { TaskRepository } from "../repositories/task.repository";
 import type { IntegrationHooks } from "./integrationHooks";
@@ -65,7 +66,9 @@ export class SlackNotifierService {
     const connectNote = wantsNudge ? await this.connectGitHubNote(t) : "";
 
     const text = buildMessage(status, t, prUrls, connectNote, message);
-    await this.post({ channel: this.channel, text });
+    await withTimeout(SEND_TIMEOUT_MS, (signal) =>
+      this.post({ channel: this.channel, text, signal }),
+    );
   }
 
   // "" when there is nothing to nag about: no human assignee, already mapped,
@@ -81,8 +84,11 @@ export class SlackNotifierService {
     // bot missing the users:read.email scope, transport error). displayName
     // is member-editable — escape it so it can't inject mrkdwn (<!channel>,
     // forged <@mentions>, disguised links) into a trusted bot message.
-    const slackId = person.email
-      ? await this.lookupSlackUser(person.email).catch(() => null)
+    const email = person.email;
+    const slackId = email
+      ? await withTimeout(SEND_TIMEOUT_MS, (signal) => this.lookupSlackUser(email, signal)).catch(
+          () => null,
+        )
       : null;
     const mention = slackId ? `<@${slackId}>` : escapeMrkdwn(person.displayName);
     return (

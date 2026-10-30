@@ -50,8 +50,13 @@ export class GithubIntegration implements Integration<GithubStatus> {
   }
 
   async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
+    // Its own three kinds only (post() switches over them exhaustively).
     const spec = target.spec;
-    if (spec.kind === "linear_session" || spec.kind === "api_session") {
+    if (
+      spec.kind !== "issue_comment" &&
+      spec.kind !== "review_comment" &&
+      spec.kind !== "review_body"
+    ) {
       throw new Error(`github cannot deliver to a ${spec.kind} target`);
     }
     switch (message.type) {
@@ -63,6 +68,10 @@ export class GithubIntegration implements Integration<GithubStatus> {
       case "failure":
         await deliverFailure(ctx, spec, message);
         return;
+      default: {
+        const _exhaustive: never = message;
+        void _exhaustive;
+      }
     }
   }
 

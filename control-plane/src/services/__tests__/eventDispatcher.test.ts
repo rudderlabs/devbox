@@ -4,6 +4,7 @@ import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/
 // mock.module barrel factories below, and it pins the real contract.
 import type { LinearHumanUser } from "../../clients/linearApi";
 import type { Task } from "../../db/schema";
+import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
 import type { InboxRepository, InboxRow, InboxStatus } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
@@ -162,13 +163,14 @@ describe("EventDispatcher", () => {
   let dispatcher: InstanceType<typeof EventDispatcher>;
 
   // The registry, with GitHub's webhooks (and so its integration) on or off.
-  const makeIntegrations = (githubEnabled: boolean) => ({
-    linear: new LinearIntegration(linearTokenProvider, true, {
-      status: async () => ({ configured: false }),
-    }),
-    api: new ApiIntegration(true),
-    github: new GithubIntegration(githubEnabled, { status: () => ({}) as never }),
-  });
+  const makeIntegrations = (githubEnabled: boolean) =>
+    fakeIntegrations({
+      linear: new LinearIntegration(linearTokenProvider, true, {
+        status: async () => ({ configured: false }),
+      }),
+      api: new ApiIntegration(true),
+      github: new GithubIntegration(githubEnabled, { status: () => ({}) as never }),
+    });
 
   beforeEach(() => {
     for (const m of [
@@ -603,11 +605,11 @@ describe("EventDispatcher", () => {
           delivered.push([name, target, message]);
         },
       });
-      const integrations = {
+      const integrations = fakeIntegrations({
         linear: record("linear"),
         api: record("api"),
         github: record("github"),
-      };
+      });
       const d = new EventDispatcher(
         taskRepo,
         inboxRepo,

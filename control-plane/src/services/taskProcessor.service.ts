@@ -1,9 +1,9 @@
 import type { SandboxInfo } from "@alibaba-group/opensandbox";
-import { emitAction, setIssueStarted } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
-import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
+import { deliverToRound } from "../integrations/http";
+import type { Outbound } from "../integrations/outbound";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
@@ -12,7 +12,6 @@ import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
 import type { IntegrationHooks } from "./integrationHooks";
-import type { LinearTokenProvider } from "./linearTokenProvider";
 import type { ReplyHolds } from "./replyHolds";
 import { type PodStatus, SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
@@ -40,7 +39,6 @@ export class TaskProcessorService {
   private readonly reconcileFilesUnavailableSince = new Map<string, number>();
   private readonly taskRepo: TaskRepository;
   private readonly inboxRepo: InboxRepository;
-  private readonly linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
   private readonly sandboxManager: SandboxManager;
   private readonly eventDispatcher: EventDispatcher;
   private readonly inboxService: InboxService;
@@ -55,7 +53,6 @@ export class TaskProcessorService {
   constructor(
     taskRepo: TaskRepository,
     inboxRepo: InboxRepository,
-    linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
     sandboxManager: SandboxManager,
     eventDispatcher: EventDispatcher,
     inboxService: InboxService,
@@ -67,7 +64,6 @@ export class TaskProcessorService {
   ) {
     this.taskRepo = taskRepo;
     this.inboxRepo = inboxRepo;
-    this.linearTokenProvider = linearTokenProvider;
     this.sandboxManager = sandboxManager;
     this.eventDispatcher = eventDispatcher;
     this.inboxService = inboxService;
@@ -224,8 +220,6 @@ export class TaskProcessorService {
 
   // Creates or attaches a sandbox. Branches on `sandbox_id` nullability:
   // (sandbox_id=null) is a fresh provision; (sandbox_id set) is an adoption.
-  //
-  // Linear and API tasks share this path; Linear-only emits are gated below.
   private async runTask(task: Task): Promise<void> {
     if (task.sandboxId) {
       // Adoption — resume the existing sandbox. Attach is best-effort: a failure
@@ -284,39 +278,19 @@ export class TaskProcessorService {
       return;
     }
 
-    // Fresh provision. Linear tasks: assert issue state + lifecycle emits on
-    // the agent session. API tasks have no Linear surface; their log gets
-    // sandbox_started from attachSandboxResources instead.
-    const isLinear = task.source === "linear";
-    if (isLinear) {
-      try {
-        const client = await this.linearTokenProvider.getAuthorizedLinearClient();
-        await setIssueStarted(client, task.externalId);
-      } catch (err) {
-        logErr(`setIssueStarted failed for task ${task.id}`, err);
-      }
-    }
-
-    // Reply target id on the assignment inbox row is the canonical destination
-    // for task-scoped lifecycle emits. A claimed task must have an assignment
-    // row (claimNext requires at least one non-terminal inbox row, and the
-    // `created` path always inserts one) — a missing target id means the row
-    // was deleted out from under us, which is a hard invariant break.
-    const replyTargetId = await this.inboxRepo.getAssignmentReplyTargetId(task.id);
-    if (!replyTargetId) {
+    // Fresh provision. The assignment row's reply target is the canonical
+    // destination for task-scoped lifecycle emits. A claimed task must have an
+    // assignment row (claimNext requires at least one non-terminal inbox row,
+    // and the `created` path always inserts one) — a missing target means the
+    // row was deleted out from under us, which is a hard invariant break.
+    const assignment = await this.inboxRepo.getAssignment(task.id);
+    if (!assignment?.reply_targets[0]) {
       throw new Error(`runTask: assignment inbox row missing reply target for task ${task.id}`);
     }
-    if (isLinear) {
-      try {
-        const client = await this.linearTokenProvider.getAuthorizedLinearClient();
-        await emitAction(client, replyTargetId, "Provisioning", "infra");
-      } catch (err) {
-        logErr(`emitAction(Provisioning) failed for task ${task.id}`, err);
-      }
-    }
 
-    // The owner integration's onTaskStarted (none today), at most once per
-    // assignment on this pod. Never throws.
+    // The owner integration's onTaskStarted (Linear: issue state and the
+    // Provisioning action), at most once per assignment on this pod. Never
+    // throws. API tasks' logs get sandbox_started from attachSandboxResources.
     await this.hooks.taskStarted(task);
 
     // WORKSPACE is the only task-specific input passed at creation; the daemon
@@ -817,35 +791,28 @@ export class TaskProcessorService {
       });
     }
 
-    // Dedupe by target id — a Linear-source task has many rows sharing the
-    // same linear_session target id; posting once per id keeps the user from
-    // seeing the same error N times. At most once: there is no cursor to hold,
-    // so a delivery error (RetryableError included) is logged and dropped.
+    // Dedupe by target — a Linear-source task has many rows sharing the
+    // same linear_session target id; posting once per target keeps the user
+    // from seeing the same error N times. Keyed by source too: two platforms'
+    // ids can collide. A row whose integration is unknown or disabled gets no
+    // notice; it is still failed.
     const seen = new Set<string>();
     for (const row of failed) {
-      // A source this build has no integration for (say, rows written by a
-      // newer build before a rollback), or a disabled one, gets no notice; its
-      // row is still failed.
-      const integration: Integration | undefined = this.integrations[row.source];
-      if (!integration?.enabled) {
-        logger.warn("failTask: the row's integration is unknown or disabled; notice skipped", {
-          taskId: task.id,
-          inboxId: row.id,
-          source: row.source,
-        });
-        continue;
-      }
       for (const t of row.reply_targets) {
-        if (seen.has(t.id)) continue;
-        seen.add(t.id);
-        await withTimeout(SEND_TIMEOUT_MS, (signal) =>
-          integration.deliver({ signal, log: logger }, t, {
-            type: "failure",
-            cause: "task_failed",
-            round: row,
-            summary: message,
-          }),
-        ).catch((e) => logErr(`failTask: post to ${t.spec.kind} target ${t.id} failed`, e));
+        const key = `${row.source}:${t.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const notice: Outbound = {
+          type: "failure",
+          cause: "task_failed",
+          round: row,
+          summary: message,
+        };
+        // At most once: there is no cursor to hold, so a RetryableError is
+        // dropped too.
+        await deliverToRound(this.integrations, row, t, notice, { taskId: task.id }).catch((e) =>
+          logErr(`failTask: notice to target ${t.id} dropped`, e),
+        );
       }
     }
 

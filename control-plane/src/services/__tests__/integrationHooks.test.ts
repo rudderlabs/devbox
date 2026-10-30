@@ -1,5 +1,6 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
+import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
 import type { HookCtx, Integration } from "../../integrations/types";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
 
@@ -24,11 +25,10 @@ function hooksWith(
   timeoutMs?: number,
 ) {
   const inboxRepo = { getAssignment: mock(() => Promise.resolve(row("a-1"))) };
-  const integrations = {
+  const integrations = fakeIntegrations({
     linear: { ...noop, name: "linear" as const, ...linear },
-    api: noop,
     github: { ...noop, name: "github" as const, ...github },
-  };
+  });
   const t = timeoutMs;
   const timeouts =
     t === undefined

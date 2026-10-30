@@ -1,7 +1,7 @@
 import { addPrAssignees, parsePrUrl, postIssueComment } from "../clients/github";
 import { config } from "../config";
 import type { Task } from "../db/schema";
-import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
+import { deliverToRound, SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import { type Outbound, RetryableError } from "../integrations/outbound";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
@@ -244,29 +244,20 @@ export class EventDispatcher {
       return "ok"; // cursor still advances — drop
     }
 
-    // A source this build has no integration for (rows written by a newer
-    // build before a rollback) is skipped like a disabled one.
-    const integration: Integration | undefined = this.integrations[inboxRow.source];
-    if (!integration?.enabled) {
-      logger.info(`${event.type} skipped: integration unknown or disabled`, {
-        taskId: task.id,
-        inboxId: inboxRow.id,
-        source: inboxRow.source,
-      });
-      return "ok";
-    }
     try {
-      await withTimeout(this.sendTimeoutMs, (signal) =>
-        integration.deliver({ signal, log: logger }, target, labelAgentEmit(event, inboxRow)),
+      return await deliverToRound(
+        this.integrations,
+        inboxRow,
+        target,
+        labelAgentEmit(event, inboxRow),
+        { taskId: task.id, eventType: event.type },
+        this.sendTimeoutMs,
       );
-      return "ok";
     } catch (err) {
-      if (err instanceof RetryableError) {
-        this.holds.hold(task.id, event, inboxRow.source, err);
-        return "hold";
-      }
-      logErr(`deliver ${event.type} failed for target ${target.id}`, err);
-      return "dropped";
+      // Nothing was sent: the event holds on the round's integration.
+      if (!(err instanceof RetryableError)) throw err;
+      this.holds.hold(task.id, event, inboxRow.source, err);
+      return "hold";
     }
   }
 
