@@ -27,6 +27,7 @@ import { ApiTaskService } from "./services/apiTask.service";
 import { EventDispatcher } from "./services/eventDispatcher";
 import { GithubStatusService } from "./services/githubStatus.service";
 import { InboxService } from "./services/inbox.service";
+import { IntegrationHooks } from "./services/integrationHooks";
 import { LinearStatusService } from "./services/linearStatus.service";
 import { LinearTokenProvider } from "./services/linearTokenProvider";
 import { ReplyHolds } from "./services/replyHolds";
@@ -92,8 +93,10 @@ export function createApp(): AppBundle {
   // Sends held because they failed before anything went out; the status
   // routes will report them per integration (phase 2).
   const replyHolds = new ReplyHolds();
+  // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.
+  const hooks = new IntegrationHooks(integrations, inboxRepository);
 
-  const inboxService = new InboxService(inboxRepository, sandboxManager, integrations);
+  const inboxService = new InboxService(inboxRepository, sandboxManager, integrations, hooks);
 
   const agentSessionService = new AgentSessionService(
     taskRepository,
@@ -117,6 +120,7 @@ export function createApp(): AppBundle {
     slackNotifier,
     integrations,
     replyHolds,
+    hooks,
   );
 
   const taskProcessor = new TaskProcessorService(
@@ -130,6 +134,7 @@ export function createApp(): AppBundle {
     integrations,
     replyHolds,
     taskSources,
+    hooks,
   );
 
   const linearStatus = new LinearStatusService(

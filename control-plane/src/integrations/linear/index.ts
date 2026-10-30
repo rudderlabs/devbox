@@ -1,11 +1,21 @@
 import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
-import { emitAction, emitError, emitResponse, emitThought } from "../../clients/linear";
-import type { ReplyTarget } from "../../repositories/inbox.repository";
+import { getUserById } from "../../clients/github";
+import {
+  attachUrlToIssue,
+  emitAction,
+  emitError,
+  emitResponse,
+  emitThought,
+  getIssueHumanAssignee,
+  uploadIssueAttachment,
+} from "../../clients/linear";
+import type { Task } from "../../db/schema";
+import type { InboxRow, ReplyTarget } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import type { LinearTokenProvider } from "../../services/linearTokenProvider";
 import { retryable } from "../http";
 import { type Outbound, RetryableError, type SendCtx } from "../outbound";
-import type { Integration } from "../types";
+import type { HookCtx, Integration, Person, PrRef } from "../types";
 
 // Linear rounds post to the agent session. target.id IS the agent session id
 // by construction (the enqueue paths stamp the live session id). The session
@@ -53,6 +63,59 @@ export class LinearIntegration implements Integration {
     } catch (err) {
       throw linearRetryable(err) ?? err;
     }
+  }
+
+  // Links the PR on the issue. Idempotent (Linear updates an existing link),
+  // so it runs on every pr_opened dispatch; a RetryableError holds the event.
+  async onPrOpened(ctx: HookCtx, task: Task, pr: PrRef): Promise<void> {
+    const client = await this.client(ctx.signal);
+    try {
+      await attachUrlToIssue(client, task.externalId, pr.url, pr.repo);
+    } catch (err) {
+      throw linearRetryable(err) ?? err;
+    }
+  }
+
+  // Uploads the run archive to the issue once, when this call finished the
+  // assignment (a replayed `completed` doesn't upload again). The sandbox is
+  // still alive here (it lives until the idle reaper). The archive is a
+  // forensic nicety: core logs a failure and nothing else depends on it.
+  async onRoundFinished(
+    ctx: HookCtx & { firstTransition: boolean; archive(): Promise<Uint8Array | null> },
+    task: Task,
+    round: InboxRow,
+  ): Promise<void> {
+    if (!ctx.firstTransition || round.kind !== "assignment") return;
+    const bytes = await ctx.archive();
+    if (!bytes || bytes.byteLength === 0) return;
+    const client = await this.client(ctx.signal);
+    await uploadIssueAttachment(client, {
+      issueId: task.externalId,
+      title: "Harness run archive",
+      subtitle: `Task ${task.id}`,
+      filename: `harness-run-${task.id}.tar.gz`,
+      contentType: "application/gzip",
+      bytes,
+      metadata: { taskId: task.id },
+      signal: ctx.signal,
+    });
+  }
+
+  // The issue's human assignee. Identity comes from Linear's own user↔GitHub
+  // mapping (User.gitHubUserId, set when a member connects GitHub under Linear
+  // Settings → Connected accounts), never email matching.
+  async assignee(ctx: HookCtx, task: Task): Promise<Person | null> {
+    const client = await this.client(ctx.signal);
+    const human = await getIssueHumanAssignee(client, task.externalId);
+    if (!human) return null;
+    const person = { displayName: human.displayName, email: human.email };
+    if (!human.gitHubUserId) return { ...person, codeHost: "unlinked" };
+    // Defensive about the field's format: numeric → GitHub account id
+    // (resolve to the current login), anything else → already a login.
+    const githubLogin = /^\d+$/.test(human.gitHubUserId)
+      ? (await getUserById(human.gitHubUserId, ctx.signal)).login
+      : human.gitHubUserId;
+    return { ...person, codeHost: { githubLogin } };
   }
 
   // Nothing has been sent when the token fetch fails, so the caller may retry.

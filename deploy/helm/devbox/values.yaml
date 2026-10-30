@@ -149,6 +149,10 @@ controlPlane:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 1Gi }
+  # -- Seconds between SIGTERM and SIGKILL. At least one reconcile tick (up to 90s
+  # when a platform is slow) plus SHUTDOWN_DRAIN_MS (10s) for in-flight provisions
+  # and integration hooks; raise it with SHUTDOWN_DRAIN_MS.
+  terminationGracePeriodSeconds: 120
 
 postgresql:
   # -- A minimal bundled Postgres for trying devbox: no backups, HA or automated upgrades.

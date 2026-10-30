@@ -12,6 +12,7 @@ import type {
 } from "../repositories/inbox.repository";
 import { taskIdentity } from "../repositories/inbox.repository";
 import type { InboxMessage } from "../types/inboxMessage";
+import type { IntegrationHooks } from "./integrationHooks";
 import type { SandboxManager } from "./sandboxManager.service";
 
 // InboxService owns inbox enqueue (comment/review/Linear-comment), the sweep
@@ -26,6 +27,7 @@ export class InboxService {
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
     private integrations: Record<IntegrationName, Integration>,
+    private hooks: IntegrationHooks,
   ) {}
 
   // ──── Enqueue paths ────
@@ -307,7 +309,7 @@ export class InboxService {
     for (const row of rows) {
       const latest = await this.inboxRepo.getById(row.id);
       if (!latest || (latest.status !== "pending" && latest.status !== "delivered")) continue;
-      await this.handlePvcMissing(latest);
+      await this.handlePvcMissing(task, latest);
     }
   }
 
@@ -318,8 +320,9 @@ export class InboxService {
   // dedupe (unlike failTask); reply_targets[0] is the round's thread, and the
   // integration words the notice by round kind. At most once: there is no
   // cursor to hold, so a delivery error (RetryableError included) is logged and
-  // dropped, and the task's remaining rows still dead-letter.
-  private async handlePvcMissing(entry: InboxRow): Promise<void> {
+  // dropped, and the task's remaining rows still dead-letter. A dead-lettered
+  // assignment also finishes its round as failed (onRoundFinished, detached).
+  private async handlePvcMissing(task: Task, entry: InboxRow): Promise<void> {
     const marked = await this.inboxRepo
       .markFailed({
         inboxId: entry.id,
@@ -331,8 +334,10 @@ export class InboxService {
         logErr(`markFailed failed for inbox ${entry.id}`, err);
         return [];
       });
+    if (marked.length === 0) return;
+    if (entry.kind === "assignment") this.hooks.roundFinished(task, entry, "failed", true);
     const target = entry.reply_targets[0];
-    if (marked.length === 0 || !target) return;
+    if (!target) return;
     // A source this build has no integration for (say, rows written by a newer
     // build before a rollback) gets no notice; its row is still failed.
     const integration: Integration | undefined = this.integrations[entry.source];

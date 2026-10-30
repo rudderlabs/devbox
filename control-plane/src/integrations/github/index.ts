@@ -1,15 +1,18 @@
 import {
   addIssueCommentReaction,
   addReviewCommentReaction,
+  parsePrUrl,
   postIssueComment,
   postReviewCommentReply,
+  requestReviewers,
 } from "../../clients/github";
 import { config } from "../../config";
+import type { Task } from "../../db/schema";
 import type { InboxRow, ReplyTargetSpec } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
-import type { Integration } from "../types";
+import type { HookCtx, Integration } from "../types";
 
 type GithubSpec = Extract<
   ReplyTargetSpec,
@@ -36,7 +39,86 @@ export const githubIntegration: Integration = {
         return;
     }
   },
+
+  // A finished review re-requests review from its reviewer, once (a replayed
+  // `completed` doesn't). Best-effort: a failure is logged, nothing waits on it.
+  async onRoundFinished(ctx, task, round) {
+    if (ctx.firstTransition && round.kind === "review") {
+      await requestReviewFromOriginalReviewer(ctx, round, task);
+    }
+  },
 };
+
+async function requestReviewFromOriginalReviewer(
+  ctx: HookCtx,
+  inboxRow: Extract<InboxRow, { kind: "review" }>,
+  task: Task,
+): Promise<void> {
+  const payload = inboxRow.payload as Record<string, unknown> | null | undefined;
+  const reviewerLoginRaw = payload?.reviewer_login;
+  const reviewerLogin = typeof reviewerLoginRaw === "string" ? reviewerLoginRaw.trim() : "";
+  if (!reviewerLogin) {
+    ctx.log.info("review re-request skipped", {
+      event: "review_rerequest.result",
+      status: "skipped",
+      reason: "missing_reviewer_login",
+      taskId: task.id,
+      inboxId: inboxRow.id,
+    });
+    return;
+  }
+
+  const pr = reviewPrCoordinates(inboxRow);
+  if (!pr) {
+    ctx.log.warn("review re-request skipped", {
+      event: "review_rerequest.result",
+      status: "skipped",
+      reason: "missing_pr_coordinates",
+      taskId: task.id,
+      inboxId: inboxRow.id,
+      reviewerLogin,
+    });
+    return;
+  }
+
+  try {
+    await requestReviewers(pr.owner, pr.repo, pr.prNumber, [reviewerLogin], ctx.signal);
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    ctx.log.error("request reviewers failed", {
+      taskId: task.id,
+      inboxId: inboxRow.id,
+      owner: pr.owner,
+      repo: pr.repo,
+      prNumber: pr.prNumber,
+      reviewerLogin,
+      message: e.message,
+      stack: e.stack,
+    });
+  }
+}
+
+function reviewPrCoordinates(
+  inboxRow: Extract<InboxRow, { kind: "review" }>,
+): { owner: string; repo: string; prNumber: number } | null {
+  const pr = inboxRow.payload.pr as Record<string, unknown> | undefined;
+  const owner = typeof pr?.owner === "string" ? pr.owner : "";
+  const repo = typeof pr?.repo === "string" ? pr.repo : "";
+  const prNumber = typeof pr?.prNumber === "number" ? pr.prNumber : Number.NaN;
+  if (owner && repo && Number.isFinite(prNumber)) {
+    return { owner, repo, prNumber };
+  }
+
+  const target = inboxRow.reply_targets.find(
+    (t) => t.spec.kind === "review_body" || t.spec.kind === "review_comment",
+  );
+  if (target && "owner" in target.spec) {
+    return { owner: target.spec.owner, repo: target.spec.repo, prNumber: target.spec.prNumber };
+  }
+
+  const prUrl = typeof pr?.pr_url === "string" ? pr.pr_url : "";
+  return prUrl ? parsePrUrl(prUrl) : null;
+}
 
 async function deliverFailure(
   ctx: SendCtx,

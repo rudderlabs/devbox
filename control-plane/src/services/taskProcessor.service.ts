@@ -1,5 +1,5 @@
 import type { SandboxInfo } from "@alibaba-group/opensandbox";
-import { emitAction, emitThought, setIssueStarted } from "../clients/linear";
+import { emitAction, setIssueStarted } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
@@ -11,6 +11,7 @@ import type { TaskRepository } from "../repositories/task.repository";
 import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
+import type { IntegrationHooks } from "./integrationHooks";
 import type { LinearTokenProvider } from "./linearTokenProvider";
 import type { ReplyHolds } from "./replyHolds";
 import { type PodStatus, SandboxManager } from "./sandboxManager.service";
@@ -48,6 +49,7 @@ export class TaskProcessorService {
   // Sources this build has an integration for; claimNext and
   // listInFlightOwnedBy see only these tasks (§10).
   private readonly taskSources: Task["source"][];
+  private readonly hooks: IntegrationHooks;
 
   constructor(
     taskRepo: TaskRepository,
@@ -60,6 +62,7 @@ export class TaskProcessorService {
     integrations: Record<IntegrationName, Integration>,
     holds: ReplyHolds,
     taskSources: Task["source"][],
+    hooks: IntegrationHooks,
   ) {
     this.taskRepo = taskRepo;
     this.inboxRepo = inboxRepo;
@@ -71,6 +74,7 @@ export class TaskProcessorService {
     this.integrations = integrations;
     this.holds = holds;
     this.taskSources = taskSources;
+    this.hooks = hooks;
   }
 
   start(): void {
@@ -88,9 +92,12 @@ export class TaskProcessorService {
       await this.loopPromise.catch(() => {});
     }
 
+    // In-flight provisions, then detached hooks (some started by those
+    // provisions), share one shutdownDrainMs budget.
     const drain = Promise.allSettled([...this.inflight]);
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, config.shutdownDrainMs));
     await Promise.race([drain, timeout]);
+    await this.hooks.drain(timeout);
 
     // Backdate own heartbeat so any survivors become immediately reclaimable
     // instead of waiting the full LEASE_TIMEOUT_MS.
@@ -288,6 +295,10 @@ export class TaskProcessorService {
       }
     }
 
+    // The owner integration's onTaskStarted (none today), at most once per
+    // assignment on this pod. Never throws.
+    await this.hooks.taskStarted(task);
+
     // WORKSPACE is the only task-specific input passed at creation; the daemon
     // derives its .harness dir from it and reads everything else from the inbox file
     // payload.
@@ -324,20 +335,7 @@ export class TaskProcessorService {
         });
         return;
       }
-
-      if (isLinear) {
-        try {
-          const client = await this.linearTokenProvider.getAuthorizedLinearClient();
-          await emitThought(
-            client,
-            replyTargetId,
-            `Sandbox provisioned.\n- sandboxId: \`${sandboxId}\`\n- pvcName: \`${pvcName}\``,
-          );
-        } catch (err) {
-          logErr(`emitThought(provisioned-ids) failed for task ${task.id}`, err);
-        }
-      }
-      // No further Linear emit here — the daemon emits the Planning action via
+      // No Linear emit here — the daemon emits the Planning action via
       // events.jsonl once it starts processing the inbox file.
     } catch (err) {
       // A throw after a successful create (e.g. attachSandboxResources hit a
@@ -794,6 +792,7 @@ export class TaskProcessorService {
       });
     const failedIds = new Set(failed.map((r) => r.id));
     const failedRows = nonTerminal.filter((r) => failedIds.has(r.id));
+    const assignment = failedRows.find((r) => r.kind === "assignment");
     if (failed.length > 0) {
       logger.warn("inbox rows dead-lettered on task failure", {
         taskId: task.id,
@@ -833,6 +832,9 @@ export class TaskProcessorService {
       }
     }
 
+    // The assignment's integration finishes its round as failed (detached).
+    if (assignment) this.hooks.roundFinished(task, assignment, "failed", true);
+
     // Kill the sandbox the task ACTUALLY holds, read from the DB — NOT the
     // dispatch-time `task` closure, whose sandbox_id can be stale (a recreate
     // persists a fresh sandbox_id via setSandboxId after dispatch; the closure
@@ -852,7 +854,7 @@ export class TaskProcessorService {
     // ever notify Slack. Tying it to this failTaskInbox transition also keeps it
     // at-most-once. Fire-and-forget: a Slack outage must not affect teardown;
     // the notifier no-ops when Slack is disabled.
-    if (failedRows.some((r) => r.kind === "assignment") && task.source === "linear") {
+    if (assignment && task.source === "linear") {
       const client = await this.linearTokenProvider.getAuthorizedLinearClient().catch((e) => {
         logErr("failTask: getAuthorizedLinearClient failed", e);
         return null;

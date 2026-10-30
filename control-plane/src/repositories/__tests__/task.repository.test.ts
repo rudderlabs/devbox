@@ -968,7 +968,7 @@ describe("TaskRepository", () => {
         branch: "b",
         commitSha: "abc",
       });
-      expect(first).toEqual([{ id: t.id }]);
+      expect(first).toEqual([{ id: t.id, firstTime: true }]);
       // Re-append same url — should not duplicate.
       await repo.appendPrUrl({
         taskId: t.id,
@@ -992,8 +992,7 @@ describe("TaskRepository", () => {
       expect(urls).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
     });
 
-    it("re-appending a known url still returns the row (no first-time signal)", async () => {
-      // characterization: changes in phase 1b (spec §15 bug 4, I11 firstTime)
+    it("re-appending a known url still returns the row, with firstTime false", async () => {
       const t = await insertTask({ ownerId: "pod-a" });
       const pr = {
         taskId: t.id,
@@ -1003,8 +1002,8 @@ describe("TaskRepository", () => {
         branch: "b",
         commitSha: "abc",
       };
-      await repo.appendPrUrl(pr);
-      expect(await repo.appendPrUrl(pr)).toEqual([{ id: t.id }]);
+      expect(await repo.appendPrUrl(pr)).toEqual([{ id: t.id, firstTime: true }]);
+      expect(await repo.appendPrUrl(pr)).toEqual([{ id: t.id, firstTime: false }]);
     });
 
     it("owner-guarded: returns 0 rows on stale-lease takeover", async () => {

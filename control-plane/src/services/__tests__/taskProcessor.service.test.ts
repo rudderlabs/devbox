@@ -95,6 +95,7 @@ const { githubIntegration } = await import("../../integrations/github");
 const { apiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
+const { IntegrationHooks } = await import("../integrationHooks");
 const { RetryableError } = await import("../../integrations/outbound");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
@@ -278,6 +279,11 @@ describe("TaskProcessorService", () => {
     slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
+    const integrations = {
+      linear: new LinearIntegration(linearTokenProvider),
+      api: apiIntegration,
+      github: githubIntegration,
+    };
     service = new TaskProcessorService(
       taskRepo,
       inboxRepo,
@@ -286,13 +292,10 @@ describe("TaskProcessorService", () => {
       eventDispatcher,
       inboxService,
       slackNotifier,
-      {
-        linear: new LinearIntegration(linearTokenProvider),
-        api: apiIntegration,
-        github: githubIntegration,
-      },
+      integrations,
       holds,
       ["linear", "api"],
+      new IntegrationHooks(integrations, inboxRepo),
     );
   });
 
@@ -351,12 +354,12 @@ describe("TaskProcessorService", () => {
   });
 
   describe("runTask — fresh provisioning", () => {
-    it("creates a sandbox, stamps sandbox_id, asserts InProgress + emits IDs thought", async () => {
+    it("creates a sandbox, stamps sandbox_id, asserts InProgress, emits no IDs thought", async () => {
       const task = makeTask({ sandboxId: null });
       claimNext.mockResolvedValueOnce(task).mockResolvedValue(null);
 
       service.start();
-      await waitFor(() => emitThought.mock.calls.length > 0);
+      await waitFor(() => attachSandboxResources.mock.calls.length > 0);
       await service.stop();
 
       expect(createSandboxWithPvc).toHaveBeenCalledWith(
@@ -370,12 +373,8 @@ describe("TaskProcessorService", () => {
       });
       expect(setIssueStarted).toHaveBeenCalledWith(expect.anything(), "issue-1");
       expect(emitAction).toHaveBeenCalledWith(expect.anything(), "sess-1", "Provisioning", "infra");
-      // characterization: changes in phase 1b (spec §13: the "Sandbox provisioned" thought is removed)
-      expect(emitThought).toHaveBeenCalledWith(
-        expect.anything(),
-        "sess-1",
-        "Sandbox provisioned.\n- sandboxId: `sbx-1`\n- pvcName: `devbox-pvc-task-1-aaaaaa`",
-      );
+      // The post-create "Sandbox provisioned" thought is gone (spec §13).
+      expect(emitThought).not.toHaveBeenCalled();
     });
 
     it("logs and still provisions when the team has no started state", async () => {
@@ -388,7 +387,7 @@ describe("TaskProcessorService", () => {
 
       try {
         service.start();
-        await waitFor(() => emitThought.mock.calls.length > 0);
+        await waitFor(() => attachSandboxResources.mock.calls.length > 0);
         await service.stop();
 
         expect(error).toHaveBeenCalledTimes(1);
@@ -1133,7 +1132,7 @@ describe("TaskProcessorService", () => {
       expect(dispatcherHandle.mock.calls.length).toBe(1);
     });
 
-    it("a dispatcher throw (e.g. a Linear token outage) holds the cursor and fails nothing", async () => {
+    it("a dispatcher throw (e.g. a database error) holds the cursor and fails nothing", async () => {
       const task = makeTask({ sandboxId: "sbx-1" });
       listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
       readEvents

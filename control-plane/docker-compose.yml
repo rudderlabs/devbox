@@ -93,6 +93,10 @@ services:
     image: devbox-control-plane
     build: *control-plane-build
     restart: unless-stopped
+    # Shutdown finishes the current reconcile tick (up to 90s when a platform
+    # is slow), then drains for SHUTDOWN_DRAIN_MS (10s); Compose's default 10s
+    # would cut both short.
+    stop_grace_period: 120s
     # Explicit, with no env_file. Only allowlisted HARNESS_* settings cross
     # into sandboxes, and a forwarded name must never hold a real secret.
     environment:

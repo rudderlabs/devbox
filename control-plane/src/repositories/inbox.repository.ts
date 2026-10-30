@@ -219,6 +219,16 @@ export class InboxRepository {
     return row ? mapRow(row) : null;
   }
 
+  // The task's assignment row. A restart re-pends it under a new id, which is
+  // how hooks tell whether their run is still the current one.
+  async getAssignment(taskId: string): Promise<InboxRow | null> {
+    const result = await db.execute<RawInboxRow>(sql`
+      SELECT * FROM inbox WHERE task_id = ${taskId} AND kind = 'assignment' LIMIT 1;
+    `);
+    const row = asRows<RawInboxRow>(result)[0];
+    return row ? mapRow(row) : null;
+  }
+
   // Reply target id for task-scoped CP-originated emits (provisioning
   // lifecycle). Reads the first entry of the assignment row's reply_targets —
   // the canonical store, written on `created` and overwritten on

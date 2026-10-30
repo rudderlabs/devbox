@@ -132,11 +132,13 @@ export async function requestReviewers(
   repo: string,
   prNumber: number,
   reviewers: string[],
+  signal?: AbortSignal,
 ): Promise<void> {
   await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/requested_reviewers`,
     { reviewers },
+    signal,
   );
 }
 
@@ -315,8 +317,16 @@ export async function addPrAssignees(
 // GET /user/{id} — resolve an immutable numeric GitHub account id to the
 // current login. Ids survive renames and are never re-issued, so this is the
 // rename-proof lookup. Throws on 404 (githubFetch); callers catch.
-export async function getUserById(id: string | number): Promise<{ login: string; id: number }> {
-  const { json } = await githubFetch("GET", `/user/${encodeURIComponent(String(id))}`);
+export async function getUserById(
+  id: string | number,
+  signal?: AbortSignal,
+): Promise<{ login: string; id: number }> {
+  const { json } = await githubFetch(
+    "GET",
+    `/user/${encodeURIComponent(String(id))}`,
+    undefined,
+    signal,
+  );
   const r = asRecord(json);
   return { login: String(r.login ?? ""), id: Number(r.id) };
 }

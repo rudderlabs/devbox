@@ -83,6 +83,7 @@ const { githubIntegration } = await import("../../integrations/github");
 const { apiIntegration } = await import("../../integrations/api");
 const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
+const { IntegrationHooks } = await import("../integrationHooks");
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
   config: {
     github: { webhooks: { botLogin: string } | undefined };
@@ -186,7 +187,7 @@ describe("EventDispatcher", () => {
     requestReviewers.mockReset();
     requestReviewers.mockResolvedValue(undefined);
 
-    appendPrUrl = mock(() => Promise.resolve([{ id: "task-1" }]));
+    appendPrUrl = mock(() => Promise.resolve([{ id: "task-1", firstTime: true }]));
     taskRepo = { appendPrUrl } as unknown as TaskRepository;
 
     getByIdForTask = mock(() => Promise.resolve(linearRow()));
@@ -194,6 +195,7 @@ describe("EventDispatcher", () => {
     inboxRepo = {
       getByIdForTask,
       markResponded,
+      getAssignment: mock(() => Promise.resolve(linearRow())),
     } as unknown as InboxRepository;
 
     extractArchive = mock(() => Promise.resolve(null as Uint8Array | null));
@@ -206,18 +208,20 @@ describe("EventDispatcher", () => {
     slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
+    const integrations = {
+      linear: new LinearIntegration(linearTokenProvider),
+      api: apiIntegration,
+      github: githubIntegration,
+    };
     dispatcher = new EventDispatcher(
       taskRepo,
       inboxRepo,
       sandboxManager,
       linearTokenProvider,
       slackNotifier,
-      {
-        linear: new LinearIntegration(linearTokenProvider),
-        api: apiIntegration,
-        github: githubIntegration,
-      },
+      integrations,
       holds,
+      new IntegrationHooks(integrations, inboxRepo),
     );
   });
 
@@ -588,14 +592,20 @@ describe("EventDispatcher", () => {
           delivered.push([name, target, message]);
         },
       });
+      const integrations = {
+        linear: record("linear"),
+        api: record("api"),
+        github: record("github"),
+      };
       const d = new EventDispatcher(
         taskRepo,
         inboxRepo,
         sandboxManager,
         linearTokenProvider,
         slackNotifier,
-        { linear: record("linear"), api: record("api"), github: record("github") },
+        integrations,
         new ReplyHolds(),
+        new IntegrationHooks(integrations, inboxRepo),
       );
       const assignment = linearRow();
       const ghComment = {
@@ -678,12 +688,13 @@ describe("EventDispatcher", () => {
       );
     });
 
-    it("Linear task: a token fetch failure holds the event before appendPrUrl", async () => {
+    it("Linear task: a token fetch failure holds the event at onPrOpened, after appendPrUrl", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
       expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
-      expect(appendPrUrl).not.toHaveBeenCalled();
+      expect(appendPrUrl).toHaveBeenCalledTimes(1);
+      expect(attachUrlToIssue).not.toHaveBeenCalled();
     });
 
     it("self-evicts when appendPrUrl returns 0 rows (lease lost); skips attachUrlToIssue", async () => {
@@ -745,7 +756,7 @@ describe("EventDispatcher", () => {
 
         expect(result).toBe("ok");
         expect(getIssueHumanAssignee).toHaveBeenCalledWith(expect.anything(), "issue-1");
-        expect(getUserById).toHaveBeenCalledWith("583231");
+        expect(getUserById).toHaveBeenCalledWith("583231", expect.any(AbortSignal));
         expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
       });
 
@@ -1154,6 +1165,7 @@ describe("EventDispatcher", () => {
         contentType: "application/gzip",
         bytes: new Uint8Array([1, 2]),
         metadata: { taskId: "task-1" },
+        signal: expect.any(AbortSignal),
       });
     });
 
@@ -1205,7 +1217,13 @@ describe("EventDispatcher", () => {
       await flushMicrotasks();
 
       expect(requestReviewers).toHaveBeenCalledTimes(1);
-      expect(requestReviewers).toHaveBeenCalledWith("o", "r", 7, ["reviewer"]);
+      expect(requestReviewers).toHaveBeenCalledWith(
+        "o",
+        "r",
+        7,
+        ["reviewer"],
+        expect.any(AbortSignal),
+      );
     });
 
     it("falls back to review reply_targets for historical review rows without payload PR coordinates", async () => {
@@ -1216,7 +1234,13 @@ describe("EventDispatcher", () => {
       await dispatcher.handle(completedEvent(), makeTask());
       await flushMicrotasks();
 
-      expect(requestReviewers).toHaveBeenCalledWith("o", "r", 7, ["reviewer"]);
+      expect(requestReviewers).toHaveBeenCalledWith(
+        "o",
+        "r",
+        7,
+        ["reviewer"],
+        expect.any(AbortSignal),
+      );
     });
 
     it("falls back to a review_comment reply_target when review_body is unavailable", async () => {
@@ -1242,7 +1266,13 @@ describe("EventDispatcher", () => {
       await dispatcher.handle(completedEvent(), makeTask());
       await flushMicrotasks();
 
-      expect(requestReviewers).toHaveBeenCalledWith("oc", "rc", 8, ["reviewer"]);
+      expect(requestReviewers).toHaveBeenCalledWith(
+        "oc",
+        "rc",
+        8,
+        ["reviewer"],
+        expect.any(AbortSignal),
+      );
     });
 
     it("falls back to parsing review payload pr_url when reply_targets are unavailable", async () => {
@@ -1254,7 +1284,13 @@ describe("EventDispatcher", () => {
       await dispatcher.handle(completedEvent(), makeTask());
       await flushMicrotasks();
 
-      expect(requestReviewers).toHaveBeenCalledWith("fallback", "repo", 9, ["reviewer"]);
+      expect(requestReviewers).toHaveBeenCalledWith(
+        "fallback",
+        "repo",
+        9,
+        ["reviewer"],
+        expect.any(AbortSignal),
+      );
     });
 
     it("does not re-request review on an idempotent review completion re-fire", async () => {
@@ -1318,7 +1354,13 @@ describe("EventDispatcher", () => {
       await flushMicrotasks();
 
       expect(result).toBe("ok");
-      expect(requestReviewers).toHaveBeenCalledWith("o", "r", 7, ["reviewer"]);
+      expect(requestReviewers).toHaveBeenCalledWith(
+        "o",
+        "r",
+        7,
+        ["reviewer"],
+        expect.any(AbortSignal),
+      );
     });
 
     it("does not crash when markResponded returns 0 rows (lease lost; warned)", async () => {
@@ -1349,8 +1391,7 @@ describe("EventDispatcher", () => {
   // reconcileOne advances the cursor only after handle() returns, so a lost
   // lease or a crash in between dispatches the same events again.
   describe("replay (same event dispatched again)", () => {
-    it("completed: the run archive upload re-fires on the already-responded row", async () => {
-      // characterization: changes in phase 1b (spec §15 bug 3, I11 firstTransition)
+    it("completed: the run archive uploads once; the already-responded replay skips it", async () => {
       extractArchive.mockResolvedValue(new Uint8Array([1]));
       const done: HarnessEvent = {
         seq: 5,
@@ -1365,7 +1406,8 @@ describe("EventDispatcher", () => {
       await flushMicrotasks();
 
       expect(markResponded).toHaveBeenCalledTimes(1);
-      expect(uploadIssueAttachment).toHaveBeenCalledTimes(2);
+      expect(extractArchive).toHaveBeenCalledTimes(1);
+      expect(uploadIssueAttachment).toHaveBeenCalledTimes(1);
     });
 
     it("pr_opened: the Linear attach re-runs (appendPrUrl returns the row for a known URL)", async () => {
@@ -1375,8 +1417,11 @@ describe("EventDispatcher", () => {
       expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
     });
 
-    it("pr_opened: the onboarding comment and the PR assignee mirror re-run", async () => {
-      // characterization: changes in phase 1b (spec §13, §15 bug 4, I11 firstTime)
+    it("pr_opened: the onboarding comment and the PR assignee mirror run only the first time", async () => {
+      // appendPrUrl finds the URL already there on the replay.
+      appendPrUrl
+        .mockResolvedValueOnce([{ id: "task-1", firstTime: true }])
+        .mockResolvedValueOnce([{ id: "task-1", firstTime: false }]);
       getIssueHumanAssignee.mockResolvedValue({
         id: "usr-1",
         name: "Ada Lovelace",
@@ -1389,8 +1434,10 @@ describe("EventDispatcher", () => {
       await dispatcher.handle(prEvent(), makeTask());
       await flushMicrotasks();
 
-      expect(postIssueComment).toHaveBeenCalledTimes(2);
-      expect(addPrAssignees).toHaveBeenCalledTimes(2);
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
+      expect(addPrAssignees).toHaveBeenCalledTimes(1);
+      // The owner's onPrOpened (the idempotent Linear attach) runs every time.
+      expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
     });
 
     it("agent_response and agent_error post again on every dispatch", async () => {

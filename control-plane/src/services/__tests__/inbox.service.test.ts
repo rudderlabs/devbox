@@ -71,6 +71,7 @@ const { InboxService, WORKSPACE_MISSING_MESSAGE } = await import("../inbox.servi
 const { LinearIntegration } = await import("../../integrations/linear");
 const { githubIntegration } = await import("../../integrations/github");
 const { apiIntegration } = await import("../../integrations/api");
+const { IntegrationHooks } = await import("../integrationHooks");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -179,11 +180,17 @@ describe("InboxService", () => {
       getAuthorizedLinearClient: mock(() => Promise.resolve({})),
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
-    service = new InboxService(inboxRepo, sandboxManager, {
+    const integrations = {
       linear: new LinearIntegration(linearTokenProvider),
       api: apiIntegration,
       github: githubIntegration,
-    });
+    };
+    service = new InboxService(
+      inboxRepo,
+      sandboxManager,
+      integrations,
+      new IntegrationHooks(integrations, inboxRepo),
+    );
   });
 
   describe("sweepUndelivered", () => {

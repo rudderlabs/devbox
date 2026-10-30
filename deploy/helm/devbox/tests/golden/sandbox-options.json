@@ -607,6 +607,7 @@
             "runAsUser": 1000,
             "runAsGroup": 1000
           },
+          "terminationGracePeriodSeconds": 120,
           "containers": [
             {
               "name": "control-plane",

@@ -481,7 +481,8 @@ export class TaskRepository {
   // Owner-guarded append to pr_urls; dedupes on (url) within the array.
   // Returns 0 rows on stale-lease takeover — the caller (EventDispatcher's
   // pr_opened case) treats that as a self-eviction signal, matching every
-  // other state-advancing repo method.
+  // other state-advancing repo method. A URL already there still returns the
+  // row; `firstTime` (PG18 `old.`) says whether this call added it.
   async appendPrUrl(params: {
     taskId: string;
     ownerId: string;
@@ -489,7 +490,7 @@ export class TaskRepository {
     repo: string;
     branch: string;
     commitSha: string;
-  }): Promise<{ id: string }[]> {
+  }): Promise<{ id: string; firstTime: boolean }[]> {
     const entry = sql`jsonb_build_object(
       'repo', ${params.repo}::text,
       'url', ${params.prUrl}::text,
@@ -512,7 +513,10 @@ export class TaskRepository {
         updatedAt: new Date(),
       })
       .where(this.ownedByUs(params.taskId, params.ownerId))
-      .returning({ id: schema.tasks.id });
+      .returning({
+        id: schema.tasks.id,
+        firstTime: sql<boolean>`old.pr_urls IS DISTINCT FROM new.pr_urls`,
+      });
   }
 
   // GitHub webhook PR → task lookup. GIN-indexed. LIMIT 2 (not 1) so that a PR

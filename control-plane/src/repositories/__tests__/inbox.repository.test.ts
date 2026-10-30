@@ -363,6 +363,22 @@ describe("InboxRepository", () => {
     });
   });
 
+  describe("getAssignment", () => {
+    it("returns the task's assignment row, never another round or another task's", async () => {
+      const task = await insertTask();
+      const other = await insertTask();
+      await insertRow(task.id, { source: "github", kind: "comment", status: "pending" });
+      const assignment = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
+
+      expect((await repo.getAssignment(task.id))?.id).toBe(assignment.id);
+      expect(await repo.getAssignment(other.id)).toBeNull();
+    });
+  });
+
   describe("markResponded", () => {
     it("owner match → status 'responded' + 1 row; owner mismatch / re-fire → 0 rows", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
