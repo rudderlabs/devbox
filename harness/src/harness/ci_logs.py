@@ -19,6 +19,8 @@ _RUN_URL_RE = re.compile(
 )
 
 
+REPORTED_CI_SOURCES = frozenset({"check_run", "status"})
+
 _CHECK_RUN_URL_RE = re.compile(
     r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)"
     r"/runs/(?P<check_run_id>\d+)"

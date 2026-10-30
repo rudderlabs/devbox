@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-from harness.ci_logs import parse_run_url
+from harness.ci_logs import REPORTED_CI_SOURCES, parse_run_url
 from harness.deepagents.agents.followup import CiAgent, FollowUpAgent
 from harness.deepagents.checkpointer import latest_round_tag
 from harness.deepagents.middleware.ci_rerun import WorkflowRunRef
@@ -145,10 +145,12 @@ def ci_brief(
     errors: Sequence[str],
 ) -> str:
     pr = payload.get("pr") if isinstance(payload.get("pr"), Mapping) else None
+    reported = payload.get("ci_source") in REPORTED_CI_SOURCES
     lines = [
         "<harness_context>",
         "- **stage**: addressing CI failure",
-        f"- **workflow**: {defang(str(payload.get('workflow_name', 'unknown')))}",
+        f"- **{'check' if reported else 'workflow'}**: "
+        f"{defang(str(payload.get('workflow_name', 'unknown')))}",
         f"- **conclusion**: {defang(str(payload.get('conclusion', 'failure')))}",
         f"- **run**: {defang(str(payload.get('run_url', '')))}",
         f"- **head sha**: {defang(str(payload.get('head_sha', '')))}",
@@ -161,12 +163,22 @@ def ci_brief(
         ]
     lines += [
         "",
-        "### Failed job logs (on disk)",
+        "### What the CI tool reported (on disk)"
+        if reported
+        else "### Failed job logs (on disk)",
         *(
             f"- **{defang(str(j['job_name']))}**: `{defang(str(j['log_path']))}`"
             for j in failed_jobs
         ),
     ]
+    if reported:
+        lines += [
+            "",
+            "This CI isn't GitHub Actions. The files hold what it reported to "
+            "GitHub, not its full logs, and its own page can't be opened from "
+            "here. When they don't show the cause, reproduce the failure with the "
+            "repository's own build, lint and test commands.",
+        ]
     if errors:
         lines += [
             "",
@@ -649,10 +661,14 @@ def run_followup_ci(
     target_id = str(payload["target_id"])
     ticket = require_task_key(payload, "ci_result payload")
     pr = _pr(payload)
-    parsed = parse_run_url(payload.get("run_url", ""))
-    if parsed is None:
-        raise ValueError(f"ci_result: unparseable run_url {payload.get('run_url')!r}")
-    run = WorkflowRunRef(*parsed)
+    run: WorkflowRunRef | None = None
+    if payload.get("ci_source") not in REPORTED_CI_SOURCES:
+        parsed = parse_run_url(payload.get("run_url", ""))
+        if parsed is None:
+            raise ValueError(
+                f"ci_result: unparseable run_url {payload.get('run_url')!r}"
+            )
+        run = WorkflowRunRef(*parsed)
 
     def brief() -> str:
         return ci_brief(payload=payload, failed_jobs=failed_jobs, errors=errors)
