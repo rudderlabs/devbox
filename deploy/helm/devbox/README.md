@@ -25,7 +25,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | controlPlane.resources.limits.memory | string | `"1Gi"` |  |
 | controlPlane.resources.requests.cpu | string | `"100m"` |  |
 | controlPlane.resources.requests.memory | string | `"256Mi"` |  |
-| controlPlane.terminationGracePeriodSeconds | int | `120` | Seconds between SIGTERM and SIGKILL. At least one task's reconcile (up to 110s when platforms are slow) plus SHUTDOWN_DRAIN_MS (10s) for in-flight provisions and integration hooks; raise it with SHUTDOWN_DRAIN_MS. |
+| controlPlane.terminationGracePeriodSeconds | int | `150` | Seconds between SIGTERM and SIGKILL. At least one task's reconcile (up to 110s when platforms are slow, plus 50s per extra PR opened in that reconcile) plus SHUTDOWN_DRAIN_MS (10s) for in-flight provisions and integration hooks; raise it with SHUTDOWN_DRAIN_MS. |
 | database.existingSecret | string | `""` | With postgresql.enabled false: a Secret with key `DATABASE_URL`. |
 | extraEnv | list | `[]` | Extra control-plane env. Only explicitly allowlisted HARNESS_* settings reach sandboxes; never put a real secret in a forwarded name. |
 | extraManifests | list | `[]` | Extra manifests, rendered with tpl. |

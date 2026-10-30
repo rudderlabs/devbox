@@ -94,9 +94,9 @@ services:
     build: *control-plane-build
     restart: unless-stopped
     # Shutdown finishes the task it is reconciling (up to 110s when platforms
-    # are slow), then drains for SHUTDOWN_DRAIN_MS (10s); Compose's default 10s
-    # would cut both short.
-    stop_grace_period: 120s
+    # are slow, plus 50s per extra PR it opens), then drains for
+    # SHUTDOWN_DRAIN_MS (10s); Compose's default 10s would cut both short.
+    stop_grace_period: 150s
     # Explicit, with no env_file. Only allowlisted HARNESS_* settings cross
     # into sandboxes, and a forwarded name must never hold a real secret.
     environment:
