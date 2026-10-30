@@ -13,6 +13,7 @@
 import { readFileSync } from "node:fs";
 import { config } from "../config";
 import { githubApiBaseUrl } from "../githubToken/mint";
+import { HttpError, parseRetryAfter, TokenFetchError } from "../integrations/http";
 import { logger } from "../logger";
 import {
   type GithubTokenProvider,
@@ -42,8 +43,13 @@ function tokenProvider(): GithubTokenProvider {
   return githubToken;
 }
 
+// No token means nothing was sent, so a send may be retried (TokenFetchError).
 function token(): string {
-  return tokenProvider()();
+  try {
+    return tokenProvider()();
+  } catch (err) {
+    throw new TokenFetchError(err instanceof Error ? err.message : String(err));
+  }
 }
 
 // The token provider's state, for GET /api/integrations/github.
@@ -60,22 +66,29 @@ function githubHeaders(): Record<string, string> {
   };
 }
 
-// One request. Throws on non-2xx with status + a truncated body snippet — the
-// token is never included in the message.
+// One request. Throws an HttpError on non-2xx with status + a truncated body
+// snippet (and Retry-After) — the token is never included in the message.
 async function githubFetch(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<{ status: number; json: unknown }> {
   const resp = await fetch(`${API_BASE}${path}`, {
     method,
     headers: githubHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   const text = await resp.text();
   if (!resp.ok) {
     const snippet = text.slice(0, 500);
-    throw new Error(`GitHub ${method} ${path} failed: HTTP ${resp.status} ${snippet}`);
+    throw new HttpError(
+      `GitHub ${method} ${path} failed: HTTP ${resp.status} ${snippet}`,
+      resp.status,
+      // `?.`: the client tests stub fetch with header-less partial responses.
+      parseRetryAfter(resp.headers?.get("retry-after") ?? null),
+    );
   }
   let json: unknown = null;
   if (text.length > 0) {
@@ -99,11 +112,13 @@ export async function postIssueComment(
   repo: string,
   prNumber: number,
   body: string,
+  signal?: AbortSignal,
 ): Promise<{ id: number; url: string }> {
   const { json } = await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${prNumber}/comments`,
     { body },
+    signal,
   );
   const r = asRecord(json);
   return { id: Number(r.id), url: String(r.html_url ?? "") };
@@ -133,11 +148,13 @@ export async function postReviewCommentReply(
   prNumber: number,
   inReplyTo: number,
   body: string,
+  signal?: AbortSignal,
 ): Promise<{ id: number; url: string }> {
   const { json } = await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/comments`,
     { body, in_reply_to: inReplyTo },
+    signal,
   );
   const r = asRecord(json);
   return { id: Number(r.id), url: String(r.html_url ?? "") };
@@ -150,11 +167,13 @@ export async function addIssueCommentReaction(
   repo: string,
   commentId: number,
   content: ReactionContent,
+  signal?: AbortSignal,
 ): Promise<void> {
   await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/comments/${commentId}/reactions`,
     { content },
+    signal,
   );
 }
 
@@ -165,11 +184,13 @@ export async function addReviewCommentReaction(
   repo: string,
   commentId: number,
   content: ReactionContent,
+  signal?: AbortSignal,
 ): Promise<void> {
   await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/comments/${commentId}/reactions`,
     { content },
+    signal,
   );
 }
 

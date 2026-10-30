@@ -81,6 +81,8 @@ const { EventDispatcher } = await import("../eventDispatcher");
 const { LinearIntegration } = await import("../../integrations/linear");
 const { githubIntegration } = await import("../../integrations/github");
 const { apiIntegration } = await import("../../integrations/api");
+const { HttpError } = await import("../../integrations/http");
+const { ReplyHolds } = await import("../replyHolds");
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
   config: {
     github: { webhooks: { botLogin: string } | undefined };
@@ -155,6 +157,7 @@ describe("EventDispatcher", () => {
   let notifyTerminal: ReturnType<typeof mock>;
   let extractArchive: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
+  let holds: InstanceType<typeof ReplyHolds>;
   let dispatcher: InstanceType<typeof EventDispatcher>;
 
   beforeEach(() => {
@@ -202,6 +205,7 @@ describe("EventDispatcher", () => {
     notifyTerminal = mock(() => Promise.resolve());
     slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
+    holds = new ReplyHolds();
     dispatcher = new EventDispatcher(
       taskRepo,
       inboxRepo,
@@ -213,6 +217,7 @@ describe("EventDispatcher", () => {
         api: apiIntegration,
         github: githubIntegration,
       },
+      holds,
     );
   });
 
@@ -446,13 +451,12 @@ describe("EventDispatcher", () => {
       expect(emitThought).not.toHaveBeenCalled();
     });
 
-    it("Linear task: a token fetch failure posts nothing and does not return ok (cursor held)", async () => {
-      // characterization: changes in phase 1b (handle returns "hold" instead of rejecting)
+    it("Linear task: a token fetch failure posts nothing and holds the event", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
-      await expect(
-        dispatcher.handle(
+      expect(
+        await dispatcher.handle(
           {
             seq: 1,
             ts: "t",
@@ -463,7 +467,7 @@ describe("EventDispatcher", () => {
           },
           makeTask(),
         ),
-      ).rejects.toThrow("token refresh failed");
+      ).toBe("hold");
       for (const m of [emitThought, emitAction, emitResponse, emitError, postIssueComment]) {
         expect(m).not.toHaveBeenCalled();
       }
@@ -537,8 +541,8 @@ describe("EventDispatcher", () => {
         "⚠️ Something went wrong while working on this. Mention @harness in a new comment to retry.";
       // The comment's thread and the review summary (a top-level PR comment).
       expect(postIssueComment.mock.calls as unknown[]).toEqual([
-        ["o", "r", 1, retry],
-        ["o", "r", 1, retry],
+        ["o", "r", 1, retry, expect.any(AbortSignal)],
+        ["o", "r", 1, retry, expect.any(AbortSignal)],
       ]);
       expect(postReviewCommentReply).not.toHaveBeenCalled();
       expect(emitError).not.toHaveBeenCalled();
@@ -591,6 +595,7 @@ describe("EventDispatcher", () => {
         linearTokenProvider,
         slackNotifier,
         { linear: record("linear"), api: record("api"), github: record("github") },
+        new ReplyHolds(),
       );
       const assignment = linearRow();
       const ghComment = {
@@ -673,13 +678,11 @@ describe("EventDispatcher", () => {
       );
     });
 
-    it("Linear task: a token fetch failure rejects before appendPrUrl (cursor held)", async () => {
+    it("Linear task: a token fetch failure holds the event before appendPrUrl", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
-      await expect(dispatcher.handle(prEvent(), makeTask())).rejects.toThrow(
-        "token refresh failed",
-      );
+      expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
       expect(appendPrUrl).not.toHaveBeenCalled();
     });
 
@@ -888,7 +891,13 @@ describe("EventDispatcher", () => {
     it("routes an issue_comment target to postIssueComment", async () => {
       getByIdForTask.mockResolvedValue(ghCommentRow());
       await dispatcher.handle(responseEvent("555"), makeTask());
-      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 1, "good catch, fixing");
+      expect(postIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        1,
+        "good catch, fixing",
+        expect.any(AbortSignal),
+      );
       expect(emitResponse).not.toHaveBeenCalled();
     });
 
@@ -911,7 +920,14 @@ describe("EventDispatcher", () => {
       ];
       getByIdForTask.mockResolvedValue(row);
       await dispatcher.handle(responseEvent("555"), makeTask());
-      expect(postReviewCommentReply).toHaveBeenCalledWith("o", "r", 1, 555, "good catch, fixing");
+      expect(postReviewCommentReply).toHaveBeenCalledWith(
+        "o",
+        "r",
+        1,
+        555,
+        "good catch, fixing",
+        expect.any(AbortSignal),
+      );
     });
 
     it("routes a linear_session target to emitResponse using target.id (the session id)", async () => {
@@ -924,17 +940,23 @@ describe("EventDispatcher", () => {
       expect(emitResponse).toHaveBeenCalledWith(expect.anything(), "sess-1", "good catch, fixing");
     });
 
-    it("a failed GitHub reply is logged and dropped: handle() resolves ok, so the cursor advances", async () => {
-      // characterization: changes in phase 1b (spec §13, §4 I14: pre-send failures hold)
+    it("a GitHub reply that fails before sending (429) holds; any other failure is dropped", async () => {
       getByIdForTask.mockResolvedValue(ghCommentRow());
-      // githubFetch's error for a 429: a plain Error, the status only in the message.
-      postIssueComment.mockRejectedValue(
-        new Error(
+      // githubFetch's error for a 429 carries the status and Retry-After.
+      postIssueComment.mockRejectedValueOnce(
+        new HttpError(
           'GitHub POST /repos/o/r/issues/1/comments failed: HTTP 429 {"message":"API rate limit exceeded"}',
+          429,
+          30_000,
         ),
       );
-      expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("ok");
-      expect(postIssueComment).toHaveBeenCalledTimes(1);
+      expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("hold");
+      // A 5xx may have landed: dropped, the cursor advances past it.
+      postIssueComment.mockRejectedValueOnce(
+        new HttpError("GitHub POST /repos/o/r/issues/1/comments failed: HTTP 502 ", 502),
+      );
+      expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("dropped");
+      expect(postIssueComment).toHaveBeenCalledTimes(2);
     });
 
     it("still posts GitHub replies when GitHub webhooks are off", async () => {
@@ -944,7 +966,13 @@ describe("EventDispatcher", () => {
       try {
         getByIdForTask.mockResolvedValue(ghCommentRow());
         await dispatcher.handle(responseEvent("555"), makeTask());
-        expect(postIssueComment).toHaveBeenCalledWith("o", "r", 1, "good catch, fixing");
+        expect(postIssueComment).toHaveBeenCalledWith(
+          "o",
+          "r",
+          1,
+          "good catch, fixing",
+          expect.any(AbortSignal),
+        );
       } finally {
         mockedConfig.github.webhooks = webhooks;
       }
@@ -962,7 +990,13 @@ describe("EventDispatcher", () => {
           makeTask(),
         ),
       ).toBe("ok");
-      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 1, "good catch, fixing");
+      expect(postIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        1,
+        "good catch, fixing",
+        expect.any(AbortSignal),
+      );
       expect(markResponded).toHaveBeenCalledWith({
         inboxId: "inbox-2",
         ownerId: "pod-test",
@@ -976,6 +1010,31 @@ describe("EventDispatcher", () => {
       const result = await dispatcher.handle(responseEvent("not-a-target"), makeTask());
       expect(result).toBe("ok");
       expect(postIssueComment).not.toHaveBeenCalled();
+    });
+
+    it("a send holds on the round's integration; the Linear client fetch on the task's", async () => {
+      // A GitHub round on a Linear task: the 429 is GitHub's hold.
+      getByIdForTask.mockResolvedValue(ghCommentRow());
+      postIssueComment.mockRejectedValueOnce(new HttpError("HTTP 429", 429));
+      expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("hold");
+      expect(Object.keys(holds.stats())).toEqual(["github"]);
+      // pr_opened's Linear client fetch is the task's (Linear's) hold.
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        new Error("token refresh failed"),
+      );
+      expect(await dispatcher.handle(prEvent(), makeTask({ id: "task-2" }))).toBe("hold");
+      expect(holds.stats().linear?.heldTasks).toBe(1);
+    });
+
+    it("a Linear send gets a per-call client bound to the send's signal", async () => {
+      const row = ghCommentRow();
+      row.source = "linear";
+      row.reply_targets = [{ id: "sess-1", spec: { kind: "linear_session" } }];
+      getByIdForTask.mockResolvedValue(row);
+      expect(await dispatcher.handle(responseEvent("sess-1"), makeTask())).toBe("ok");
+      expect(linearTokenProvider.getAuthorizedLinearClient).toHaveBeenCalledWith(
+        expect.any(AbortSignal),
+      );
     });
   });
 
@@ -1268,13 +1327,11 @@ describe("EventDispatcher", () => {
       expect(markResponded).toHaveBeenCalled();
     });
 
-    it("Linear assignment: a token fetch failure rejects before markResponded (cursor held)", async () => {
+    it("Linear assignment: a token fetch failure holds the event before markResponded", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
-      await expect(dispatcher.handle(completedEvent(), makeTask())).rejects.toThrow(
-        "token refresh failed",
-      );
+      expect(await dispatcher.handle(completedEvent(), makeTask())).toBe("hold");
       expect(markResponded).not.toHaveBeenCalled();
     });
 

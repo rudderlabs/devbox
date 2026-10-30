@@ -16,6 +16,9 @@ const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
 const repo = new TaskRepository();
 
+// Every task source this build knows; claimNext and listInFlightOwnedBy filter on it.
+const ALL_SOURCES: ("linear" | "api")[] = ["linear", "api"];
+
 const linearTarget = (targetId: string) => ({
   id: targetId,
   spec: { kind: "linear_session" as const },
@@ -545,6 +548,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 100,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -557,6 +561,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
 
       expect(task?.id).toBe(t.id);
@@ -573,6 +578,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 100,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -589,6 +595,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-live",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
       expect(task?.ownerId).toBe("pod-live");
@@ -611,6 +618,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-live",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
       expect(task?.ownerId).toBe("pod-live");
@@ -630,6 +638,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 100,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -648,6 +657,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(b.id);
     });
@@ -663,6 +673,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 1,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -675,6 +686,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 1,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
     });
@@ -700,6 +712,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 1,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -726,6 +739,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 1,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -752,6 +766,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 1,
+        sources: ALL_SOURCES,
       });
       // A claim succeeds — the stale lease did not consume the only slot.
       expect(task?.id).toBe(stale.id);
@@ -776,6 +791,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 2,
+        sources: ALL_SOURCES,
       });
       // running.n == 1 (not 2) → the fresh task is claimable.
       expect(task?.id).toBe(fresh.id);
@@ -1059,8 +1075,59 @@ describe("TaskRepository", () => {
       await insertTask({ externalId: "b", ownerId: "pod-a" }); // no sandbox
       await insertTask({ externalId: "c", ownerId: "pod-b", sandboxId: "sbx-c" }); // other pod
 
-      const ids = (await repo.listInFlightOwnedBy("pod-a")).map((r) => r.id);
+      const ids = (await repo.listInFlightOwnedBy("pod-a", ALL_SOURCES)).map((r) => r.id);
       expect(ids).toEqual([withSbx.id]);
+    });
+  });
+
+  describe("source filter (§10: an image never works a source it doesn't know)", () => {
+    it("claimNext and listInFlightOwnedBy skip a task whose source is not in the list", async () => {
+      const api = await insertTask({ source: "api", externalId: "api-unclaimed" });
+      await insertInboxRow(api.id);
+      const apiOwned = await insertTask({
+        source: "api",
+        externalId: "api-owned",
+        ownerId: "pod-a",
+        sandboxId: "sbx-api",
+      });
+      const linear = await insertTask({
+        externalId: "lin-owned",
+        ownerId: "pod-a",
+        sandboxId: "sbx-l",
+      });
+      const opts = {
+        leaseTimeoutMs: 10_000,
+        maxConcurrentSandboxes: 100,
+        sources: ["linear" as const],
+      };
+
+      expect(await repo.claimNext({ ownerId: "pod-b", ...opts })).toBeNull();
+      expect((await repo.listInFlightOwnedBy("pod-a", ["linear"])).map((r) => r.id)).toEqual([
+        linear.id,
+      ]);
+      // The same rows with the source listed: claimed and listed.
+      expect((await repo.claimNext({ ownerId: "pod-b", ...opts, sources: ALL_SOURCES }))?.id).toBe(
+        api.id,
+      );
+      expect(
+        (await repo.listInFlightOwnedBy("pod-a", ALL_SOURCES)).map((r) => r.id).sort(),
+      ).toEqual([apiOwned.id, linear.id].sort());
+    });
+  });
+
+  describe("heartbeatTask", () => {
+    it("renews one owned task and returns 0 rows once the lease is someone else's", async () => {
+      const mine = await insertTask({ ownerId: "pod-a", heartbeatAt: new Date("2020-01-01") });
+      const other = await insertTask({ ownerId: "pod-a", heartbeatAt: new Date("2020-01-01") });
+
+      expect(await repo.heartbeatTask({ taskId: mine.id, ownerId: "pod-a" })).toEqual([
+        { id: mine.id },
+      ]);
+      expect(await repo.heartbeatTask({ taskId: mine.id, ownerId: "pod-b" })).toEqual([]);
+
+      const rows = await db.select().from(schema.tasks);
+      expect(rows.find((r) => r.id === mine.id)?.heartbeatAt?.getFullYear()).toBeGreaterThan(2020);
+      expect(rows.find((r) => r.id === other.id)?.heartbeatAt?.getFullYear()).toBe(2020);
     });
   });
 
@@ -1093,6 +1160,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-b",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
       expect(task?.ownerId).toBe("pod-b");

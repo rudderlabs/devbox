@@ -7,6 +7,7 @@ import { GitHubWebhookController } from "./controllers/githubWebhook.controller"
 import { HealthController } from "./controllers/health.controller";
 import { LinearWebhookController } from "./controllers/linearWebhook.controller";
 import { db } from "./db";
+import { taskSource } from "./db/schema";
 import { apiIntegration } from "./integrations/api";
 import { githubIntegration } from "./integrations/github";
 import { LinearIntegration } from "./integrations/linear";
@@ -28,6 +29,7 @@ import { GithubStatusService } from "./services/githubStatus.service";
 import { InboxService } from "./services/inbox.service";
 import { LinearStatusService } from "./services/linearStatus.service";
 import { LinearTokenProvider } from "./services/linearTokenProvider";
+import { ReplyHolds } from "./services/replyHolds";
 import { SandboxManager } from "./services/sandboxManager.service";
 import { SlackNotifierService } from "./services/slackNotifier.service";
 import { TaskProcessorService } from "./services/taskProcessor.service";
@@ -83,6 +85,13 @@ export function createApp(): AppBundle {
     api: apiIntegration,
     github: githubIntegration,
   } satisfies Record<IntegrationName, Integration>;
+  // The registered integrations that create tasks (github creates none). Only
+  // these sources are claimed and reconciled, so an older image never works a
+  // task whose source it doesn't know (§10).
+  const taskSources = taskSource.enumValues.filter((s) => s in integrations);
+  // Sends held because they failed before anything went out; the status
+  // routes will report them per integration (phase 2).
+  const replyHolds = new ReplyHolds();
 
   const inboxService = new InboxService(inboxRepository, sandboxManager, integrations);
 
@@ -107,6 +116,7 @@ export function createApp(): AppBundle {
     linearTokenProvider,
     slackNotifier,
     integrations,
+    replyHolds,
   );
 
   const taskProcessor = new TaskProcessorService(
@@ -118,6 +128,8 @@ export function createApp(): AppBundle {
     inboxService,
     slackNotifier,
     integrations,
+    replyHolds,
+    taskSources,
   );
 
   const linearStatus = new LinearStatusService(

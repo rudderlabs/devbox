@@ -94,6 +94,8 @@ const { LinearIntegration } = await import("../../integrations/linear");
 const { githubIntegration } = await import("../../integrations/github");
 const { apiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
+const { ReplyHolds } = await import("../replyHolds");
+const { RetryableError } = await import("../../integrations/outbound");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -145,6 +147,7 @@ const survivingNonTerminalRow = (taskId = "task-1", externalId = "issue-1"): any
 
 describe("TaskProcessorService", () => {
   let heartbeatOwnedBy: ReturnType<typeof mock>;
+  let heartbeatTask: ReturnType<typeof mock>;
   let claimNext: ReturnType<typeof mock>;
   let attachSandboxResources: ReturnType<typeof mock>;
   let backdateHeartbeatsOwnedBy: ReturnType<typeof mock>;
@@ -177,6 +180,7 @@ describe("TaskProcessorService", () => {
   let inboxService: InboxService;
   let notifyTerminal: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
+  let holds: InstanceType<typeof ReplyHolds>;
   let service: InstanceType<typeof TaskProcessorService>;
 
   beforeEach(() => {
@@ -194,6 +198,7 @@ describe("TaskProcessorService", () => {
     postReviewCommentReply.mockResolvedValue({ id: 1, url: "u" });
 
     heartbeatOwnedBy = mock(() => Promise.resolve());
+    heartbeatTask = mock(() => Promise.resolve([{ id: "task-1" }]));
     claimNext = mock(() => Promise.resolve(null));
     attachSandboxResources = mock(() => Promise.resolve([{ id: "task-1" }]));
     backdateHeartbeatsOwnedBy = mock(() => Promise.resolve());
@@ -207,6 +212,7 @@ describe("TaskProcessorService", () => {
     getByIdOwnedBy = mock((id: string) => Promise.resolve(makeTask({ id })));
     taskRepo = {
       heartbeatOwnedBy,
+      heartbeatTask,
       claimNext,
       attachSandboxResources,
       backdateHeartbeatsOwnedBy,
@@ -271,6 +277,7 @@ describe("TaskProcessorService", () => {
     notifyTerminal = mock(() => Promise.resolve());
     slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
+    holds = new ReplyHolds();
     service = new TaskProcessorService(
       taskRepo,
       inboxRepo,
@@ -284,6 +291,8 @@ describe("TaskProcessorService", () => {
         api: apiIntegration,
         github: githubIntegration,
       },
+      holds,
+      ["linear", "api"],
     );
   });
 
@@ -736,14 +745,15 @@ describe("TaskProcessorService", () => {
       expect(emitError).toHaveBeenCalledTimes(1);
       expect(emitError).toHaveBeenCalledWith(expect.anything(), "sess-1", MSG);
       // PR comments for the comment, the review body and the CI row, in row order.
+      const signal = expect.any(AbortSignal);
       expect(postIssueComment.mock.calls as unknown[]).toEqual([
-        ["o", "r", 7, MSG],
-        ["o", "r", 8, MSG],
-        ["o", "r", 9, MSG],
+        ["o", "r", 7, MSG, signal],
+        ["o", "r", 8, MSG, signal],
+        ["o", "r", 9, MSG, signal],
       ]);
       expect(postReviewCommentReply.mock.calls as unknown[]).toEqual([
-        ["o", "r", 8, 11, MSG],
-        ["o", "r", 8, 12, MSG],
+        ["o", "r", 8, 11, MSG, signal],
+        ["o", "r", 8, 12, MSG, signal],
       ]);
       expect(failTaskInbox).toHaveBeenCalledWith({
         taskId: "task-1",
@@ -792,7 +802,9 @@ describe("TaskProcessorService", () => {
 
       await failTask(makeTask());
 
-      expect(postIssueComment.mock.calls as unknown[]).toEqual([["o", "r", 7, MSG]]);
+      expect(postIssueComment.mock.calls as unknown[]).toEqual([
+        ["o", "r", 7, MSG, expect.any(AbortSignal)],
+      ]);
       expect(releaseLease).toHaveBeenCalledWith({
         taskId: "task-1",
         ownerId: "pod-test",
@@ -811,7 +823,7 @@ describe("TaskProcessorService", () => {
       await failTask(makeTask());
 
       expect(emitError).not.toHaveBeenCalled();
-      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 7, MSG);
+      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 7, MSG, expect.any(AbortSignal));
       expect(failTaskInbox).toHaveBeenCalled();
       expect(releaseLease).toHaveBeenCalledWith({
         taskId: "task-1",
@@ -1143,6 +1155,118 @@ describe("TaskProcessorService", () => {
       expect(recordEventCursor).not.toHaveBeenCalled();
       expect(failTaskInbox).not.toHaveBeenCalled();
       expect(requeueForRetry).not.toHaveBeenCalled();
+    });
+
+    it("a hold stops before the cursor advances and is not a reconcile error", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
+      readEvents
+        .mockResolvedValueOnce([
+          { seq: 1, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "x" },
+          { seq: 2, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "y" },
+        ] as HarnessEvent[])
+        .mockResolvedValue([]);
+      dispatcherHandle.mockResolvedValueOnce("hold");
+
+      service.start();
+      await waitFor(() => dispatcherHandle.mock.calls.length >= 1);
+      await new Promise<void>((r) => setTimeout(r, 30));
+      await service.stop();
+
+      expect(dispatcherHandle).toHaveBeenCalledTimes(1);
+      expect(recordEventCursor).not.toHaveBeenCalled();
+      expect(getSandboxPodStatus).not.toHaveBeenCalled();
+    });
+
+    it("skips a held task's events while it waits out Retry-After (the sweep still runs)", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      listInFlightOwnedBy.mockResolvedValue([task]);
+      holds.hold("task-1", { seq: 1, inbox_id: "i" }, "github", new RetryableError("429", 60_000));
+
+      service.start();
+      await waitFor(() => sweepUndelivered.mock.calls.length >= 3);
+      await service.stop();
+
+      expect(readEvents).not.toHaveBeenCalled();
+      expect(holds.stats().github?.heldTasks).toBe(1);
+    });
+
+    it("a dropped send advances the cursor, then ends this task's events for the tick", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
+      readEvents
+        .mockResolvedValueOnce([
+          { seq: 1, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "x" },
+          { seq: 2, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "y" },
+        ] as HarnessEvent[])
+        .mockResolvedValue([]);
+      dispatcherHandle.mockResolvedValueOnce("dropped");
+
+      service.start();
+      await waitFor(() => recordEventCursor.mock.calls.length >= 1);
+      await new Promise<void>((r) => setTimeout(r, 30));
+      await service.stop();
+
+      expect(dispatcherHandle).toHaveBeenCalledTimes(1);
+      const seqs = recordEventCursor.mock.calls.map(
+        (c: unknown[]) => (c[0] as { event: { seq: number } }).event.seq,
+      );
+      expect(seqs).toEqual([1]);
+    });
+
+    it("drops a hold once the cursor moves past its event, or once the task leaves this pod", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      // task-1 stays owned every tick, so only the cursor advance can drop its hold.
+      listInFlightOwnedBy.mockResolvedValue([task]);
+      readEvents
+        .mockResolvedValueOnce([
+          { seq: 1, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "x" },
+        ] as HarnessEvent[])
+        .mockResolvedValue([]);
+      const err = new RetryableError("token fetch failed");
+      holds.hold("task-1", { seq: 1, inbox_id: "i" }, "linear", err);
+      holds.hold("task-gone", { seq: 3, inbox_id: "j" }, "linear", err);
+      // The retry of task-1's held event succeeds; task-gone is not owned.
+      service.start();
+      await waitFor(() => recordEventCursor.mock.calls.length >= 1);
+      await new Promise<void>((r) => setTimeout(r, 30));
+      await service.stop();
+
+      expect(holds.stats()).toEqual({});
+    });
+
+    it("renews each task's lease right before its reconcile; a lost lease skips that task", async () => {
+      const t1 = makeTask({ id: "task-1", sandboxId: "sbx-1" });
+      const t2 = makeTask({ id: "task-2", sandboxId: "sbx-2" });
+      listInFlightOwnedBy.mockResolvedValueOnce([t1, t2]).mockResolvedValue([]);
+      const order: string[] = [];
+      heartbeatTask.mockImplementation((p: { taskId: string }) => {
+        order.push(`heartbeat ${p.taskId}`);
+        return Promise.resolve(p.taskId === "task-2" ? [] : [{ id: p.taskId }]);
+      });
+      getSandboxInfo.mockImplementation((id: string) => {
+        order.push(`reconcile ${id}`);
+        return Promise.resolve(makeSandboxInfo());
+      });
+
+      service.start();
+      await waitFor(() => order.length >= 3);
+      await new Promise<void>((r) => setTimeout(r, 30));
+      await service.stop();
+
+      expect(order).toEqual(["heartbeat task-1", "reconcile sbx-1", "heartbeat task-2"]);
+      expect(heartbeatTask).toHaveBeenCalledWith({ taskId: "task-1", ownerId: "pod-test" });
+    });
+
+    it("claims and lists only the configured task sources", async () => {
+      service.start();
+      await waitFor(() => claimNext.mock.calls.length > 0);
+      await service.stop();
+
+      expect(listInFlightOwnedBy).toHaveBeenCalledWith("pod-test", ["linear", "api"]);
+      expect(claimNext).toHaveBeenCalledWith(
+        expect.objectContaining({ sources: ["linear", "api"] }),
+      );
     });
 
     it("calls sweepUndelivered before reading events", async () => {

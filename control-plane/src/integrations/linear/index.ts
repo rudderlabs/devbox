@@ -1,8 +1,9 @@
-import type { LinearClient } from "@linear/sdk";
+import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
 import { emitAction, emitError, emitResponse, emitThought } from "../../clients/linear";
 import type { ReplyTarget } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import type { LinearTokenProvider } from "../../services/linearTokenProvider";
+import { retryable } from "../http";
 import { type Outbound, RetryableError, type SendCtx } from "../outbound";
 import type { Integration } from "../types";
 
@@ -16,45 +17,64 @@ export class LinearIntegration implements Integration {
     private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
   ) {}
 
-  async deliver(_ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
+  async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
     if (target.spec.kind !== "linear_session") {
       throw new Error(`linear cannot deliver to a ${target.spec.kind} target`);
     }
-    const client = await this.client();
-    switch (message.type) {
-      case "reply":
-        await emitResponse(client, target.id, message.body);
-        return;
-      case "progress":
-        if (message.kind === "thought") await emitThought(client, target.id, message.body);
-        // The daemon's body is the full action label (e.g. "Planning",
-        // "Addressing comment"). Linear renders `<action> <parameter>`
-        // concatenated, so a non-empty parameter appends a noisy suffix
-        // ("Addressing comment task"). Pass empty parameter — the body
-        // already carries everything the user should see.
-        else if (message.kind === "action") await emitAction(client, target.id, message.body, "");
-        else await emitError(client, target.id, message.body);
-        return;
-      case "failure": {
-        // task_failed and a failed assignment carry the summary; a crashed
-        // comment round carries only the detail.
-        const text =
-          message.cause === "workspace_missing"
-            ? WORKSPACE_MISSING_MESSAGE
-            : (message.summary ?? message.detail);
-        if (text) await emitError(client, target.id, text);
-        return;
+    const client = await this.client(ctx.signal);
+    // Each message is one activity (one request), so a retryable failure means
+    // nothing was posted.
+    try {
+      switch (message.type) {
+        case "reply":
+          await emitResponse(client, target.id, message.body);
+          return;
+        case "progress":
+          if (message.kind === "thought") await emitThought(client, target.id, message.body);
+          // The daemon's body is the full action label (e.g. "Planning",
+          // "Addressing comment"). Linear renders `<action> <parameter>`
+          // concatenated, so a non-empty parameter appends a noisy suffix
+          // ("Addressing comment task"). Pass empty parameter — the body
+          // already carries everything the user should see.
+          else if (message.kind === "action") await emitAction(client, target.id, message.body, "");
+          else await emitError(client, target.id, message.body);
+          return;
+        case "failure": {
+          // task_failed and a failed assignment carry the summary; a crashed
+          // comment round carries only the detail.
+          const text =
+            message.cause === "workspace_missing"
+              ? WORKSPACE_MISSING_MESSAGE
+              : (message.summary ?? message.detail);
+          if (text) await emitError(client, target.id, text);
+          return;
+        }
       }
+    } catch (err) {
+      throw linearRetryable(err) ?? err;
     }
   }
 
   // Nothing has been sent when the token fetch fails, so the caller may retry.
-  private async client(): Promise<LinearClient> {
+  // A per-call client: the signal bounds this send's requests only.
+  private async client(signal: AbortSignal): Promise<LinearClient> {
     try {
-      return await this.linearTokenProvider.getAuthorizedLinearClient();
+      return await this.linearTokenProvider.getAuthorizedLinearClient(signal);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new RetryableError(`Linear token fetch failed: ${msg}`);
     }
   }
+}
+
+// The SDK wraps every failure in a LinearError whose `raw` is what fetch (or
+// the token renewal after a 401) threw. A rate limit is the SDK's
+// RatelimitedLinearError: an HTTP 429 or a "ratelimited" GraphQL error, with
+// Retry-After in seconds.
+function linearRetryable(err: unknown): RetryableError | undefined {
+  if (err instanceof RatelimitedLinearError) {
+    const s = err.retryAfter;
+    return new RetryableError(err.message, s !== undefined && s >= 0 ? s * 1000 : undefined);
+  }
+  return retryable(err instanceof LinearError ? err.raw : err);
 }

@@ -233,7 +233,13 @@ describe("InboxService", () => {
       await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
 
       expect(postIssueComment).toHaveBeenCalledTimes(1);
-      expect(addIssueCommentReaction).toHaveBeenCalledWith("o", "r", 555, "confused");
+      expect(addIssueCommentReaction).toHaveBeenCalledWith(
+        "o",
+        "r",
+        555,
+        "confused",
+        expect.any(AbortSignal),
+      );
       expect(markFailed).toHaveBeenCalledWith({
         inboxId: "a",
         ownerId: "pod-test",
@@ -393,12 +399,25 @@ describe("InboxService", () => {
         7,
         556,
         WORKSPACE_MISSING_MESSAGE,
+        expect.any(AbortSignal),
       );
       expect(addReviewCommentReaction).toHaveBeenCalledTimes(1);
-      expect(addReviewCommentReaction).toHaveBeenCalledWith("o", "r", 556, "confused");
+      expect(addReviewCommentReaction).toHaveBeenCalledWith(
+        "o",
+        "r",
+        556,
+        "confused",
+        expect.any(AbortSignal),
+      );
       // Only the review body posts; its inline comments and the CI row get nothing.
       expect(postIssueComment).toHaveBeenCalledTimes(1);
-      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 8, WORKSPACE_MISSING_MESSAGE);
+      expect(postIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        8,
+        WORKSPACE_MISSING_MESSAGE,
+        expect.any(AbortSignal),
+      );
       expect(addIssueCommentReaction).not.toHaveBeenCalled();
       expect(markFailed.mock.calls.map((c) => (c[0] as { inboxId: string }).inboxId)).toEqual([
         "lin",
@@ -453,7 +472,13 @@ describe("InboxService", () => {
         "a",
         "b",
       ]);
-      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 7, WORKSPACE_MISSING_MESSAGE);
+      expect(postIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        7,
+        WORKSPACE_MISSING_MESSAGE,
+        expect.any(AbortSignal),
+      );
     });
   });
 

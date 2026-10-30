@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "../db";
 import type { Task } from "../db/schema";
 import { logger } from "../logger";
@@ -290,10 +290,15 @@ export class TaskRepository {
   //       on that delivered row; throughout its recreate-from-PVC window sandbox_id
   //       is NULL, so excluding 'delivered' here would let a retry wave over-admit
   //       past the cap. Matches the claimable predicate's IN ('pending','delivered').
+  //
+  // Only tasks of `sources` (the sources this build has an integration for) are
+  // claimed, so an older image never takes a task of a source it doesn't know:
+  // rollbacks and rolling overlaps stay safe without draining (§10).
   async claimNext(params: {
     ownerId: string;
     leaseTimeoutMs: number;
     maxConcurrentSandboxes: number;
+    sources: Task["source"][];
   }): Promise<Task | null> {
     const leaseCutoff = `${params.leaseTimeoutMs} milliseconds`;
     const rows = await db.execute<RawTaskRow>(sql`
@@ -315,7 +320,8 @@ export class TaskRepository {
       claimable AS (
         SELECT t.id
         FROM tasks t, running
-        WHERE EXISTS (
+        WHERE t.source IN ${params.sources}
+          AND EXISTS (
                 SELECT 1 FROM inbox i
                  WHERE i.task_id = t.id
                    AND i.status IN ('pending', 'delivered')
@@ -352,12 +358,18 @@ export class TaskRepository {
 
   // Tasks this pod owns with a sandbox attached — the reconcile loop iterates
   // these every tick. Comment-pickup tasks with sandbox_id NULL are reconciled
-  // via claimNext + sweep, not here.
-  async listInFlightOwnedBy(ownerId: string): Promise<Task[]> {
+  // via claimNext + sweep, not here. Filtered to `sources` like claimNext.
+  async listInFlightOwnedBy(ownerId: string, sources: Task["source"][]): Promise<Task[]> {
     return db
       .select()
       .from(schema.tasks)
-      .where(and(eq(schema.tasks.ownerId, ownerId), sql`${schema.tasks.sandboxId} IS NOT NULL`));
+      .where(
+        and(
+          eq(schema.tasks.ownerId, ownerId),
+          sql`${schema.tasks.sandboxId} IS NOT NULL`,
+          inArray(schema.tasks.source, sources),
+        ),
+      );
   }
 
   // As long as a pod owns a task it heartbeats; if it loses interest it calls
@@ -367,6 +379,16 @@ export class TaskRepository {
       .update(schema.tasks)
       .set({ heartbeatAt: sql`now()` })
       .where(eq(schema.tasks.ownerId, ownerId));
+  }
+
+  // One task's heartbeat, renewed right before its reconcile. Owner-guarded:
+  // 0 rows means the lease was taken over.
+  async heartbeatTask(params: { taskId: string; ownerId: string }): Promise<{ id: string }[]> {
+    return db
+      .update(schema.tasks)
+      .set({ heartbeatAt: sql`now()` })
+      .where(this.ownedByUs(params.taskId, params.ownerId))
+      .returning({ id: schema.tasks.id });
   }
 
   // Backdate heartbeats on own tasks so survivors become immediately

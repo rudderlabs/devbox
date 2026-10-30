@@ -3,6 +3,7 @@ import { emitAction, emitThought, setIssueStarted } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
+import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository } from "../repositories/inbox.repository";
@@ -11,6 +12,7 @@ import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
 import type { LinearTokenProvider } from "./linearTokenProvider";
+import type { ReplyHolds } from "./replyHolds";
 import { type PodStatus, SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
 
@@ -42,6 +44,10 @@ export class TaskProcessorService {
   private readonly inboxService: InboxService;
   private readonly slackNotifier: SlackNotifierService;
   private readonly integrations: Record<IntegrationName, Integration>;
+  private readonly holds: ReplyHolds;
+  // Sources this build has an integration for; claimNext and
+  // listInFlightOwnedBy see only these tasks (§10).
+  private readonly taskSources: Task["source"][];
 
   constructor(
     taskRepo: TaskRepository,
@@ -52,6 +58,8 @@ export class TaskProcessorService {
     inboxService: InboxService,
     slackNotifier: SlackNotifierService,
     integrations: Record<IntegrationName, Integration>,
+    holds: ReplyHolds,
+    taskSources: Task["source"][],
   ) {
     this.taskRepo = taskRepo;
     this.inboxRepo = inboxRepo;
@@ -61,6 +69,8 @@ export class TaskProcessorService {
     this.inboxService = inboxService;
     this.slackNotifier = slackNotifier;
     this.integrations = integrations;
+    this.holds = holds;
+    this.taskSources = taskSources;
   }
 
   start(): void {
@@ -109,9 +119,16 @@ export class TaskProcessorService {
     // 2. Idle reaper — kill sandboxes idle past the ceiling, release leases.
     await this.reapIdle().catch((err) => logErr("reapIdle failed", err));
 
-    // 3. Reconcile owned tasks with live sandboxes.
-    const owned = await this.taskRepo.listInFlightOwnedBy(config.podId);
+    // 3. Reconcile owned tasks with live sandboxes. Each task's lease is renewed
+    //    right before its reconcile, so slow sends on earlier tasks can't let it
+    //    outlive the lease mid-tick; 0 rows means a sibling took it over.
+    const owned = await this.taskRepo.listInFlightOwnedBy(config.podId, this.taskSources);
     for (const task of owned) {
+      const renewed = await this.taskRepo.heartbeatTask({ taskId: task.id, ownerId: config.podId });
+      if (renewed.length === 0) {
+        logger.info("lease lost before reconcile; skipping", { taskId: task.id });
+        continue;
+      }
       await this.reconcileOne(task)
         .then(() => {
           logger.debug("reconcileOne: succeeded", { taskId: task.id, sandboxId: task.sandboxId });
@@ -127,16 +144,18 @@ export class TaskProcessorService {
         });
     }
 
-    // Drop grace/window timers for any task this pod no longer owns (lease handed
-    // off, retried away, or terminally failed). Keyed by task.id with no other GC,
-    // these Maps would otherwise leak for the process lifetime AND let a stale
-    // `since` from a prior ownership epoch skip the grace/window on a re-claimed
-    // task's first fault. `owned` is this tick's owned, sandbox-bound set.
+    // Drop grace/window timers and reply holds for any task this pod no longer
+    // owns (lease handed off, retried away, or terminally failed). Keyed by
+    // task.id with no other GC, these Maps would otherwise leak for the process
+    // lifetime AND let a stale `since` from a prior ownership epoch skip the
+    // grace/window on a re-claimed task's first fault. `owned` is this tick's
+    // owned, sandbox-bound set.
     const ownedIds = new Set(owned.map((t) => t.id));
     for (const id of this.sandboxAbsentSince.keys())
       if (!ownedIds.has(id)) this.sandboxAbsentSince.delete(id);
     for (const id of this.reconcileFilesUnavailableSince.keys())
       if (!ownedIds.has(id)) this.reconcileFilesUnavailableSince.delete(id);
+    this.holds.retain(ownedIds);
 
     // 4. Claim new work (fresh-pending OR comment-pickup OR stale-lease
     //    takeover — single predicate).
@@ -144,6 +163,7 @@ export class TaskProcessorService {
       ownerId: config.podId,
       leaseTimeoutMs: config.leaseTimeoutMs,
       maxConcurrentSandboxes: config.maxConcurrentSandboxes,
+      sources: this.taskSources,
     });
     if (claimed) this.dispatch(claimed);
   }
@@ -364,6 +384,10 @@ export class TaskProcessorService {
     // Sweep: deliver any undelivered inbox rows to the sandbox.
     await this.inboxService.sweepUndelivered(task);
 
+    // A held event waiting out its Retry-After: skip this task's events this
+    // tick (the sweep above still hands new rounds to the sandbox).
+    if (this.holds.waiting(task.id)) return;
+
     // Read events.jsonl since cursor; dispatch each new event. Re-fetch the
     //    task between events because dispatcher cases mutate task state
     //    (appendPrUrl, setSandboxId).
@@ -372,33 +396,45 @@ export class TaskProcessorService {
     for (const event of events) {
       if (currentTask === null) break; // self-evict: lease lost or task gone
 
-      // handle() returns "self_evict" when an owner-guarded write inside the
-      // dispatcher (e.g. appendPrUrl) returned 0 rows — the lease was taken
-      // over mid-tick. Stop BEFORE advancing the cursor: a sibling pod owns
-      // this task and will resume from its own cursor.
       const result = await this.eventDispatcher.handle(event, currentTask);
-      if (result === "self_evict") {
-        logger.info("dispatcher self-evicted (lease lost); stopping reconcile", {
-          taskId: currentTask.id,
-          seq: event.seq,
-        });
-        break;
-      }
-      if (result === "abort") {
-        // The dispatcher found a foreign durable event in this task's stream (a
-        // cross-task leak). Stop here WITHOUT advancing the cursor — we neither
-        // apply nor skip past the leaked event. The task intentionally halts
-        // (and re-logs each tick) so the leak surfaces for an operator rather
-        // than being silently absorbed. Detail is in `cross_task_leak_detected`.
-        logger.error("reconcile halted: cross-task leak detected; not advancing cursor", {
-          event: "reconcile_halted_cross_task_leak",
-          taskId: currentTask.id,
-          taskExternalId: currentTask.externalId,
-          sandboxId: currentTask.sandboxId,
-          podId: config.podId,
-          seq: event.seq,
-        });
-        break;
+      switch (result) {
+        case "ok":
+        case "dropped":
+          break;
+        case "hold":
+          // A send failed before anything went out. Stop BEFORE advancing the
+          // cursor and return normally (not a reconcile error): the event is
+          // retried on a later tick, and nothing after it runs ahead of it.
+          return;
+        case "self_evict":
+          // An owner-guarded write inside the dispatcher (e.g. appendPrUrl)
+          // returned 0 rows — the lease was taken over mid-tick. Stop BEFORE
+          // advancing the cursor: a sibling pod owns this task and will resume
+          // from its own cursor.
+          logger.info("dispatcher self-evicted (lease lost); stopping reconcile", {
+            taskId: currentTask.id,
+            seq: event.seq,
+          });
+          return;
+        case "abort":
+          // The dispatcher found a foreign durable event in this task's stream (a
+          // cross-task leak). Stop here WITHOUT advancing the cursor — we neither
+          // apply nor skip past the leaked event. The task intentionally halts
+          // (and re-logs each tick) so the leak surfaces for an operator rather
+          // than being silently absorbed. Detail is in `cross_task_leak_detected`.
+          logger.error("reconcile halted: cross-task leak detected; not advancing cursor", {
+            event: "reconcile_halted_cross_task_leak",
+            taskId: currentTask.id,
+            taskExternalId: currentTask.externalId,
+            sandboxId: currentTask.sandboxId,
+            podId: config.podId,
+            seq: event.seq,
+          });
+          return;
+        default: {
+          const _exhaustive: never = result;
+          void _exhaustive;
+        }
       }
 
       const advanced = await this.taskRepo.recordEventCursor({
@@ -415,6 +451,11 @@ export class TaskProcessorService {
         });
         break;
       }
+      // The cursor is past any held event now.
+      this.holds.release(currentTask.id);
+      // A dropped send (timed out or failed for good) ends this task's events
+      // for the tick, so a slow or failing platform can't eat the tick.
+      if (result === "dropped") break;
 
       // Re-fetch (owner-scoped) to pick up dispatcher mutations (pr_urls
       // append, etc.). An owner-scoped fetch returns null on a takeover in the
@@ -781,14 +822,14 @@ export class TaskProcessorService {
       for (const t of row.reply_targets) {
         if (seen.has(t.id)) continue;
         seen.add(t.id);
-        await integration
-          .deliver({ signal: new AbortController().signal, log: logger }, t, {
+        await withTimeout(SEND_TIMEOUT_MS, (signal) =>
+          integration.deliver({ signal, log: logger }, t, {
             type: "failure",
             cause: "task_failed",
             round: row,
             summary: message,
-          })
-          .catch((e) => logErr(`failTask: post to ${t.spec.kind} target ${t.id} failed`, e));
+          }),
+        ).catch((e) => logErr(`failTask: post to ${t.spec.kind} target ${t.id} failed`, e));
       }
     }
 

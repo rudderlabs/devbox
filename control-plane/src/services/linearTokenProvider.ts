@@ -77,9 +77,11 @@ export class LinearTokenProvider {
 
   // A LinearClient that, when Linear answers 401, renews the token and retries
   // the call once. Covers SDK calls (`request`) and raw queries (`rawRequest`).
-  async getAuthorizedLinearClient(): Promise<LinearClient> {
+  // `signal` aborts this client's requests only; the shared token request
+  // never gets it, so one caller's timeout can't fail another's refresh.
+  async getAuthorizedLinearClient(signal?: AbortSignal): Promise<LinearClient> {
     let current = await this.getAccessToken();
-    const client = new LinearClient({ accessToken: current, apiUrl: this.apiUrl });
+    const client = new LinearClient({ accessToken: current, apiUrl: this.apiUrl, signal });
     // LinearClient sends every query through this instance's `request`, read at
     // call time, so wrapping it covers all calls made through the client.
     const gql = client.client;

@@ -1,3 +1,5 @@
+import { TokenFetchError } from "../integrations/http";
+
 // ── Client-credentials token ─────────────────────────────────────────────────
 // The exports in this section are pure: they never read `config`.
 
@@ -12,8 +14,9 @@ export type LinearCredentials = { clientId: string; clientSecret: string };
 export type ClientCredentialsToken = { accessToken: string; expiresAt: Date; scope: string };
 
 // A failed token request. `code` and `description` are the OAuth `error` and
-// `error_description` fields; the response body is never kept otherwise.
-export class LinearTokenError extends Error {
+// `error_description` fields; the response body is never kept otherwise. A
+// TokenFetchError: nothing was sent with the missing token, so a send may retry.
+export class LinearTokenError extends TokenFetchError {
   status?: number;
   code?: string;
   description?: string;

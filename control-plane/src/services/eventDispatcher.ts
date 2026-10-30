@@ -9,6 +9,7 @@ import {
 import { attachUrlToIssue, getIssueHumanAssignee, uploadIssueAttachment } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
+import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import { type Outbound, RetryableError } from "../integrations/outbound";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
@@ -16,10 +17,19 @@ import type { InboxRepository, InboxRow } from "../repositories/inbox.repository
 import type { TaskRepository } from "../repositories/task.repository";
 import type { AgentEmit, HarnessEvent } from "../types/harnessEvent";
 import type { LinearTokenProvider } from "./linearTokenProvider";
+import type { ReplyHolds } from "./replyHolds";
 import type { SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
 
 // Outcome of dispatching a single event.
+// - `ok`: handled; reconcileOne advances the cursor and goes on.
+// - `dropped`: the event's send timed out or failed for good. reconcileOne
+//   advances past it, then stops this task's events for the tick, so a slow
+//   or failing platform can't eat the tick (§4 I14).
+// - `hold`: a send failed before anything went out (RetryableError); the hold
+//   is recorded in ReplyHolds. reconcileOne stops this task's events BEFORE
+//   advancing the cursor, so the event is retried until it is sent or fails
+//   for good.
 // - `self_evict`: an owner-guarded write returned 0 rows — the lease was taken
 //   over mid-tick — so reconcileOne must stop processing this task BEFORE
 //   advancing the cursor (matching recordEventCursor's 0-row return).
@@ -29,7 +39,7 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 //   advancing the cursor and WITHOUT applying the side effect. We deliberately
 //   stop-and-alarm rather than skip-and-continue, so a foreign event is visible
 //   and cannot trigger a side effect.
-export type DispatchResult = "ok" | "self_evict" | "abort";
+export type DispatchResult = "ok" | "dropped" | "hold" | "self_evict" | "abort";
 
 // One-time onboarding comment posted on every PR harness opens — comment
 // interactivity is invisible unless users know it exists. Built per-call from
@@ -59,9 +69,23 @@ export class EventDispatcher {
     private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
     private slackNotifier: SlackNotifierService,
     private integrations: Record<IntegrationName, Integration>,
+    private holds: ReplyHolds,
   ) {}
 
   async handle(event: HarnessEvent, task: Task): Promise<DispatchResult> {
+    try {
+      return await this.apply(event, task);
+    } catch (err) {
+      // A task-scoped call (the Linear client on pr_opened / completed) failed
+      // before anything was sent: hold on the task's own integration. deliver
+      // holds on the round's integration itself.
+      if (!(err instanceof RetryableError)) throw err;
+      this.holds.hold(task.id, event, task.source, err);
+      return "hold";
+    }
+  }
+
+  private async apply(event: HarnessEvent, task: Task): Promise<DispatchResult> {
     // event.inbox_id is sandbox-written; resolve it task-scoped. A null row
     // means this task's event stream is carrying an event whose inbox row it
     // does NOT own — a cross-task LEAK (a sibling's event in our stream, our own
@@ -102,13 +126,12 @@ export class EventDispatcher {
       case "agent_action":
       case "agent_response":
       case "agent_error":
-        await this.deliver(event, inboxRow, task);
-        break;
+        return this.deliver(event, inboxRow, task);
 
       case "pr_opened": {
         // The Linear attach and assignee mirror below need a client. Fetched
-        // first, so a Linear token failure rejects before any side effect and
-        // the cursor holds.
+        // first, so a Linear token failure holds the event before any side
+        // effect.
         const linearClient = await this.linearClientFor(task);
         // appendPrUrl is owner-guarded; a 0-row return means the lease was
         // taken over (stale-lease takeover). Self-evict BEFORE attachUrlToIssue
@@ -152,7 +175,7 @@ export class EventDispatcher {
       case "completed": {
         // The Slack notify below needs a Linear client for a Linear task's
         // assignment round. Fetched before marking, so a Linear token failure
-        // rejects with the row still open and the cursor held.
+        // holds the event with the row still open.
         const linearClient =
           inboxRow?.kind === "assignment" ? await this.linearClientFor(task) : null;
         // Bare terminal marker — the user-facing message already went out via
@@ -199,23 +222,35 @@ export class EventDispatcher {
     return "ok";
   }
 
+  // Nothing has been sent when the token fetch fails, so handle() holds.
   private async linearClientFor(task: Task): Promise<LinearClient | null> {
-    return task.source === "linear" ? this.linearTokenProvider.getAuthorizedLinearClient() : null;
+    if (task.source !== "linear") return null;
+    try {
+      return await this.linearTokenProvider.getAuthorizedLinearClient();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new RetryableError(`Linear token fetch failed: ${msg}`);
+    }
   }
 
   // Delivers one agent emit to one thread: looks up the target on the inbox
   // row's reply_targets[] by target_id, labels the emit, and hands both to the
   // round's integration, which decides where (or whether) it shows up. Core
-  // never checks what an integration can show. A RetryableError (nothing was
-  // sent) propagates, so handle() rejects and the cursor holds; any other
-  // failure is logged and the event dropped.
-  private async deliver(event: AgentEmit, inboxRow: InboxRow | null, task: Task): Promise<void> {
+  // never checks what an integration can show. The send runs under
+  // SEND_TIMEOUT_MS. A RetryableError (nothing was sent) holds the event on
+  // the round's integration; a timeout or any other failure is logged and the
+  // event dropped.
+  private async deliver(
+    event: AgentEmit,
+    inboxRow: InboxRow | null,
+    task: Task,
+  ): Promise<DispatchResult> {
     if (!inboxRow) {
       logger.warn(`${event.type} references missing inbox row`, {
         taskId: task.id,
         inboxId: event.inbox_id,
       });
-      return;
+      return "ok";
     }
     const target = inboxRow.reply_targets.find((t) => t.id === event.target_id);
     if (!target) {
@@ -224,18 +259,25 @@ export class EventDispatcher {
         inboxId: inboxRow.id,
         targetId: event.target_id,
       });
-      return; // cursor still advances — drop
+      return "ok"; // cursor still advances — drop
     }
 
     try {
-      await this.integrations[inboxRow.source].deliver(
-        { signal: new AbortController().signal, log: logger },
-        target,
-        labelAgentEmit(event, inboxRow),
+      await withTimeout(SEND_TIMEOUT_MS, (signal) =>
+        this.integrations[inboxRow.source].deliver(
+          { signal, log: logger },
+          target,
+          labelAgentEmit(event, inboxRow),
+        ),
       );
+      return "ok";
     } catch (err) {
-      if (err instanceof RetryableError) throw err;
+      if (err instanceof RetryableError) {
+        this.holds.hold(task.id, event, inboxRow.source, err);
+        return "hold";
+      }
       logErr(`deliver ${event.type} failed for target ${target.id}`, err);
+      return "dropped";
     }
   }
 

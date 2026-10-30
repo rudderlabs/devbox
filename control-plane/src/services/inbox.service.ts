@@ -1,5 +1,6 @@
 import { config } from "../config";
 import type { Task } from "../db/schema";
+import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type {
@@ -342,13 +343,13 @@ export class InboxService {
       });
       return;
     }
-    await integration
-      .deliver({ signal: new AbortController().signal, log: logger }, target, {
+    await withTimeout(SEND_TIMEOUT_MS, (signal) =>
+      integration.deliver({ signal, log: logger }, target, {
         type: "failure",
         cause: "workspace_missing",
         round: entry,
-      })
-      .catch((err) => logErr(`workspace_missing notice failed for inbox ${entry.id}`, err));
+      }),
+    ).catch((err) => logErr(`workspace_missing notice failed for inbox ${entry.id}`, err));
   }
 }
 

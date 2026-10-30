@@ -7,6 +7,7 @@ import {
 import { config } from "../../config";
 import type { InboxRow, ReplyTargetSpec } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
+import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
 import type { Integration } from "../types";
 
@@ -26,7 +27,7 @@ export const githubIntegration: Integration = {
     }
     switch (message.type) {
       case "reply":
-        await post(spec, message.body);
+        await post(ctx, spec, message.body);
         return;
       case "progress":
         return;
@@ -46,7 +47,7 @@ async function deliverFailure(
   switch (message.cause) {
     case "task_failed":
       // failTask's message is control-plane-generated and scrubbed: public-safe.
-      if (message.summary) await post(spec, message.summary);
+      if (message.summary) await post(ctx, spec, message.summary);
       return;
     case "round_failed": {
       // A failed CI-fix round stays silent.
@@ -55,6 +56,7 @@ async function deliverFailure(
       const botLogin = config.github.webhooks?.botLogin;
       if (!botLogin) return;
       await post(
+        ctx,
         spec,
         `⚠️ Something went wrong while working on this. Mention @${botLogin} in a new comment to retry.`,
       );
@@ -73,45 +75,59 @@ async function deliverFailure(
 async function workspaceMissing(ctx: SendCtx, spec: GithubSpec, round: InboxRow): Promise<void> {
   if (round.kind === "review") {
     const body = round.reply_targets.find((t) => t.spec.kind === "review_body");
-    if (body?.spec.kind === "review_body") await post(body.spec, WORKSPACE_MISSING_MESSAGE);
+    if (body?.spec.kind === "review_body") await post(ctx, body.spec, WORKSPACE_MISSING_MESSAGE);
     return;
   }
   if (round.kind !== "comment") return;
   try {
-    await post(spec, WORKSPACE_MISSING_MESSAGE);
+    await post(ctx, spec, WORKSPACE_MISSING_MESSAGE);
   } finally {
     // The reaction is independent of the reply: try it even if the reply failed.
-    await confusedReaction(spec).catch((err: unknown) => {
+    await confusedReaction(ctx, spec).catch((err: unknown) => {
       const e = err instanceof Error ? err : new Error(String(err));
       ctx.log.error("workspace_missing reaction failed", { message: e.message, stack: e.stack });
     });
   }
 }
 
-async function confusedReaction(spec: GithubSpec): Promise<void> {
+async function confusedReaction(ctx: SendCtx, spec: GithubSpec): Promise<void> {
   if (spec.kind === "issue_comment") {
-    await addIssueCommentReaction(spec.owner, spec.repo, spec.commentId, "confused");
+    await addIssueCommentReaction(spec.owner, spec.repo, spec.commentId, "confused", ctx.signal);
   } else if (spec.kind === "review_comment") {
-    await addReviewCommentReaction(spec.owner, spec.repo, spec.commentId, "confused");
+    await addReviewCommentReaction(spec.owner, spec.repo, spec.commentId, "confused", ctx.signal);
   }
 }
 
 // Posts `body` verbatim to one PR thread, by target kind. CP never formats it.
-async function post(spec: GithubSpec, body: string): Promise<void> {
-  switch (spec.kind) {
-    case "issue_comment":
-      await postIssueComment(spec.owner, spec.repo, spec.prNumber, body);
-      return;
-    case "review_comment":
-      await postReviewCommentReply(spec.owner, spec.repo, spec.prNumber, spec.inReplyTo, body);
-      return;
-    case "review_body":
-      // Top-level PR comment — GH has no reply-to-review-body API.
-      await postIssueComment(spec.owner, spec.repo, spec.prNumber, body);
-      return;
-    default: {
-      const _exhaustive: never = spec;
-      void _exhaustive;
+// It is the first request of every GitHub send (the 😕 reaction comes after and
+// never fails the send), so a retryable failure here means nothing was posted.
+async function post(ctx: SendCtx, spec: GithubSpec, body: string): Promise<void> {
+  const { signal } = ctx;
+  try {
+    switch (spec.kind) {
+      case "issue_comment":
+        await postIssueComment(spec.owner, spec.repo, spec.prNumber, body, signal);
+        return;
+      case "review_comment":
+        await postReviewCommentReply(
+          spec.owner,
+          spec.repo,
+          spec.prNumber,
+          spec.inReplyTo,
+          body,
+          signal,
+        );
+        return;
+      case "review_body":
+        // Top-level PR comment — GH has no reply-to-review-body API.
+        await postIssueComment(spec.owner, spec.repo, spec.prNumber, body, signal);
+        return;
+      default: {
+        const _exhaustive: never = spec;
+        void _exhaustive;
+      }
     }
+  } catch (err) {
+    throw retryable(err) ?? err;
   }
 }
