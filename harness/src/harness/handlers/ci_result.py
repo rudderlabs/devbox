@@ -2,11 +2,11 @@
 or merge request.
 
 Fetches failed job logs from the run's code host (GitHub Actions, or a GitLab
-pipeline), feeds them to the DeepAgents CI agent for analysis and fix, then
-backfills any missing reply and marks the round complete via
-fill_missed_replies_and_complete_round. No agent_action progress events —
-ci_result comes only from GitHub or GitLab, neither of which has an
-agent-session UI.
+pipeline), or the report another CI tool left on GitHub, feeds them to the
+DeepAgents CI agent for analysis and fix, then backfills any missing reply and
+marks the round complete via fill_missed_replies_and_complete_round. No
+agent_action progress events — ci_result comes only from GitHub or GitLab,
+neither of which has an agent-session UI.
 """
 
 from __future__ import annotations
@@ -14,7 +14,14 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING, Any
 
-from harness.ci_logs import fetch_failed_job_logs, parse_run_url
+from harness.ci_logs import (
+    REPORTED_CI_SOURCES,
+    fetch_check_run_report,
+    fetch_failed_job_logs,
+    parse_check_run_url,
+    parse_run_url,
+    write_reported_failure,
+)
 from harness.codehost import client_for_run_url
 from harness.followup import ci_thread_id, round_started, run_followup_ci
 from harness.handlers._common import (
@@ -45,6 +52,63 @@ def _run_ci_round_and_complete(
     )
 
 
+def _fetch_actions_logs(
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    run_url = payload.get("run_url", "")
+    parsed = parse_run_url(run_url)
+    if not parsed:
+        return [], []
+    owner, repo, run_id = parsed
+    try:
+        return fetch_failed_job_logs(
+            owner,
+            repo,
+            int(run_id),
+            CI_LOGS_DIR / str(run_id),
+            client=client_for_run_url(run_url),
+        )
+    except Exception as exc:
+        print(
+            f"ci_result: log fetch failed (continuing without logs): "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return [], []
+
+
+def _fetch_reported_failure(
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    ci_source = payload["ci_source"]
+    target_id = str(payload["target_id"])
+    errors: list[str] = []
+    if ci_source == "check_run":
+        parsed = parse_check_run_url(payload.get("run_url", ""))
+        if parsed:
+            owner, repo, check_run_id = parsed
+            try:
+                return fetch_check_run_report(
+                    owner, repo, check_run_id, CI_LOGS_DIR / f"check-run-{check_run_id}"
+                )
+            except Exception as exc:
+                print(
+                    f"ci_result: check run fetch failed (using the webhook's report): "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                errors.append(f"failed to fetch the check run's output: {exc}")
+    failed_jobs = write_reported_failure(
+        name=str(payload.get("workflow_name", "")),
+        conclusion=str(payload.get("conclusion", "failure")),
+        summary=str(payload.get("summary", "")),
+        details_url=str(payload.get("details_url", "")),
+        report_id=target_id,
+        output_dir=CI_LOGS_DIR / f"{ci_source}-{target_id}",
+    )
+    return failed_jobs, errors
+
+
 def process_ci_result(entry: dict[str, Any], state: DaemonState) -> None:
     inbox_id = entry["id"]
 
@@ -66,34 +130,13 @@ def process_ci_result(entry: dict[str, Any], state: DaemonState) -> None:
         _run_ci_round_and_complete(entry, state, failed_jobs=[], errors=[])
         return
 
-    run_url = payload.get("run_url", "")
-    parsed = parse_run_url(run_url)
-    if parsed:
-        owner, repo, run_id = parsed
-    else:
-        owner, repo, run_id = "", "", None
-
     # No agent_action progress emit — a code host has no agent-session UI
     # (the comment/review handlers also skip progress for GitHub and GitLab).
 
-    failed_jobs: list[dict[str, Any]] = []
-    errors: list[str] = []
-    if run_id and owner and repo:
-        log_dir = CI_LOGS_DIR / str(run_id)
-        try:
-            failed_jobs, errors = fetch_failed_job_logs(
-                owner,
-                repo,
-                int(run_id),
-                log_dir,
-                client=client_for_run_url(run_url),
-            )
-        except Exception as exc:
-            print(
-                f"ci_result: log fetch failed (continuing without logs): "
-                f"{type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
+    if payload.get("ci_source") in REPORTED_CI_SOURCES:
+        failed_jobs, errors = _fetch_reported_failure(payload)
+    else:
+        failed_jobs, errors = _fetch_actions_logs(payload)
 
     # No logs fetched — nothing for the agent to fix.
     # Emit the reply directly (deterministic, no agent needed).

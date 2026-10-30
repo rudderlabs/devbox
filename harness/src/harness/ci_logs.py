@@ -16,6 +16,7 @@ from harness import codehost
 from harness.codehost import CodeHost
 from harness.git import GitHubClient
 
+REPORTED_CI_SOURCES = frozenset({"check_run", "status"})
 
 _CHECK_RUN_URL_RE = re.compile(
     r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)"
