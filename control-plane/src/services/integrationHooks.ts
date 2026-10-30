@@ -38,6 +38,7 @@ export class IntegrationHooks {
   constructor(
     private integrations: Record<IntegrationName, Integration>,
     private inboxRepo: Pick<InboxRepository, "getAssignment">,
+    private timeoutsMs: Record<HookName, number> = HOOK_TIMEOUT_MS,
   ) {}
 
   // Fresh provision, before the sandbox is created. Awaited; no hold.
@@ -66,10 +67,21 @@ export class IntegrationHooks {
   }
 
   // The task's assignee, for detached work. undefined when the integration
-  // has no assignee or the lookup failed (logged here).
-  assignee(task: Task, round: InboxRow | null): Promise<Person | null | undefined> {
+  // has no assignee or the lookup failed (logged here, with `logMeta`).
+  assignee(
+    task: Task,
+    round: InboxRow | null,
+    logMeta: Record<string, unknown>,
+  ): Promise<Person | null | undefined> {
     const owner = this.integrations[task.source];
-    return this.callHook("assignee", owner, task, round, (ctx) => owner.assignee?.(ctx, task));
+    return this.callHook(
+      "assignee",
+      owner,
+      task,
+      round,
+      (ctx) => owner.assignee?.(ctx, task),
+      logMeta,
+    );
   }
 
   // Detached. Called (a) on `completed`, with firstTransition = whether that
@@ -122,20 +134,28 @@ export class IntegrationHooks {
     task: Task,
     round: InboxRow | null,
     run: (ctx: HookCtx) => Promise<T> | undefined,
+    logMeta: Record<string, unknown> = {},
   ): Promise<T | undefined> {
     if (!owner[hook]) return undefined;
+    const meta = { ...logMeta, taskId: task.id, integration: owner.name };
     try {
-      return await withTimeout(HOOK_TIMEOUT_MS[hook], async (signal) => {
-        const startedOn = await this.assignmentId(task.id, round);
+      return await withTimeout(this.timeoutsMs[hook], async (signal) => {
+        // A failed lookup still runs the hook; isCurrent() then answers false.
+        const startedOn = await this.assignmentId(task.id, round).catch((err) => {
+          logErr(`${hook}: assignment lookup failed; isCurrent() is false`, err, meta);
+          return undefined;
+        });
         return run({
           signal,
           log: logger,
-          isCurrent: async () => (await this.assignmentId(task.id)) === startedOn,
+          isCurrent: async () =>
+            startedOn !== undefined &&
+            (await this.assignmentId(task.id).catch(() => undefined)) === startedOn,
         });
       });
     } catch (err) {
       if (hook === "onPrOpened" && err instanceof RetryableError) throw err;
-      logErr(`${hook} hook failed`, err, { taskId: task.id, integration: owner.name });
+      logErr(`${hook} hook failed`, err, meta);
       return undefined;
     }
   }

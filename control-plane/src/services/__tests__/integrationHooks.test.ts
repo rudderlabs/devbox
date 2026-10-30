@@ -18,15 +18,24 @@ const row = (id: string, kind = "assignment", source = "linear") =>
 const noop: Integration = { name: "api", async deliver() {} };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function hooksWith(linear: Partial<Integration>, github: Partial<Integration> = {}) {
+function hooksWith(
+  linear: Partial<Integration>,
+  github: Partial<Integration> = {},
+  timeoutMs?: number,
+) {
   const inboxRepo = { getAssignment: mock(() => Promise.resolve(row("a-1"))) };
   const integrations = {
     linear: { ...noop, name: "linear" as const, ...linear },
     api: noop,
     github: { ...noop, name: "github" as const, ...github },
   };
+  const t = timeoutMs;
+  const timeouts =
+    t === undefined
+      ? undefined
+      : { onTaskStarted: t, onPrOpened: t, onRoundFinished: t, assignee: t };
   return {
-    hooks: new IntegrationHooks(integrations, inboxRepo as unknown as InboxRepository),
+    hooks: new IntegrationHooks(integrations, inboxRepo as unknown as InboxRepository, timeouts),
     inboxRepo,
   };
 }
@@ -38,7 +47,7 @@ describe("IntegrationHooks", () => {
       const { hooks } = hooksWith({
         assignee: () => Promise.reject(new RetryableError("token fetch failed")),
       });
-      expect(await hooks.assignee(task, row("a-1"))).toBeUndefined();
+      expect(await hooks.assignee(task, row("a-1"), { prUrl: "u" })).toBeUndefined();
       expect(error).toHaveBeenCalledWith(
         "assignee hook failed",
         expect.objectContaining({ taskId: "task-1", integration: "linear" }),
@@ -61,6 +70,45 @@ describe("IntegrationHooks", () => {
     }
   });
 
+  it("cuts a hung hook at its timeout: the call resolves and the hook's signal aborts", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => logger);
+    try {
+      let signal: AbortSignal | undefined;
+      const { hooks } = hooksWith(
+        {
+          assignee: (ctx) => {
+            signal = ctx.signal;
+            return new Promise<never>(() => {});
+          },
+        },
+        {},
+        20,
+      );
+      expect(await hooks.assignee(task, row("a-1"), {})).toBeUndefined();
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("a failed assignment lookup still runs the hook, with isCurrent() false", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => logger);
+    try {
+      let ctx: HookCtx | undefined;
+      const { hooks, inboxRepo } = hooksWith({
+        async assignee(c) {
+          ctx = c;
+          return null;
+        },
+      });
+      inboxRepo.getAssignment.mockRejectedValue(new Error("connection reset"));
+      expect(await hooks.assignee(task, row("c-1", "comment"), {})).toBeNull();
+      expect(await ctx?.isCurrent()).toBe(false);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("isCurrent() turns false once a restart rotated the assignment id", async () => {
     let ctx: HookCtx | undefined;
     const { hooks, inboxRepo } = hooksWith({
@@ -70,7 +118,7 @@ describe("IntegrationHooks", () => {
       },
     });
     // A comment round: the baseline is the task's assignment id at hook start.
-    await hooks.assignee(task, row("c-1", "comment"));
+    await hooks.assignee(task, row("c-1", "comment"), {});
     expect(await ctx?.isCurrent()).toBe(true);
     inboxRepo.getAssignment.mockResolvedValue(row("a-2"));
     expect(await ctx?.isCurrent()).toBe(false);

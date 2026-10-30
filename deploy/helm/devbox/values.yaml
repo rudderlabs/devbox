@@ -149,9 +149,9 @@ controlPlane:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 1Gi }
-  # -- Seconds between SIGTERM and SIGKILL. At least one reconcile tick (up to 90s
-  # when a platform is slow) plus SHUTDOWN_DRAIN_MS (10s) for in-flight provisions
-  # and integration hooks; raise it with SHUTDOWN_DRAIN_MS.
+  # -- Seconds between SIGTERM and SIGKILL. At least one task's reconcile (up to
+  # 110s when platforms are slow) plus SHUTDOWN_DRAIN_MS (10s) for in-flight
+  # provisions and integration hooks; raise it with SHUTDOWN_DRAIN_MS.
   terminationGracePeriodSeconds: 120
 
 postgresql:

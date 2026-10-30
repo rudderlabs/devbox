@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
 import type { LinearTokenProvider } from "../linearTokenProvider";
@@ -133,6 +133,7 @@ describe("InboxService", () => {
   let writeHarnessFile: ReturnType<typeof mock>;
   let killSandbox: ReturnType<typeof mock>;
   let getById: ReturnType<typeof mock>;
+  let linear: InstanceType<typeof LinearIntegration>;
   let service: InstanceType<typeof InboxService>;
 
   beforeEach(() => {
@@ -180,11 +181,8 @@ describe("InboxService", () => {
       getAuthorizedLinearClient: mock(() => Promise.resolve({})),
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
-    const integrations = {
-      linear: new LinearIntegration(linearTokenProvider),
-      api: apiIntegration,
-      github: githubIntegration,
-    };
+    linear = new LinearIntegration(linearTokenProvider);
+    const integrations = { linear, api: apiIntegration, github: githubIntegration };
     service = new InboxService(
       inboxRepo,
       sandboxManager,
@@ -253,6 +251,35 @@ describe("InboxService", () => {
         reason: "workspace_missing",
         userMessage: WORKSPACE_MISSING_MESSAGE,
       });
+    });
+
+    it("finishes a dead-lettered assignment's round: outcome failed, first transition, no archive", async () => {
+      const onRoundFinished = spyOn(linear, "onRoundFinished");
+      const assignment = {
+        ...ghCommentRow("as"),
+        source: "linear",
+        kind: "assignment",
+        reply_targets: [{ id: "sess-1", spec: { kind: "linear_session" } }],
+      } as InboxRow;
+      listNonTerminalByTask.mockResolvedValue([assignment, ghCommentRow("c")]);
+      getById.mockImplementation((id: string) =>
+        Promise.resolve(id === "as" ? assignment : ghCommentRow(id)),
+      );
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+      await new Promise<void>((r) => setTimeout(r, 0));
+
+      expect(onRoundFinished).toHaveBeenCalledTimes(1);
+      const [ctx, , round, outcome] = onRoundFinished.mock.calls[0] as unknown as [
+        { firstTransition: boolean; archive(): Promise<Uint8Array | null> },
+        Task,
+        InboxRow,
+        string,
+      ];
+      expect(round.id).toBe("as");
+      expect(outcome).toBe("failed");
+      expect(ctx.firstTransition).toBe(true);
+      expect(await ctx.archive()).toBeNull();
     });
 
     it("API rows: no Linear or GitHub post, row failed with the user message", async () => {

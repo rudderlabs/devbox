@@ -455,6 +455,8 @@ export class TaskRepository {
   // a replay of a passed event, a pod without the lease, and the old owner
   // after a restart (owner_id cleared) all change 0 rows and log nothing.
   // Returns 0 rows when the lease is lost OR the cursor is already past seq.
+  // Each advance also renews the lease, so a long run of slow but successful
+  // sends can't outlive it mid-reconcile.
   async recordEventCursor(params: {
     taskId: string;
     ownerId: string;
@@ -464,7 +466,7 @@ export class TaskRepository {
     return db.transaction(async (tx) => {
       const result = await tx.execute<{ id: string; source: string }>(sql`
         UPDATE tasks
-           SET last_observed_event_seq = ${event.seq}, updated_at = now()
+           SET last_observed_event_seq = ${event.seq}, heartbeat_at = now(), updated_at = now()
          WHERE id = ${params.taskId}
            AND owner_id = ${params.ownerId}
            AND last_observed_event_seq < ${event.seq}

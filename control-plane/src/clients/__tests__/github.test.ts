@@ -28,7 +28,8 @@ const {
   postIssueComment,
   requestReviewers,
 } = (await import("../githubApi.ts" + "?github-impl-test")) as typeof import("../githubApi");
-const { HttpError } = await import("../../integrations/http");
+const { HttpError, retryable } = await import("../../integrations/http");
+const { RetryableError } = await import("../../integrations/outbound");
 
 // Build a fetch stub that returns each page in `pages` as a 200 JSON response,
 // recording the requested URLs. githubFetch does resp.text() → JSON.parse, so
@@ -376,6 +377,26 @@ describe("githubFetch errors and signal", () => {
     expect((err as Error).message).toBe(
       'GitHub POST /repos/o/r/issues/1/comments failed: HTTP 429 {"message":"API rate limit exceeded"}',
     );
+  });
+
+  it("a rate-limit 403 holds like a 429, waiting for x-ratelimit-reset and at least a minute; any other 403 drops", async () => {
+    const classify = async (status: number, headers: Record<string, string>) => {
+      globalThis.fetch = (() =>
+        Promise.resolve(new Response("{}", { status, headers }))) as unknown as typeof fetch;
+      return retryable(await postIssueComment("o", "r", 1, "hi").catch((e: unknown) => e));
+    };
+    const inFiveMinutes = Math.floor(Date.now() / 1000) + 300; // epoch seconds
+    const exhausted = await classify(403, {
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": String(inFiveMinutes),
+    });
+    expect(exhausted).toBeInstanceOf(RetryableError);
+    expect(exhausted?.retryAfterMs).toBeGreaterThan(290_000);
+    expect(exhausted?.retryAfterMs).toBeLessThanOrEqual(300_000);
+    expect((await classify(403, { "retry-after": "30" }))?.retryAfterMs).toBe(30_000);
+    // No Retry-After and no reset ahead: at least a minute, never the next tick.
+    expect((await classify(429, {}))?.retryAfterMs).toBe(60_000);
+    expect(await classify(403, { "x-ratelimit-remaining": "12" })).toBeUndefined();
   });
 
   it("passes the caller's signal to fetch", async () => {

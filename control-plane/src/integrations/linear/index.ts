@@ -13,7 +13,7 @@ import type { Task } from "../../db/schema";
 import type { InboxRow, ReplyTarget } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import type { LinearTokenProvider } from "../../services/linearTokenProvider";
-import { retryable } from "../http";
+import { rateLimitWaitMs, retryable } from "../http";
 import { type Outbound, RetryableError, type SendCtx } from "../outbound";
 import type { HookCtx, Integration, Person, PrRef } from "../types";
 
@@ -108,7 +108,7 @@ export class LinearIntegration implements Integration {
     const client = await this.client(ctx.signal);
     const human = await getIssueHumanAssignee(client, task.externalId);
     if (!human) return null;
-    const person = { displayName: human.displayName, email: human.email };
+    const person = { id: human.id, displayName: human.displayName, email: human.email };
     if (!human.gitHubUserId) return { ...person, codeHost: "unlinked" };
     // Defensive about the field's format: numeric → GitHub account id
     // (resolve to the current login), anything else → already a login.
@@ -133,11 +133,16 @@ export class LinearIntegration implements Integration {
 // The SDK wraps every failure in a LinearError whose `raw` is what fetch (or
 // the token renewal after a 401) threw. A rate limit is the SDK's
 // RatelimitedLinearError: an HTTP 429 or a "ratelimited" GraphQL error, with
-// Retry-After in seconds.
+// Retry-After in seconds. Without it, the wait runs to the later of Linear's
+// request and complexity reset times (epoch ms), and at least a minute.
 function linearRetryable(err: unknown): RetryableError | undefined {
   if (err instanceof RatelimitedLinearError) {
     const s = err.retryAfter;
-    return new RetryableError(err.message, s !== undefined && s >= 0 ? s * 1000 : undefined);
+    const wait =
+      s !== undefined && s >= 0
+        ? s * 1000
+        : rateLimitWaitMs(Math.max(err.requestsResetAt ?? 0, err.complexityResetAt ?? 0));
+    return new RetryableError(err.message, wait);
   }
   return retryable(err instanceof LinearError ? err.raw : err);
 }

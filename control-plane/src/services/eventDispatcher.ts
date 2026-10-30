@@ -67,6 +67,7 @@ export class EventDispatcher {
     private integrations: Record<IntegrationName, Integration>,
     private holds: ReplyHolds,
     private hooks: IntegrationHooks,
+    private sendTimeoutMs = SEND_TIMEOUT_MS,
   ) {}
 
   async handle(event: HarnessEvent, task: Task): Promise<DispatchResult> {
@@ -233,9 +234,9 @@ export class EventDispatcher {
   // row's reply_targets[] by target_id, labels the emit, and hands both to the
   // round's integration, which decides where (or whether) it shows up. Core
   // never checks what an integration can show. The send runs under
-  // SEND_TIMEOUT_MS. A RetryableError (nothing was sent) holds the event on
-  // the round's integration; a timeout or any other failure is logged and the
-  // event dropped.
+  // sendTimeoutMs (SEND_TIMEOUT_MS). A RetryableError (nothing was sent) holds
+  // the event on the round's integration; a timeout or any other failure is
+  // logged and the event dropped.
   private async deliver(
     event: AgentEmit,
     inboxRow: InboxRow | null,
@@ -259,7 +260,7 @@ export class EventDispatcher {
     }
 
     try {
-      await withTimeout(SEND_TIMEOUT_MS, (signal) =>
+      await withTimeout(this.sendTimeoutMs, (signal) =>
         this.integrations[inboxRow.source].deliver(
           { signal, log: logger },
           target,
@@ -325,11 +326,15 @@ export class EventDispatcher {
     if (!webhooks) return;
     const pr = parsePrUrl(event.pr_url);
     if (!pr) return; // not a github.com PR URL — skip
-    await postIssueComment(
-      pr.owner,
-      pr.repo,
-      pr.prNumber,
-      onboardingCommentBody(webhooks.botLogin, task.key),
+    // Awaited inside the tick, so bounded like a send.
+    await withTimeout(this.sendTimeoutMs, (signal) =>
+      postIssueComment(
+        pr.owner,
+        pr.repo,
+        pr.prNumber,
+        onboardingCommentBody(webhooks.botLogin, task.key),
+        signal,
+      ),
     ).catch((err) => logErr("onboarding comment post failed", err));
   }
 
@@ -347,7 +352,7 @@ export class EventDispatcher {
     const pr = parsePrUrl(event.pr_url);
     if (!pr) return; // not a github.com PR URL — skip
     // undefined: no assignee() (API tasks), or the lookup failed (logged).
-    const person = await this.hooks.assignee(task, round);
+    const person = await this.hooks.assignee(task, round, { prUrl: event.pr_url });
     if (person === undefined) return;
     if (!person) {
       logger.info("PR assignee mirror skipped", {
@@ -361,14 +366,14 @@ export class EventDispatcher {
     }
     if (typeof person.codeHost !== "object") {
       // Linear's fix path: the member connects GitHub in Linear Settings →
-      // Connected accounts. Log the display name, not the email.
+      // Connected accounts. Log the account id, not the name or email.
       logger.info("PR assignee mirror skipped", {
         event: "pr_assignee.result",
         status: "skipped",
         reason: person.codeHost === "unlinked" ? "no_github_mapping" : "unsupported",
         taskId: task.id,
         prUrl: event.pr_url,
-        displayName: person.displayName,
+        linearUserId: person.id,
       });
       return;
     }
@@ -382,7 +387,7 @@ export class EventDispatcher {
         reason: "unresolved_login",
         taskId: task.id,
         prUrl: event.pr_url,
-        displayName: person.displayName,
+        linearUserId: person.id,
       });
       return;
     }

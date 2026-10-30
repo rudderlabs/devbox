@@ -127,10 +127,14 @@ export class TaskProcessorService {
     await this.reapIdle().catch((err) => logErr("reapIdle failed", err));
 
     // 3. Reconcile owned tasks with live sandboxes. Each task's lease is renewed
-    //    right before its reconcile, so slow sends on earlier tasks can't let it
-    //    outlive the lease mid-tick; 0 rows means a sibling took it over.
+    //    right before its reconcile (and with each cursor advance inside it), so
+    //    slow sends can't let it outlive the lease mid-tick; 0 rows means a
+    //    sibling took it over.
     const owned = await this.taskRepo.listInFlightOwnedBy(config.podId, this.taskSources);
     for (const task of owned) {
+      // Shutting down: leave the rest to siblings (stop() backdates our
+      // heartbeats), so shutdown waits for one task's reconcile at most (§10).
+      if (!this.running) break;
       const renewed = await this.taskRepo.heartbeatTask({ taskId: task.id, ownerId: config.podId });
       if (renewed.length === 0) {
         logger.info("lease lost before reconcile; skipping", { taskId: task.id });
@@ -165,14 +169,19 @@ export class TaskProcessorService {
     this.holds.retain(ownedIds);
 
     // 4. Claim new work (fresh-pending OR comment-pickup OR stale-lease
-    //    takeover — single predicate).
+    //    takeover — single predicate). None while shutting down.
+    if (!this.running) return;
     const claimed = await this.taskRepo.claimNext({
       ownerId: config.podId,
       leaseTimeoutMs: config.leaseTimeoutMs,
       maxConcurrentSandboxes: config.maxConcurrentSandboxes,
       sources: this.taskSources,
     });
-    if (claimed) this.dispatch(claimed);
+    if (!claimed) return;
+    // A hold from before (say, a restart claimed in this same tick) belongs to
+    // the old run; it must not delay the new one.
+    this.holds.release(claimed.id);
+    this.dispatch(claimed);
   }
 
   private async reapIdle(): Promise<void> {

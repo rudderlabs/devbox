@@ -7,15 +7,27 @@ import { RetryableError } from "./outbound";
 export const SEND_TIMEOUT_MS = 20_000;
 
 // A non-2xx answer. The message keeps the client's own wording (tests and logs
-// match on it); status and Retry-After ride along for classification.
+// match on it); status, the wait before a retry and whether the platform
+// rate-limited the call ride along for classification.
 export class HttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly retryAfterMs?: number,
+    // GitHub also answers a rate limit with a 403 (see githubFetch).
+    readonly rateLimited = status === 429,
   ) {
     super(message);
   }
+}
+
+// How long a rate limit without Retry-After waits: until the platform's reset
+// time (epoch ms), and at least a minute. GitHub may ban integrations that
+// retry sooner (§4).
+export function rateLimitWaitMs(resetAtMs?: number): number {
+  const untilReset =
+    resetAtMs !== undefined && Number.isFinite(resetAtMs) ? resetAtMs - Date.now() : 0;
+  return Math.max(untilReset, 60_000);
 }
 
 // The client had no credential to send with, so nothing was sent.
@@ -39,13 +51,14 @@ const NOTHING_SENT = new Set([
 ]);
 
 // The failure as a RetryableError when it is one of the exact retryable cases
-// (§4): 429, connection refused, DNS, TLS handshake, token fetch. Anything else
-// (timeouts, 5xx, other 4xx) is undefined: the caller logs and drops it.
+// (§4): a rate limit (429), connection refused, DNS, TLS handshake, token
+// fetch. Anything else (timeouts, 5xx, other 4xx) is undefined: the caller
+// logs and drops it.
 export function retryable(err: unknown): RetryableError | undefined {
   if (err instanceof RetryableError) return err;
   if (err instanceof TokenFetchError) return new RetryableError(err.message);
   if (err instanceof HttpError) {
-    return err.status === 429 ? new RetryableError(err.message, err.retryAfterMs) : undefined;
+    return err.rateLimited ? new RetryableError(err.message, err.retryAfterMs) : undefined;
   }
   const code = (err as { code?: unknown } | null)?.code;
   if (err instanceof TypeError && typeof code === "string" && NOTHING_SENT.has(code)) {

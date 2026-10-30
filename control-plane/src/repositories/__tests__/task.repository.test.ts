@@ -854,6 +854,14 @@ describe("TaskRepository", () => {
       expect(await events()).toEqual([]);
     });
 
+    it("renews the lease with each advance", async () => {
+      const stale = new Date(Date.now() - 100_000);
+      const t = await insertTask({ ownerId: "pod-a", heartbeatAt: stale });
+      await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(1) });
+      const [row] = await db.select().from(schema.tasks);
+      expect(row?.heartbeatAt?.getTime()).toBeGreaterThan(stale.getTime() + 90_000);
+    });
+
     it("API task: one log row per event, holding the full event", async () => {
       const t = await insertTask({ source: "api", ownerId: "pod-a" });
       await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(1) });

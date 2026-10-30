@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type { LinearClient } from "@linear/sdk";
+import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
 // Type-only import — erased at link time, so it can't collide with the
 // mock.module barrel factories below, and it pins the real contract.
 import type { LinearHumanUser } from "../../clients/linearApi";
@@ -287,6 +287,7 @@ describe("EventDispatcher", () => {
           "Mention `@harness` and I'll act on it — on a top-level PR comment,",
           "in a review summary, or on an inline comment on the diff. Without a mention I won't see it.",
         ].join("\n"),
+        expect.any(AbortSignal),
       );
     });
 
@@ -697,6 +698,20 @@ describe("EventDispatcher", () => {
       expect(attachUrlToIssue).not.toHaveBeenCalled();
     });
 
+    it("Linear task: a 429 or a refused connection on the attach holds the event", async () => {
+      const rateLimited = new RatelimitedLinearError({
+        response: { headers: new Headers({ "retry-after": "5" }) },
+      } as never);
+      const refused = Object.assign(new TypeError("Unable to connect"), { code: "ECONNREFUSED" });
+      attachUrlToIssue
+        .mockRejectedValueOnce(rateLimited)
+        .mockRejectedValueOnce(new LinearError(refused as never));
+      expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
+      expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
+      expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
+      expect(holds.stats().linear?.heldTasks).toBe(1);
+    });
+
     it("self-evicts when appendPrUrl returns 0 rows (lease lost); skips attachUrlToIssue", async () => {
       appendPrUrl.mockResolvedValue([]);
       const result = await dispatcher.handle(prEvent(), makeTask());
@@ -722,6 +737,7 @@ describe("EventDispatcher", () => {
           "Mention `@harness` and I'll act on it — on a top-level PR comment,",
           "in a review summary, or on an inline comment on the diff. Without a mention I won't see it.",
         ].join("\n"),
+        expect.any(AbortSignal),
       );
     });
 

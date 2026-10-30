@@ -115,6 +115,13 @@ describe("retryable: typed errors", () => {
     }
   });
 
+  it("a certificate failure in the TLS handshake (DEPTH_ZERO_SELF_SIGNED_CERT) is retryable", () => {
+    const err = Object.assign(new TypeError("self signed certificate"), {
+      code: "DEPTH_ZERO_SELF_SIGNED_CERT",
+    });
+    expect(retryable(err)).toBeInstanceOf(RetryableError);
+  });
+
   it("a token-fetch failure is retryable, Linear's included", () => {
     expect(retryable(new TokenFetchError("no token"))).toBeInstanceOf(RetryableError);
     expect(retryable(new LinearTokenError("Linear token request failed"))).toBeInstanceOf(
@@ -231,6 +238,32 @@ describe("Linear deliver: SDK failures", () => {
     } finally {
       s.stop(true);
     }
+  });
+
+  it("a rate limit without Retry-After waits for Linear's reset time, at least a minute", async () => {
+    const ratelimited = (headers: Record<string, string>) =>
+      server(() =>
+        Response.json(
+          { errors: [{ message: "Rate limit exceeded", extensions: { type: "ratelimited" } }] },
+          { status: 400, headers },
+        ),
+      );
+    const waitOf = async (headers: Record<string, string>) => {
+      const s = ratelimited(headers);
+      try {
+        const err = await deliverTo(`http://127.0.0.1:${s.port}/graphql`);
+        expect(err).toBeInstanceOf(RetryableError);
+        return (err as InstanceType<typeof RetryableError>).retryAfterMs;
+      } finally {
+        s.stop(true);
+      }
+    };
+    const inTwoMinutes = await waitOf({
+      "x-ratelimit-requests-reset": String(Date.now() + 120_000), // epoch ms
+    });
+    expect(inTwoMinutes).toBeGreaterThan(110_000);
+    expect(inTwoMinutes).toBeLessThanOrEqual(120_000);
+    expect(await waitOf({})).toBe(60_000);
   });
 
   it("a 500 is not retryable", async () => {

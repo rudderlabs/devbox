@@ -62,7 +62,7 @@ spec:
       serviceAccountName: devbox-control-plane
 {{ include "devbox.controlPlaneImagePullSecrets" . | indent 6 }}
       securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
-      # Shutdown finishes the current tick, then drains for SHUTDOWN_DRAIN_MS.
+      # Shutdown finishes the task it is reconciling, then drains for SHUTDOWN_DRAIN_MS.
       terminationGracePeriodSeconds: {{ .Values.controlPlane.terminationGracePeriodSeconds }}
       containers:
         - name: control-plane

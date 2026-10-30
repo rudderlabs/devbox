@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { config } from "../config";
 import { githubApiBaseUrl } from "../githubToken/mint";
-import { HttpError, parseRetryAfter, TokenFetchError } from "../integrations/http";
+import { HttpError, parseRetryAfter, rateLimitWaitMs, TokenFetchError } from "../integrations/http";
 import { logger } from "../logger";
 import {
   type GithubTokenProvider,
@@ -83,11 +83,21 @@ async function githubFetch(
   const text = await resp.text();
   if (!resp.ok) {
     const snippet = text.slice(0, 500);
+    // `?.`: the client tests stub fetch with header-less partial responses.
+    const header = (name: string) => resp.headers?.get(name) ?? null;
+    // GitHub's rate limit is a 429, or a 403 carrying x-ratelimit-remaining: 0
+    // or Retry-After; any other 403 is a refusal. Without Retry-After, a rate
+    // limit waits for x-ratelimit-reset (epoch seconds), and at least a minute.
+    const rateLimited =
+      resp.status === 429 ||
+      (resp.status === 403 &&
+        (header("x-ratelimit-remaining") === "0" || header("retry-after") !== null));
     throw new HttpError(
       `GitHub ${method} ${path} failed: HTTP ${resp.status} ${snippet}`,
       resp.status,
-      // `?.`: the client tests stub fetch with header-less partial responses.
-      parseRetryAfter(resp.headers?.get("retry-after") ?? null),
+      parseRetryAfter(header("retry-after")) ??
+        (rateLimited ? rateLimitWaitMs(Number(header("x-ratelimit-reset")) * 1000) : undefined),
+      rateLimited,
     );
   }
   let json: unknown = null;

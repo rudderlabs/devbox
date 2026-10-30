@@ -31,6 +31,7 @@ export interface Integration {
 // isCurrent() is false once a restart rotated the task's assignment id.
 export type HookCtx = { signal: AbortSignal; log: Logger; isCurrent(): Promise<boolean> };
 export type Person = {
+  id: string; // the platform account id: logs carry it, never the name or email
   displayName: string;
   email?: string;
   codeHost: { githubLogin: string } | "unlinked" | "unsupported";

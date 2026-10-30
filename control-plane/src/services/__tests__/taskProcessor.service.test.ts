@@ -4,6 +4,7 @@ import { SandboxApiException } from "@alibaba-group/opensandbox";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../../errors";
+import type { Integration } from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
@@ -96,6 +97,11 @@ const { apiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
+const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
+const { config: mockedConfig } = (await import("../../config")) as unknown as {
+  config: { shutdownDrainMs: number };
+};
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const { RetryableError } = await import("../../integrations/outbound");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
@@ -182,6 +188,12 @@ describe("TaskProcessorService", () => {
   let notifyTerminal: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
   let holds: InstanceType<typeof ReplyHolds>;
+  let integrations: {
+    linear: InstanceType<typeof LinearIntegration>;
+    api: Integration;
+    github: Integration;
+  };
+  let hooks: InstanceType<typeof IntegrationHooks>;
   let service: InstanceType<typeof TaskProcessorService>;
 
   beforeEach(() => {
@@ -279,11 +291,12 @@ describe("TaskProcessorService", () => {
     slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
-    const integrations = {
+    integrations = {
       linear: new LinearIntegration(linearTokenProvider),
       api: apiIntegration,
       github: githubIntegration,
     };
+    hooks = new IntegrationHooks(integrations, inboxRepo);
     service = new TaskProcessorService(
       taskRepo,
       inboxRepo,
@@ -295,7 +308,7 @@ describe("TaskProcessorService", () => {
       integrations,
       holds,
       ["linear", "api"],
-      new IntegrationHooks(integrations, inboxRepo),
+      hooks,
     );
   });
 
@@ -407,6 +420,42 @@ describe("TaskProcessorService", () => {
         pvcName: "devbox-pvc-task-1-aaaaaa",
       });
       expect(failTaskInbox).not.toHaveBeenCalled();
+    });
+
+    it("runs the owner's onTaskStarted once per assignment id, before the sandbox is created", async () => {
+      const order: string[] = [];
+      const onTaskStarted = mock(async () => {
+        order.push("started");
+      });
+      (integrations.linear as Integration).onTaskStarted = onTaskStarted;
+      const assignment = survivingNonTerminalRow();
+      (inboxRepo as { getAssignment?: unknown }).getAssignment = mock(() =>
+        Promise.resolve(assignment),
+      );
+      // The first provision defers on a transient 503; the re-claim provisions
+      // the same assignment again.
+      createSandboxWithPvc
+        .mockImplementationOnce(() => {
+          order.push("create");
+          return Promise.reject(new SandboxApiException({ statusCode: 503 }));
+        })
+        .mockImplementation(() => {
+          order.push("create");
+          return Promise.resolve({ sandboxId: "sbx-1", pvcName: "devbox-pvc-task-1-aaaaaa" });
+        });
+      const task = makeTask({ sandboxId: null });
+      claimNext.mockResolvedValueOnce(task).mockResolvedValueOnce(task).mockResolvedValue(null);
+
+      service.start();
+      await waitFor(() => attachSandboxResources.mock.calls.length > 0);
+      await service.stop();
+
+      expect(order).toEqual(["started", "create", "create"]);
+      expect(onTaskStarted).toHaveBeenCalledWith(
+        expect.anything(),
+        task,
+        assignment.reply_targets[0],
+      );
     });
 
     it("threads experimental flags from task metadata into sandbox creation", async () => {
@@ -792,6 +841,30 @@ describe("TaskProcessorService", () => {
       expect(postIssueComment).not.toHaveBeenCalled();
     });
 
+    it("finishes a dead-lettered assignment's round: outcome failed, first transition, no archive", async () => {
+      const onRoundFinished = spyOn(integrations.linear, "onRoundFinished");
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+        row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
+        row("gc", "comment", "github", [issueComment("555", 7, 555)]),
+      ]);
+      failTaskInbox.mockResolvedValue([{ id: "a" }, { id: "gc" }]);
+
+      await failTask(makeTask());
+      await waitFor(() => onRoundFinished.mock.calls.length > 0);
+
+      expect(onRoundFinished).toHaveBeenCalledTimes(1);
+      const [ctx, , round, outcome] = onRoundFinished.mock.calls[0] as unknown as [
+        { firstTransition: boolean; archive(): Promise<Uint8Array | null> },
+        Task,
+        { id: string },
+        string,
+      ];
+      expect(round.id).toBe("a");
+      expect(outcome).toBe("failed");
+      expect(ctx.firstTransition).toBe(true);
+      expect(await ctx.archive()).toBeNull();
+    });
+
     it("a row whose source has no integration is skipped; other rows post and the lease is released", async () => {
       (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
         row("x", "comment", "unknown-source", [issueComment("777", 7, 777)]),
@@ -1154,6 +1227,105 @@ describe("TaskProcessorService", () => {
       expect(recordEventCursor).not.toHaveBeenCalled();
       expect(failTaskInbox).not.toHaveBeenCalled();
       expect(requeueForRetry).not.toHaveBeenCalled();
+    });
+
+    it("a hung send is cut at the send timeout: dropped, cursor advanced, the task stops, the tick goes on", async () => {
+      const error = spyOn(logger, "error").mockImplementation(() => logger);
+      try {
+        const deliver = mock(() => new Promise<void>(() => {}));
+        const round = { ...survivingNonTerminalRow(), source: "github", status: "delivered" };
+        const dispatcher = new RealEventDispatcher(
+          taskRepo,
+          { getByIdForTask: mock(() => Promise.resolve(round)) } as unknown as InboxRepository,
+          sandboxManager,
+          linearTokenProvider,
+          slackNotifier,
+          { ...integrations, github: { name: "github", deliver } },
+          holds,
+          hooks,
+          20, // send timeout (ms)
+        );
+        service = new TaskProcessorService(
+          taskRepo,
+          inboxRepo,
+          linearTokenProvider,
+          sandboxManager,
+          dispatcher,
+          inboxService,
+          slackNotifier,
+          integrations,
+          holds,
+          ["linear", "api"],
+          hooks,
+        );
+        const thought = (seq: number) => ({
+          seq,
+          ts: "t",
+          type: "agent_thought",
+          inbox_id: "inbox-1",
+          target_id: "sess-1",
+          body: "x",
+        });
+        listInFlightOwnedBy
+          .mockResolvedValueOnce([
+            makeTask({ id: "task-1", sandboxId: "sbx-1" }),
+            makeTask({ id: "task-2", sandboxId: "sbx-2" }),
+          ])
+          .mockResolvedValue([]);
+        readEvents.mockImplementation((sandboxId: string) =>
+          Promise.resolve(sandboxId === "sbx-1" ? [thought(1), thought(2)] : [thought(1)]),
+        );
+
+        service.start();
+        await waitFor(() => recordEventCursor.mock.calls.length >= 2);
+        await service.stop();
+
+        // task-1's seq 2 is never sent: the drop ended task-1's events; task-2 ran.
+        const cursors = recordEventCursor.mock.calls.map((c: unknown[]) => {
+          const p = c[0] as { taskId: string; event: { seq: number } };
+          return [p.taskId, p.event.seq];
+        });
+        expect(cursors).toEqual([
+          ["task-1", 1],
+          ["task-2", 1],
+        ]);
+        expect(deliver).toHaveBeenCalledTimes(2);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it("releases a stale hold when this pod claims the task", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      // Still owned, so only the claim can drop the hold.
+      listInFlightOwnedBy.mockResolvedValue([task]);
+      holds.hold("task-1", { seq: 1, inbox_id: "i" }, "github", new RetryableError("429", 60_000));
+      claimNext.mockResolvedValueOnce(task).mockResolvedValue(null);
+
+      service.start();
+      await waitFor(() => attachSandbox.mock.calls.length > 0);
+      await service.stop();
+
+      expect(holds.stats()).toEqual({});
+    });
+
+    it("once shutdown starts, reconciles no further owned task and claims nothing", async () => {
+      listInFlightOwnedBy.mockResolvedValue([
+        makeTask({ id: "task-1", sandboxId: "sbx-1" }),
+        makeTask({ id: "task-2", sandboxId: "sbx-2" }),
+      ]);
+      let stopping: Promise<void> | undefined;
+      getSandboxInfo.mockImplementation(() => {
+        stopping ??= service.stop();
+        return Promise.resolve(makeSandboxInfo());
+      });
+
+      service.start();
+      await waitFor(() => stopping !== undefined);
+      await stopping;
+
+      expect(getSandboxInfo).toHaveBeenCalledTimes(1);
+      expect(claimNext).not.toHaveBeenCalled();
     });
 
     it("a hold stops before the cursor advances and is not a reconcile error", async () => {
@@ -1575,6 +1747,37 @@ describe("TaskProcessorService", () => {
     it("stop() is safe to call when never started", async () => {
       await service.stop();
       expect(backdateHeartbeatsOwnedBy).not.toHaveBeenCalled();
+    });
+
+    it("stop() waits for detached hooks and logs hook_abandoned for one that outlives the drain", async () => {
+      const warn = spyOn(logger, "warn").mockImplementation(() => logger);
+      const drainMs = mockedConfig.shutdownDrainMs;
+      mockedConfig.shutdownDrainMs = 100;
+      try {
+        let finished = false;
+        service.start();
+        await waitFor(() => heartbeatOwnedBy.mock.calls.length > 0);
+        hooks.detach(
+          "task-1",
+          "onRoundFinished",
+          sleep(20).then(() => {
+            finished = true;
+          }),
+        );
+        hooks.detach("task-2", "assignee", sleep(400));
+        await service.stop();
+
+        expect(finished).toBe(true);
+        expect(warn.mock.calls.filter(([msg]) => msg === "hook abandoned at shutdown")).toEqual([
+          [
+            "hook abandoned at shutdown",
+            { event: "hook_abandoned", taskId: "task-2", hook: "assignee" },
+          ],
+        ]);
+      } finally {
+        mockedConfig.shutdownDrainMs = drainMs;
+        warn.mockRestore();
+      }
     });
 
     it("stop() backdates heartbeats owned by this pod before resolving", async () => {
