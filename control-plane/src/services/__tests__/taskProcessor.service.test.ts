@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { SandboxInfo } from "@alibaba-group/opensandbox";
 import { SandboxApiException } from "@alibaba-group/opensandbox";
 import type { LinearClient } from "@linear/sdk";
@@ -103,7 +103,7 @@ const { InboxService: RealInboxService, WORKSPACE_MISSING_MESSAGE } = await impo
   "../inbox.service"
 );
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
-  config: { shutdownDrainMs: number };
+  config: { shutdownDrainMs: number; leaseTimeoutMs: number };
 };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const { RetryableError } = await import("../../integrations/outbound");
@@ -1505,7 +1505,7 @@ describe("TaskProcessorService", () => {
       expect(holds.of("linear").heldTasks).toBe(0);
     });
 
-    it("renews every lease this pod holds right before each reconcile; a lost lease skips that task", async () => {
+    it("renews every lease this pod holds at tick start; a task it didn't renew is skipped", async () => {
       const t1 = makeTask({ id: "task-1", sandboxId: "sbx-1" });
       const t2 = makeTask({ id: "task-2", sandboxId: "sbx-2" });
       listInFlightOwnedBy.mockResolvedValueOnce([t1, t2]).mockResolvedValue([]);
@@ -1521,14 +1521,77 @@ describe("TaskProcessorService", () => {
       });
 
       service.start();
-      await waitFor(() => order.length >= 4);
+      await waitFor(() => order.length >= 2);
       await new Promise<void>((r) => setTimeout(r, 30));
       await service.stop();
 
-      // Tick start, then before each reconcile.
-      expect(order.slice(0, 4)).toEqual(["heartbeat", "heartbeat", "reconcile sbx-1", "heartbeat"]);
+      expect(order.slice(0, 2)).toEqual(["heartbeat", "reconcile sbx-1"]);
       expect(order).not.toContain("reconcile sbx-2");
       expect(heartbeatOwnedBy).toHaveBeenCalledWith("pod-test");
+    });
+
+    describe("a reconcile longer than a quarter of the lease", () => {
+      const thought = (seq: number) =>
+        ({
+          seq,
+          ts: "t",
+          type: "agent_thought",
+          inbox_id: "inbox-1",
+          target_id: "sess-1",
+          body: "x",
+        }) as HarnessEvent;
+      let leaseMs: number;
+      beforeEach(() => {
+        leaseMs = mockedConfig.leaseTimeoutMs;
+        mockedConfig.leaseTimeoutMs = 40; // renew after 10 ms
+        listInFlightOwnedBy
+          .mockResolvedValueOnce([makeTask({ sandboxId: "sbx-1" })])
+          .mockResolvedValue([]);
+        readEvents.mockResolvedValueOnce([thought(1), thought(2), thought(3)]);
+      });
+      afterEach(() => {
+        mockedConfig.leaseTimeoutMs = leaseMs;
+      });
+
+      it("renews every lease again before a later event", async () => {
+        const order: string[] = [];
+        heartbeatOwnedBy.mockImplementation(() => {
+          order.push("heartbeat");
+          return Promise.resolve([{ id: "task-1" }]);
+        });
+        // Each send outlasts a quarter of the lease.
+        dispatcherHandle.mockImplementation(async (event: HarnessEvent) => {
+          order.push(`handle ${event.seq}`);
+          await sleep(15);
+          return "ok" as const;
+        });
+
+        service.start();
+        await waitFor(() => recordEventCursor.mock.calls.length >= 3);
+        await service.stop();
+
+        expect(order.slice(order.indexOf("handle 1"), order.indexOf("handle 2"))).toContain(
+          "heartbeat",
+        );
+      });
+
+      it("stops the task's events once a renewal shows its lease taken over", async () => {
+        // Ours until the first send; taken over by the renewal after it.
+        heartbeatOwnedBy.mockImplementation(() =>
+          Promise.resolve(dispatcherHandle.mock.calls.length > 0 ? [] : [{ id: "task-1" }]),
+        );
+        dispatcherHandle.mockImplementation(async () => {
+          await sleep(15);
+          return "ok" as const;
+        });
+
+        service.start();
+        await waitFor(() => recordEventCursor.mock.calls.length >= 1);
+        await sleep(50);
+        await service.stop();
+
+        expect(dispatcherHandle).toHaveBeenCalledTimes(1);
+      });
     });
 
     it("never provisions a task twice on this pod: a re-claim while its provision runs is skipped", async () => {

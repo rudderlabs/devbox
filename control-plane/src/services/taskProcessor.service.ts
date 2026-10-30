@@ -26,6 +26,9 @@ export class TaskProcessorService {
   private sleepAbort: AbortController | null = null;
   // Provisions running on this pod, by task id.
   private readonly inflight = new Map<string, Promise<void>>();
+  // The last renewal of this pod's leases: when it was sent and what it renewed.
+  private leasesRenewedAt = 0;
+  private renewedTaskIds = new Set<string>();
   // First tick (per task) we saw the backing pod ABSENT (kubectl NotFound). A
   // pod can be briefly gone between create and scheduling, so absence gets a
   // grace window (config.sandboxAbsentGraceMs) before we fail. Cleared the
@@ -118,24 +121,22 @@ export class TaskProcessorService {
 
   private async tick(): Promise<void> {
     // 1. Heartbeat refresh — keep owned-task leases warm.
-    await this.taskRepo.heartbeatOwnedBy(config.podId);
+    await this.renewLeases();
 
     // 2. Idle reaper — kill sandboxes idle past the ceiling, release leases.
     await this.reapIdle().catch((err) => logErr("reapIdle failed", err));
 
-    // 3. Reconcile owned tasks with live sandboxes. Every lease this pod holds
-    //    (in-flight provisions included) is renewed right before each reconcile,
-    //    and the task's own with each cursor advance inside it, so slow sends
-    //    can't let a lease expire mid-tick; a task not renewed was taken over.
-    //    ponytail: one reconcile of many slow but successful sends (>120 s) can
-    //    still outlive an in-flight provision's lease; a lease timer if it matters.
+    // 3. Reconcile owned tasks with live sandboxes. Before each reconcile and
+    //    each event inside it, every lease this pod holds (in-flight provisions
+    //    included) is renewed once a quarter of the lease has passed, so slow
+    //    sends can't let a lease expire mid-tick; a task not renewed was taken
+    //    over.
     const owned = await this.taskRepo.listInFlightOwnedBy(config.podId, this.taskSources);
     for (const task of owned) {
       // Shutting down: leave the rest to siblings (stop() backdates our
       // heartbeats), so shutdown waits for one task's reconcile at most (§10).
       if (!this.running) break;
-      const renewed = await this.taskRepo.heartbeatOwnedBy(config.podId);
-      if (!renewed.some((r) => r.id === task.id)) {
+      if (!(await this.leaseHeld(task.id))) {
         logger.info("lease lost before reconcile; skipping", { taskId: task.id });
         continue;
       }
@@ -181,6 +182,22 @@ export class TaskProcessorService {
     // the old run; it must not delay the new one.
     this.holds.release(claimed.id);
     this.dispatch(claimed);
+  }
+
+  // Renews every lease this pod holds and notes which it renewed.
+  private async renewLeases(): Promise<void> {
+    const at = Date.now();
+    const rows = await this.taskRepo.heartbeatOwnedBy(config.podId);
+    this.leasesRenewedAt = at;
+    this.renewedTaskIds = new Set(rows.map((r) => r.id));
+  }
+
+  // Renews every lease once a quarter of the lease has passed since the last
+  // renewal (each step between checks is bounded well under a lease), then says
+  // whether `taskId` is still ours: one missing from the renewal was taken over.
+  private async leaseHeld(taskId: string): Promise<boolean> {
+    if (Date.now() - this.leasesRenewedAt >= config.leaseTimeoutMs / 4) await this.renewLeases();
+    return this.renewedTaskIds.has(taskId);
   }
 
   private async reapIdle(): Promise<void> {
@@ -390,6 +407,15 @@ export class TaskProcessorService {
       // Shutting down: stop after the event in hand (the cursor is persisted
       // per event), so shutdown waits for one event, not the backlog (§10).
       if (!this.running) break;
+      // A long run of slow sends must not let any lease expire; ours lost
+      // means a sibling took this task over.
+      if (!(await this.leaseHeld(currentTask.id))) {
+        logger.info("lease lost mid-reconcile; self-evicting", {
+          taskId: currentTask.id,
+          seq: event.seq,
+        });
+        return;
+      }
 
       const result = await this.eventDispatcher.handle(event, currentTask);
       switch (result) {
