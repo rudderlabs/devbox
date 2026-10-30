@@ -13,14 +13,14 @@
       "idx": 1,
       "version": "7",
       "when": 1793368811788,
-      "tag": "0001_tasks_key_lower",
+      "tag": "0001_inbox_source_kind_external",
       "breakpoints": true
     },
     {
       "idx": 2,
       "version": "7",
       "when": 1793368820991,
-      "tag": "0002_inbox_source_kind_external",
+      "tag": "0002_tasks_key_lower",
       "breakpoints": true
     }
   ]

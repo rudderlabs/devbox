@@ -152,6 +152,33 @@
         }
       },
       "indexes": {
+        "inbox_source_kind_external_uniq": {
+          "name": "inbox_source_kind_external_uniq",
+          "columns": [
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "inbox_source_external_uniq": {
           "name": "inbox_source_external_uniq",
           "columns": [
@@ -460,13 +487,13 @@
           "method": "btree",
           "with": {}
         },
-        "tasks_key_lower_uniq": {
-          "name": "tasks_key_lower_uniq",
+        "tasks_key_uniq": {
+          "name": "tasks_key_uniq",
           "columns": [
             {
-              "expression": "lower(\"key\")",
+              "expression": "key",
+              "isExpression": false,
               "asc": true,
-              "isExpression": true,
               "nulls": "last"
             }
           ],
