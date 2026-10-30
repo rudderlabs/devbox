@@ -438,7 +438,8 @@ describe("EventDispatcher", () => {
       expect(emitThought).not.toHaveBeenCalled();
     });
 
-    it("Linear task: a token fetch failure rejects handle() before any side effect (cursor held)", async () => {
+    it("Linear task: a token fetch failure posts nothing and does not return ok (cursor held)", async () => {
+      // characterization: changes in phase 1b (handle returns "hold" instead of rejecting)
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
@@ -455,8 +456,9 @@ describe("EventDispatcher", () => {
           makeTask(),
         ),
       ).rejects.toThrow("token refresh failed");
-      expect(getByIdForTask).not.toHaveBeenCalled();
-      expect(emitThought).not.toHaveBeenCalled();
+      for (const m of [emitThought, emitAction, emitResponse, emitError, postIssueComment]) {
+        expect(m).not.toHaveBeenCalled();
+      }
     });
 
     it("foreign / unknown inbox_id → cross-task leak: aborts, no emit", async () => {
@@ -496,6 +498,16 @@ describe("EventDispatcher", () => {
     });
     const ghRow = (kind: string, target: InboxRow["reply_targets"][number]): InboxRow =>
       ({ ...linearRow(), source: "github", kind, reply_targets: [target] }) as InboxRow;
+
+    it("a Linear comment round failure → emitError on the row's session", async () => {
+      getByIdForTask.mockResolvedValue({ ...linearRow(), kind: "comment" } as InboxRow);
+      expect(await dispatcher.handle(errorEvent("sess-1"), makeTask())).toBe("ok");
+      expect(emitError).toHaveBeenCalledWith(
+        expect.anything(),
+        "sess-1",
+        "⚠ Something went wrong — RuntimeError: boom",
+      );
+    });
 
     it("a GitHub comment or review round failure is posted nowhere", async () => {
       // characterization: changes in phase 1a (spec §13, §15 bug 1)
@@ -796,7 +808,12 @@ describe("EventDispatcher", () => {
     it("a failed GitHub reply is logged and dropped: handle() resolves ok, so the cursor advances", async () => {
       // characterization: changes in phase 1b (spec §13, §4 I14: pre-send failures hold)
       getByIdForTask.mockResolvedValue(ghCommentRow());
-      postIssueComment.mockRejectedValue(new Error("GitHub 429"));
+      // githubFetch's error for a 429: a plain Error, the status only in the message.
+      postIssueComment.mockRejectedValue(
+        new Error(
+          'GitHub POST /repos/o/r/issues/1/comments failed: HTTP 429 {"message":"API rate limit exceeded"}',
+        ),
+      );
       expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("ok");
       expect(postIssueComment).toHaveBeenCalledTimes(1);
     });

@@ -485,6 +485,7 @@ describe("TaskProcessorService", () => {
           updated_at: new Date(),
         },
       ]);
+      failTaskInbox.mockResolvedValue([{ id: "inbox-1" }]);
 
       service.start();
       await waitFor(() => releaseLease.mock.calls.length > 0);
@@ -700,6 +701,7 @@ describe("TaskProcessorService", () => {
         // CI target: commentId 0 = "post a new PR comment".
         row("ci", "ci_result", "github", [issueComment("9001", 9, 0)]),
       ]);
+      failTaskInbox.mockResolvedValue(["a", "lc", "gc", "rv", "ci"].map((id) => ({ id })));
 
       await failTask(makeTask());
 
@@ -754,6 +756,7 @@ describe("TaskProcessorService", () => {
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
+      failTaskInbox.mockResolvedValue([{ id: "a" }, { id: "gc" }]);
 
       await failTask(makeTask());
 
@@ -765,6 +768,8 @@ describe("TaskProcessorService", () => {
         ownerId: "pod-test",
         alsoClearSandbox: true,
       });
+      // characterization: changes in phase 2 (Slack notifier sends without the assignee mention; spec §13)
+      expect(notifyTerminal).not.toHaveBeenCalled();
     });
   });
 
@@ -1078,8 +1083,8 @@ describe("TaskProcessorService", () => {
       dispatcherHandle.mockRejectedValueOnce(new Error("token refresh failed"));
 
       service.start();
-      await waitFor(() => dispatcherHandle.mock.calls.length >= 1);
-      await new Promise<void>((r) => setTimeout(r, 30));
+      // assessReconcileError reads the pod (unknown here → log only).
+      await waitFor(() => getSandboxPodStatus.mock.calls.length > 0);
       await service.stop();
 
       // The throw ends this task's tick: seq 2 is not dispatched and seq 1 is
@@ -1176,6 +1181,7 @@ describe("TaskProcessorService", () => {
       getSandboxPodStatus.mockResolvedValue({ exists: true, phase: "Running", oomKilled: false });
       getSandboxInfo.mockResolvedValue(makeSandboxInfo({ metadata: { task_id: "other-task" } }));
       stubLinearTarget(task);
+      failTaskInbox.mockResolvedValue([{ id: "inbox-1" }]);
 
       service.start();
       await waitFor(() => releaseLease.mock.calls.length > 0);
@@ -1313,6 +1319,7 @@ describe("TaskProcessorService", () => {
     it("retries exhausted → dead-letters + fails with the give-up message", async () => {
       const task = makeTask({ sandboxId: "sbx-oom" });
       stubLinearTarget(task);
+      failTaskInbox.mockResolvedValue([{ id: "inbox-1" }]);
       getSandboxPodStatus.mockResolvedValue({ exists: true, phase: "Failed", oomKilled: true });
       // The count is durable in tasks.metadata; requeueForRetry persists it. Mirror
       // that on the shared task object so the next assess() reads the bumped count
