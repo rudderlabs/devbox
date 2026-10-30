@@ -4,24 +4,17 @@ import {
   getUserById,
   parsePrUrl,
   postIssueComment,
-  postReviewCommentReply,
   requestReviewers,
 } from "../clients/github";
-import {
-  attachUrlToIssue,
-  emitAction,
-  emitError,
-  emitResponse,
-  emitThought,
-  getIssueHumanAssignee,
-  uploadIssueAttachment,
-} from "../clients/linear";
+import { attachUrlToIssue, getIssueHumanAssignee, uploadIssueAttachment } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
+import { type Outbound, RetryableError } from "../integrations/outbound";
+import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
-import type { HarnessEvent } from "../types/harnessEvent";
+import type { AgentEmit, HarnessEvent } from "../types/harnessEvent";
 import type { LinearTokenProvider } from "./linearTokenProvider";
 import type { SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
@@ -65,12 +58,10 @@ export class EventDispatcher {
     private sandboxManager: SandboxManager,
     private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
     private slackNotifier: SlackNotifierService,
+    private integrations: Record<IntegrationName, Integration>,
   ) {}
 
   async handle(event: HarnessEvent, task: Task): Promise<DispatchResult> {
-    const linearClient =
-      task.source === "linear" ? await this.linearTokenProvider.getAuthorizedLinearClient() : null;
-
     // event.inbox_id is sandbox-written; resolve it task-scoped. A null row
     // means this task's event stream is carrying an event whose inbox row it
     // does NOT own — a cross-task LEAK (a sibling's event in our stream, our own
@@ -103,23 +94,22 @@ export class EventDispatcher {
       }
     }
     switch (event.type) {
-      // Streaming progress / errors → forwarded to the round's Linear session.
-      // The session id is pulled from inboxRow.reply_targets (the linear_session
-      // target), so a github-sourced round (whose reply_targets carry GH specs
-      // only) implicitly skips the Linear forward — no progress noise on the
-      // Linear UI when the user is driving from GitHub.
+      // Agent emits → labelled, then delivered by the round's integration
+      // (routed by round.source, not task.source) to the target named by
+      // event.target_id. A Linear outage therefore holds only Linear rounds'
+      // messages, never a GitHub round's.
       case "agent_thought":
       case "agent_action":
-      case "agent_error":
-        await this.forwardAgentEmit(event, inboxRow, linearClient);
-        break;
-
-      // Per-item reply → routed by target_id through inboxRow.reply_targets[].
       case "agent_response":
-        await this.postTargetedReply(event, inboxRow, task, linearClient);
+      case "agent_error":
+        await this.deliver(event, inboxRow, task);
         break;
 
       case "pr_opened": {
+        // The Linear attach and assignee mirror below need a client. Fetched
+        // first, so a Linear token failure rejects before any side effect and
+        // the cursor holds.
+        const linearClient = await this.linearClientFor(task);
         // appendPrUrl is owner-guarded; a 0-row return means the lease was
         // taken over (stale-lease takeover). Self-evict BEFORE attachUrlToIssue
         // and before the cursor advance — a sibling pod now owns this task.
@@ -160,6 +150,11 @@ export class EventDispatcher {
       }
 
       case "completed": {
+        // The Slack notify below needs a Linear client for a Linear task's
+        // assignment round. Fetched before marking, so a Linear token failure
+        // rejects with the row still open and the cursor held.
+        const linearClient =
+          inboxRow?.kind === "assignment" ? await this.linearClientFor(task) : null;
         // Bare terminal marker — the user-facing message already went out via
         // the preceding agent_response / agent_error emit. Mark the inbox row
         // responded so the reaper guard clears and the sandbox can be freed.
@@ -204,57 +199,19 @@ export class EventDispatcher {
     return "ok";
   }
 
-  // Streaming forwarder for thought / action / error → Linear agent session.
-  // target_id on the event is informational; routing is by the inbox row's
-  // linear_session reply target — target.id IS the agent session id by
-  // construction (set by enqueue paths). A row whose reply_targets carry no
-  // linear_session (i.e. a GitHub-sourced comment/review round) yields a null
-  // session id → drop. A foreign / unknown inbox_id resolves inboxRow to null
-  // and also drops: a confused emit is safer dropped than routed to "the
-  // task's session" somewhere unrelated. Final user-facing replies route
-  // through postTargetedReply, which honors reply_targets and lands on GitHub
-  // for github-sourced rows.
-  private async forwardAgentEmit(
-    event: Extract<HarnessEvent, { type: "agent_thought" | "agent_action" | "agent_error" }>,
-    inboxRow: InboxRow | null,
-    linearClient: LinearClient | null,
-  ): Promise<void> {
-    const agentSessionId =
-      inboxRow?.reply_targets.find((t) => t.spec.kind === "linear_session")?.id ?? null;
-    if (!linearClient || !agentSessionId) return;
-    try {
-      switch (event.type) {
-        case "agent_thought":
-          await emitThought(linearClient, agentSessionId, event.body);
-          break;
-        case "agent_action":
-          // The daemon's body is the full action label (e.g. "Planning",
-          // "Addressing comment"). Linear renders `<action> <parameter>`
-          // concatenated, so a non-empty parameter appends a noisy suffix
-          // ("Addressing comment task"). Pass empty parameter — the body
-          // already carries everything the user should see.
-          await emitAction(linearClient, agentSessionId, event.body, "");
-          break;
-        case "agent_error":
-          await emitError(linearClient, agentSessionId, event.body);
-          break;
-      }
-    } catch (err) {
-      logErr(`forward ${event.type} failed`, err);
-    }
+  private async linearClientFor(task: Task): Promise<LinearClient | null> {
+    return task.source === "linear" ? this.linearTokenProvider.getAuthorizedLinearClient() : null;
   }
 
-  // Posts one agent reply to one thread — looks up the target on the inbox
-  // row's reply_targets[] by target_id, then posts event.body verbatim, routing
-  // by spec.kind. CP never formats the text.
-  private async postTargetedReply(
-    event: Extract<HarnessEvent, { type: "agent_response" }>,
-    inboxRow: InboxRow | null,
-    task: Task,
-    linearClient: LinearClient | null,
-  ): Promise<void> {
+  // Delivers one agent emit to one thread: looks up the target on the inbox
+  // row's reply_targets[] by target_id, labels the emit, and hands both to the
+  // round's integration, which decides where (or whether) it shows up. Core
+  // never checks what an integration can show. A RetryableError (nothing was
+  // sent) propagates, so handle() rejects and the cursor holds; any other
+  // failure is logged and the event dropped.
+  private async deliver(event: AgentEmit, inboxRow: InboxRow | null, task: Task): Promise<void> {
     if (!inboxRow) {
-      logger.warn("agent_response references missing inbox row", {
+      logger.warn(`${event.type} references missing inbox row`, {
         taskId: task.id,
         inboxId: event.inbox_id,
       });
@@ -262,7 +219,7 @@ export class EventDispatcher {
     }
     const target = inboxRow.reply_targets.find((t) => t.id === event.target_id);
     if (!target) {
-      logger.warn("agent_response target_id not in reply_targets", {
+      logger.warn(`${event.type} target_id not in reply_targets`, {
         taskId: task.id,
         inboxId: inboxRow.id,
         targetId: event.target_id,
@@ -271,46 +228,14 @@ export class EventDispatcher {
     }
 
     try {
-      switch (target.spec.kind) {
-        case "issue_comment":
-          await postIssueComment(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.prNumber,
-            event.body,
-          );
-          break;
-        case "review_comment":
-          await postReviewCommentReply(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.prNumber,
-            target.spec.inReplyTo,
-            event.body,
-          );
-          break;
-        case "review_body":
-          // Top-level PR comment — GH has no reply-to-review-body API.
-          await postIssueComment(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.prNumber,
-            event.body,
-          );
-          break;
-        case "linear_session":
-          // target.id IS the agent session id by construction (enqueue paths
-          // stamp the live session id, refreshed on every `prompted`).
-          if (linearClient) {
-            await emitResponse(linearClient, target.id, event.body);
-          }
-          break;
-        case "api_session":
-          break; // API tasks: the event log carries the reply
-      }
+      await this.integrations[inboxRow.source].deliver(
+        { signal: new AbortController().signal, log: logger },
+        target,
+        labelAgentEmit(event, inboxRow),
+      );
     } catch (err) {
-      logErr(`post targeted reply failed for target ${target.id}`, err);
-      // At-least-once: cursor-replay re-fires this single agent_response retries.
+      if (err instanceof RetryableError) throw err;
+      logErr(`deliver ${event.type} failed for target ${target.id}`, err);
     }
   }
 
@@ -527,6 +452,30 @@ export class EventDispatcher {
     } catch (err) {
       logErr(`attachRunArchiveToLinearIssue failed for task ${task.id}`, err);
     }
+  }
+}
+
+// What an agent emit is, as the integration sees it. A non-retryable
+// agent_error relies on the harness contract: on an assignment its body is the
+// user-safe summary (_format_completion_body); on a comment, review or CI round
+// it carries exception text (_emit_round_failure). Neither marks the row failed
+// nor writes a task_event: the following `completed` marks it responded.
+function labelAgentEmit(event: AgentEmit, round: InboxRow): Outbound {
+  switch (event.type) {
+    case "agent_response":
+      return { type: "reply", body: event.body };
+    case "agent_thought":
+      return { type: "progress", kind: "thought", body: event.body };
+    case "agent_action":
+      return { type: "progress", kind: "action", body: event.body };
+    case "agent_error":
+      // A retried assignment attempt; the final failure arrives through failTask.
+      if (event.retryable_assignment_failure) {
+        return { type: "progress", kind: "error", body: event.body };
+      }
+      return round.kind === "assignment"
+        ? { type: "failure", cause: "round_failed", round, summary: event.body }
+        : { type: "failure", cause: "round_failed", round, detail: event.body };
   }
 }
 

@@ -864,6 +864,10 @@ export function validateHarnessEvent(parsed: unknown): HarnessEvent | null {
         inbox_id: parsed.inbox_id,
         target_id: parsed.target_id,
         body: capString(parsed.body, maxLen) ?? "",
+        // Kept only when exactly `true`; the dispatcher labels on it.
+        ...(parsed.type === "agent_error" && parsed.retryable_assignment_failure === true
+          ? { retryable_assignment_failure: true }
+          : {}),
       };
     }
 

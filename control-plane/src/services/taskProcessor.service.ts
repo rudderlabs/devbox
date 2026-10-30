@@ -1,12 +1,11 @@
 import type { SandboxInfo } from "@alibaba-group/opensandbox";
-import type { LinearClient } from "@linear/sdk";
-import { postIssueComment, postReviewCommentReply } from "../clients/github";
-import { emitAction, emitError, emitThought, setIssueStarted } from "../clients/linear";
+import { emitAction, emitThought, setIssueStarted } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
+import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
-import type { InboxRepository, ReplyTarget } from "../repositories/inbox.repository";
+import type { InboxRepository } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
 import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
@@ -42,6 +41,7 @@ export class TaskProcessorService {
   private readonly eventDispatcher: EventDispatcher;
   private readonly inboxService: InboxService;
   private readonly slackNotifier: SlackNotifierService;
+  private readonly integrations: Record<IntegrationName, Integration>;
 
   constructor(
     taskRepo: TaskRepository,
@@ -51,6 +51,7 @@ export class TaskProcessorService {
     eventDispatcher: EventDispatcher,
     inboxService: InboxService,
     slackNotifier: SlackNotifierService,
+    integrations: Record<IntegrationName, Integration>,
   ) {
     this.taskRepo = taskRepo;
     this.inboxRepo = inboxRepo;
@@ -59,6 +60,7 @@ export class TaskProcessorService {
     this.eventDispatcher = eventDispatcher;
     this.inboxService = inboxService;
     this.slackNotifier = slackNotifier;
+    this.integrations = integrations;
   }
 
   start(): void {
@@ -166,6 +168,9 @@ export class TaskProcessorService {
   private dispatch(task: Task): void {
     const p = this.runTask(task)
       .catch((err) => this.handleTaskError(task, err))
+      // Nothing awaits p, so a throw from handleTaskError itself (e.g. a DB
+      // error releasing the lease) would be an unhandled rejection. Log it.
+      .catch((err) => logErr(`handleTaskError failed for task ${task.id}`, err))
       .finally(() => this.inflight.delete(p));
     this.inflight.add(p);
   }
@@ -713,18 +718,17 @@ export class TaskProcessorService {
   }
 
   // Hard task failure (provision failure, sandbox timeout/crash, sandbox
-  // unreachable). Broadcast the failure message to every reply target on the
-  // task's non-terminal inbox rows (so each pending @harness comment + the
-  // Linear session sees why their round didn't complete), kill the sandbox,
-  // dead-letter the rows, release the lease. The dead-letter is what keeps
-  // the task from wedging: a 'pending'/'delivered' row left behind is
-  // un-claimable to no end (claimNext needs 'pending' but the task has no
-  // sandbox) and pins the idle reaper.
+  // unreachable). Dead-letter the task's open inbox rows, tell every reply
+  // target on the rows this call dead-lettered why their round didn't complete
+  // (each @harness comment + the Linear session), kill the sandbox, release the
+  // lease. The dead-letter is what keeps the task from wedging: a
+  // 'pending'/'delivered' row left behind is un-claimable to no end (claimNext
+  // needs 'pending' but the task has no sandbox) and pins the idle reaper.
   // killSandbox=false is for a crossed binding: the sandbox isn't ours to kill (a
   // sibling task owns it). We still dead-letter our rows + release the lease
   // (which clears our sandbox_id), so the task fails cleanly. The structured
   // failure log lives at each call site (with its pod/forensic detail); failTask
-  // only does the broadcast + teardown.
+  // only does the dead-letter, broadcast + teardown.
   private async failTask(
     task: Task,
     message: string,
@@ -737,28 +741,43 @@ export class TaskProcessorService {
         logErr(`failTask: listNonTerminalByTask failed for ${task.id}`, e);
         return [];
       });
+    // Dead-letter the inbox rows FIRST, and BEFORE releaseLease — failTaskInbox
+    // is owner-guarded and needs owner_id still set. Only the rows it
+    // transitions get a failure message, so a racing restart or a late
+    // `completed` can't draw a "Task failed" on a live or finished round.
+    const failed = await this.inboxRepo
+      .failTaskInbox({ taskId: task.id, ownerId: config.podId, reason: message })
+      .catch((e) => {
+        logErr(`failTaskInbox failed for task ${task.id}`, e);
+        return [] as { id: string }[];
+      });
+    const failedIds = new Set(failed.map((r) => r.id));
+    const failedRows = nonTerminal.filter((r) => failedIds.has(r.id));
+    if (failed.length > 0) {
+      logger.warn("inbox rows dead-lettered on task failure", {
+        taskId: task.id,
+        inboxIds: failed.map((r) => r.id),
+        reason: message,
+      });
+    }
+
     // Dedupe by target id — a Linear-source task has many rows sharing the
     // same linear_session target id; posting once per id keeps the user from
-    // seeing the same error N times.
+    // seeing the same error N times. At most once: there is no cursor to hold,
+    // so a delivery error (RetryableError included) is logged and dropped.
     const seen = new Set<string>();
-    let cachedLinearClient: LinearClient | null = null;
-    const getLinearClient = async (): Promise<LinearClient | null> => {
-      if (cachedLinearClient) return cachedLinearClient;
-      try {
-        cachedLinearClient = await this.linearTokenProvider.getAuthorizedLinearClient();
-        return cachedLinearClient;
-      } catch (e) {
-        logErr("failTask: getAuthorizedLinearClient failed", e);
-        return null;
-      }
-    };
-    for (const row of nonTerminal) {
+    for (const row of failedRows) {
       for (const t of row.reply_targets) {
         if (seen.has(t.id)) continue;
         seen.add(t.id);
-        await this.postFailureToTarget(t, message, getLinearClient).catch((e) =>
-          logErr(`failTask: post to ${t.spec.kind} target ${t.id} failed`, e),
-        );
+        await this.integrations[row.source]
+          .deliver({ signal: new AbortController().signal, log: logger }, t, {
+            type: "failure",
+            cause: "task_failed",
+            round: row,
+            summary: message,
+          })
+          .catch((e) => logErr(`failTask: post to ${t.spec.kind} target ${t.id} failed`, e));
       }
     }
 
@@ -771,42 +790,25 @@ export class TaskProcessorService {
       const current = await this.taskRepo.getByIdOwnedBy(task.id, config.podId);
       if (current?.sandboxId) await this.killSandboxQuietly(current.sandboxId);
     }
-    // Dead-letter the inbox rows BEFORE releaseLease — failTaskInbox is
-    // owner-guarded and needs owner_id still set.
-    const failed = await this.inboxRepo
-      .failTaskInbox({ taskId: task.id, ownerId: config.podId, reason: message })
-      .catch((e) => {
-        logErr(`failTaskInbox failed for task ${task.id}`, e);
-        return [] as { id: string }[];
+    // Slack failure update to the configured channel. Gated on the ASSIGNMENT
+    // (top-level) round being among the rows just dead-lettered, mirroring the
+    // completion path's kind === "assignment" gate in eventDispatcher. Without
+    // this, a failing follow-up comment/review/ci_result round (a new inbox row
+    // on the SAME Linear task, appended after the assignment already completed
+    // and posted "✅ devbox completed") would post a contradictory "❌ devbox
+    // failed" into that same thread — only the top-level delegated task should
+    // ever notify Slack. Tying it to this failTaskInbox transition also keeps it
+    // at-most-once. Fire-and-forget: a Slack outage must not affect teardown;
+    // the notifier no-ops when Slack is disabled.
+    if (failedRows.some((r) => r.kind === "assignment") && task.source === "linear") {
+      const client = await this.linearTokenProvider.getAuthorizedLinearClient().catch((e) => {
+        logErr("failTask: getAuthorizedLinearClient failed", e);
+        return null;
       });
-    if (failed.length > 0) {
-      logger.warn("inbox rows dead-lettered on task failure", {
-        taskId: task.id,
-        inboxIds: failed.map((r) => r.id),
-        reason: message,
-      });
-      // Slack failure update to the configured channel. Gated on
-      // the ASSIGNMENT (top-level) round being among the rows just dead-lettered,
-      // mirroring the completion path's kind === "assignment" gate in
-      // eventDispatcher. Without this, a failing follow-up comment/review/
-      // ci_result round (a new inbox row on the SAME Linear task, appended after
-      // the assignment already completed and posted "✅ devbox completed") would
-      // post a contradictory "❌ devbox failed" into that same thread — only the
-      // top-level delegated task should ever notify Slack. Tying it to this
-      // failTaskInbox transition also keeps it at-most-once. Fire-and-forget: a
-      // Slack outage must not affect teardown; the notifier no-ops when Slack is
-      // disabled.
-      const failedIds = new Set(failed.map((r) => r.id));
-      const assignmentFailed = nonTerminal.some(
-        (r) => r.kind === "assignment" && failedIds.has(r.id),
-      );
-      if (assignmentFailed && task.source === "linear") {
-        const client = await getLinearClient();
-        if (client) {
-          void this.slackNotifier
-            .notifyTerminal(client, task, "failed", message)
-            .catch((e) => logErr(`slack failure notify failed for task ${task.id}`, e));
-        }
+      if (client) {
+        void this.slackNotifier
+          .notifyTerminal(client, task, "failed", message)
+          .catch((e) => logErr(`slack failure notify failed for task ${task.id}`, e));
       }
     }
     await this.taskRepo.releaseLease({
@@ -814,42 +816,6 @@ export class TaskProcessorService {
       ownerId: config.podId,
       alsoClearSandbox: true,
     });
-  }
-
-  // Posts `message` to one reply target, switching on spec.kind. Used by
-  // failTask to broadcast a failure message to every pending thread before
-  // dead-lettering. Mirrors handlePvcMissing in inbox.service.ts — same per-
-  // spec branching; if a third caller appears, extract into a shared helper.
-  private async postFailureToTarget(
-    target: ReplyTarget,
-    message: string,
-    getLinearClient: () => Promise<LinearClient | null>,
-  ): Promise<void> {
-    switch (target.spec.kind) {
-      case "linear_session": {
-        const client = await getLinearClient();
-        if (client) await emitError(client, target.id, message);
-        return;
-      }
-      case "issue_comment":
-        await postIssueComment(target.spec.owner, target.spec.repo, target.spec.prNumber, message);
-        return;
-      case "review_comment":
-        await postReviewCommentReply(
-          target.spec.owner,
-          target.spec.repo,
-          target.spec.prNumber,
-          target.spec.inReplyTo,
-          message,
-        );
-        return;
-      case "review_body":
-        // No reply-to-review-body API — top-level PR comment instead.
-        await postIssueComment(target.spec.owner, target.spec.repo, target.spec.prNumber, message);
-        return;
-      case "api_session":
-        return; // API tasks: round_failed in the event log carries it
-    }
   }
 
   // THE single classifier for everything runTask raises (it's the dispatch
@@ -863,7 +829,11 @@ export class TaskProcessorService {
   //      stays in server logs only; the user sees a generic message.
   private async handleTaskError(task: Task, err: unknown): Promise<void> {
     if (err instanceof PvcNotFoundError) {
-      await this.inboxService.deadLetterWorkspaceMissing(task);
+      // A throw here (a DB error) must not skip the release: an unreleased lease
+      // with no sandbox stays heartbeated by this pod and is never re-claimed.
+      await this.inboxService
+        .deadLetterWorkspaceMissing(task)
+        .catch((e) => logErr(`deadLetterWorkspaceMissing failed for task ${task.id}`, e));
       await this.taskRepo
         .releaseLease({ taskId: task.id, ownerId: config.podId, alsoClearSandbox: true })
         .catch((e) => logErr(`releaseLease after workspace-missing failed for task ${task.id}`, e));

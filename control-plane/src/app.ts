@@ -7,6 +7,10 @@ import { GitHubWebhookController } from "./controllers/githubWebhook.controller"
 import { HealthController } from "./controllers/health.controller";
 import { LinearWebhookController } from "./controllers/linearWebhook.controller";
 import { db } from "./db";
+import { apiIntegration } from "./integrations/api";
+import { githubIntegration } from "./integrations/github";
+import { LinearIntegration } from "./integrations/linear";
+import type { Integration, IntegrationName } from "./integrations/types";
 import { logger } from "./logger";
 import { apiTaskRepository } from "./repositories/apiTask.repository";
 import { apiTokenRepository } from "./repositories/apiToken.repository";
@@ -73,7 +77,14 @@ export function createApp(): AppBundle {
     trustedUsers: joinIfAny(config.github.trustedUsers),
   });
 
-  const inboxService = new InboxService(inboxRepository, sandboxManager, linearTokenProvider);
+  // Every outbound message goes through integrations[round.source].deliver.
+  const integrations = {
+    linear: new LinearIntegration(linearTokenProvider),
+    api: apiIntegration,
+    github: githubIntegration,
+  } satisfies Record<IntegrationName, Integration>;
+
+  const inboxService = new InboxService(inboxRepository, sandboxManager, integrations);
 
   const agentSessionService = new AgentSessionService(
     taskRepository,
@@ -95,6 +106,7 @@ export function createApp(): AppBundle {
     sandboxManager,
     linearTokenProvider,
     slackNotifier,
+    integrations,
   );
 
   const taskProcessor = new TaskProcessorService(
@@ -105,6 +117,7 @@ export function createApp(): AppBundle {
     eventDispatcher,
     inboxService,
     slackNotifier,
+    integrations,
   );
 
   const linearStatus = new LinearStatusService(

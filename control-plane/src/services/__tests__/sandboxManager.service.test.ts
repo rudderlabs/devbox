@@ -833,9 +833,23 @@ describe("SandboxManager", () => {
       expect(err.body.length).toBeLessThanOrEqual(2001);
     });
 
-    it("drops the harness's retryable_assignment_failure flag from an agent_error", async () => {
-      // characterization: changes in phase 1a (spec §4: validateHarnessEvent copies it when === true)
-      const raw = JSON.stringify({
+    it("keeps the harness's retryable_assignment_failure flag on an agent_error only when it is true", async () => {
+      const line = (seq: number, flag: unknown) =>
+        JSON.stringify({
+          seq,
+          ts: "t",
+          type: "agent_error",
+          inbox_id: "i",
+          target_id: "tgt",
+          body: "RuntimeError: boom",
+          retryable_assignment_failure: flag,
+        });
+      const events = await mgrWith([line(1, true), line(2, "true")].join("\n")).readEvents(
+        "sbx",
+        0,
+      );
+      expect(events).toHaveLength(2);
+      expect(events[0]).toEqual({
         seq: 1,
         ts: "t",
         type: "agent_error",
@@ -844,16 +858,7 @@ describe("SandboxManager", () => {
         body: "RuntimeError: boom",
         retryable_assignment_failure: true,
       });
-      expect(await mgrWith(raw).readEvents("sbx", 0)).toEqual([
-        {
-          seq: 1,
-          ts: "t",
-          type: "agent_error",
-          inbox_id: "i",
-          target_id: "tgt",
-          body: "RuntimeError: boom",
-        },
-      ]);
+      expect("retryable_assignment_failure" in (events[1] ?? {})).toBe(false);
     });
 
     it("agent_thought/action/response use the wider 60k cap (plan markdown + completion summaries can run long)", async () => {

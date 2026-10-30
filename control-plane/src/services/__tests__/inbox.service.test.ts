@@ -68,6 +68,9 @@ mock.module("../../clients/github", () => ({
 }));
 
 const { InboxService, WORKSPACE_MISSING_MESSAGE } = await import("../inbox.service");
+const { LinearIntegration } = await import("../../integrations/linear");
+const { githubIntegration } = await import("../../integrations/github");
+const { apiIntegration } = await import("../../integrations/api");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -176,7 +179,11 @@ describe("InboxService", () => {
       getAuthorizedLinearClient: mock(() => Promise.resolve({})),
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
-    service = new InboxService(inboxRepo, sandboxManager, linearTokenProvider);
+    service = new InboxService(inboxRepo, sandboxManager, {
+      linear: new LinearIntegration(linearTokenProvider),
+      api: apiIntegration,
+      github: githubIntegration,
+    });
   });
 
   describe("sweepUndelivered", () => {
@@ -411,8 +418,7 @@ describe("InboxService", () => {
       expect(markFailed).toHaveBeenCalledTimes(2);
     });
 
-    it("posts before marking the row, and posts even when markFailed transitions nothing", async () => {
-      // characterization: changes in phase 1a (spec §4 I15 / §15 bug 7)
+    it("marks the row before posting, and posts nothing when markFailed transitions nothing", async () => {
       const order: string[] = [];
       postIssueComment.mockImplementation(() => {
         order.push("post");
@@ -422,31 +428,32 @@ describe("InboxService", () => {
         order.push("react");
         return Promise.resolve();
       });
-      markFailed.mockImplementation(() => {
-        order.push("mark");
-        return Promise.resolve([]);
+      // Row b went terminal under us (a racing restart or a late `completed`).
+      markFailed.mockImplementation(({ inboxId }: { inboxId: string }) => {
+        order.push(`mark ${inboxId}`);
+        return Promise.resolve(inboxId === "a" ? [{ id: "a" }] : []);
       });
-      listNonTerminalByTask.mockResolvedValue([ghCommentRow("a")]);
+      stageRows([ghCommentRow("a"), ghCommentRow("b")]);
 
       await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
 
-      expect(order).toEqual(["post", "react", "mark"]);
+      expect(order).toEqual(["mark a", "post", "react", "mark b"]);
     });
 
-    it("a Linear token failure escapes: that row is still marked failed, later rows are untouched", async () => {
-      // characterization: changes in phase 1a (spec §15 bug 2)
+    it("a Linear token failure drops only that row's notice: every row is marked failed, later rows still post", async () => {
       stageRows([linearRow("a", "sess-1"), ghCommentRow("b")]);
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         new Error("token refresh failed"),
       );
 
-      await expect(
-        service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null })),
-      ).rejects.toThrow("token refresh failed");
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
 
-      expect(markFailed).toHaveBeenCalledTimes(1);
-      expect(markFailed).toHaveBeenCalledWith(expect.objectContaining({ inboxId: "a" }));
-      expect(postIssueComment).not.toHaveBeenCalled();
+      expect(emitError).not.toHaveBeenCalled();
+      expect(markFailed.mock.calls.map((c) => (c[0] as { inboxId: string }).inboxId)).toEqual([
+        "a",
+        "b",
+      ]);
+      expect(postIssueComment).toHaveBeenCalledWith("o", "r", 7, WORKSPACE_MISSING_MESSAGE);
     });
   });
 

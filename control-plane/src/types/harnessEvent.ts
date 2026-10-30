@@ -3,12 +3,13 @@
 //
 // Two categories:
 //  - Generic agent emits (agent_thought / agent_action / agent_response /
-//    agent_error): the dispatcher forwards each to the source-specific emit.
+//    agent_error): the dispatcher labels each and hands it to the round's
+//    integration.
 //  - Structural events (pr_opened, completed): source-independent CP-side
 //    state changes.
-// Generic agent emits — dispatcher forwards to source-aware emit. All four
-// share one shape, parametrized over `type` so `Extract<HarnessEvent, { type:
-// "agent_X" }>` still narrows correctly at call sites.
+// Generic agent emits. All four share one shape, parametrized over `type` so
+// `Extract<HarnessEvent, { type: "agent_X" }>` still narrows correctly at call
+// sites.
 //
 // `target_id` is always present and matches an inbox row's reply_targets[]
 // entry:
@@ -31,7 +32,10 @@ export type AgentEmit =
   | AgentEmitOf<"agent_thought">
   | AgentEmitOf<"agent_action">
   | AgentEmitOf<"agent_response">
-  | AgentEmitOf<"agent_error">;
+  // retryable_assignment_failure: one failed assignment attempt. The daemon
+  // exits and the control plane retries the sandbox from the preserved inbox;
+  // the final failure, if any, arrives through failTask.
+  | (AgentEmitOf<"agent_error"> & { retryable_assignment_failure?: boolean });
 
 export type HarnessEvent =
   | AgentEmit

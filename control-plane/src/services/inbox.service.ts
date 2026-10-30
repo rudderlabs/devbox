@@ -1,12 +1,6 @@
-import {
-  addIssueCommentReaction,
-  addReviewCommentReaction,
-  postIssueComment,
-  postReviewCommentReply,
-} from "../clients/github";
-import { emitError } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
+import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type {
   InboxRepository,
@@ -17,7 +11,6 @@ import type {
 } from "../repositories/inbox.repository";
 import { taskIdentity } from "../repositories/inbox.repository";
 import type { InboxMessage } from "../types/inboxMessage";
-import type { LinearTokenProvider } from "./linearTokenProvider";
 import type { SandboxManager } from "./sandboxManager.service";
 
 // InboxService owns inbox enqueue (comment/review/Linear-comment), the sweep
@@ -31,7 +24,7 @@ export class InboxService {
   constructor(
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
+    private integrations: Record<IntegrationName, Integration>,
   ) {}
 
   // ──── Enqueue paths ────
@@ -303,8 +296,8 @@ export class InboxService {
   }
 
   // A task whose PVC no longer exists cannot be resumed. Dead-letters every
-  // still-open ('pending'/'delivered') row of the task (per-row user notice + mark
-  // failed) so it stops pinning the reaper. Called by runTask's recreate-from-PVC
+  // still-open ('pending'/'delivered') row of the task (mark failed + per-row
+  // user notice) so it stops pinning the reaper. Called by runTask's recreate-from-PVC
   // path when createSandboxFromExistingPvc reports the PVC gone.
   // Re-checks each row's status from DB so a row a reassignment superseded mid-tick
   // is left untouched.
@@ -317,79 +310,35 @@ export class InboxService {
     }
   }
 
-  // PVC-missing per-row dead-letter. Once-per-row: emit a Linear error / GH
-  // reply + confused reaction, then mark the row failed so the sweep skips it.
+  // PVC-missing per-row dead-letter. Marks the row failed first, so the sweep
+  // skips it, then hands a workspace_missing failure to the round's integration
+  // only if this call transitioned the row (a racing restart or a late
+  // `completed` gets no contradictory notice). One notice per row, no target-id
+  // dedupe (unlike failTask); reply_targets[0] is the round's thread, and the
+  // integration words the notice by round kind. At most once: there is no
+  // cursor to hold, so a delivery error (RetryableError included) is logged and
+  // dropped, and the task's remaining rows still dead-letter.
   private async handlePvcMissing(entry: InboxRow): Promise<void> {
-    const userMessage = WORKSPACE_MISSING_MESSAGE;
-
-    try {
-      if (entry.source === "api") {
-        // No outbound channel: the round_failed event markFailed writes below
-        // is how the user sees it.
-      } else if (entry.source === "linear") {
-        // reply_targets[0].id IS the agent session id by construction
-        // (assignment and prompted enqueue paths both stamp it).
-        const sessionTarget = entry.reply_targets.find((t) => t.spec.kind === "linear_session");
-        if (sessionTarget) {
-          const linearClient = await this.linearTokenProvider.getAuthorizedLinearClient();
-          await emitError(linearClient, sessionTarget.id, userMessage).catch(logErrSwallow);
-        }
-      } else if (entry.source === "github" && entry.kind === "comment") {
-        const target = entry.reply_targets[0];
-        if (target?.spec.kind === "issue_comment") {
-          await postIssueComment(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.prNumber,
-            userMessage,
-          ).catch(logErrSwallow);
-          await addIssueCommentReaction(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.commentId,
-            "confused",
-          ).catch(logErrSwallow);
-        } else if (target?.spec.kind === "review_comment") {
-          await postReviewCommentReply(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.prNumber,
-            target.spec.inReplyTo,
-            userMessage,
-          ).catch(logErrSwallow);
-          await addReviewCommentReaction(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.commentId,
-            "confused",
-          ).catch(logErrSwallow);
-        }
-      } else if (entry.source === "github" && entry.kind === "review") {
-        // Top-level PR comment — the review body has no reply / reactions API.
-        const reviewBodyTarget = entry.reply_targets.find((t) => t.spec.kind === "review_body");
-        if (reviewBodyTarget?.spec.kind === "review_body") {
-          await postIssueComment(
-            reviewBodyTarget.spec.owner,
-            reviewBodyTarget.spec.repo,
-            reviewBodyTarget.spec.prNumber,
-            userMessage,
-          ).catch(logErrSwallow);
-        }
-      } else if (entry.source === "github" && entry.kind === "ci_result") {
-        // CI result rows are informational — silently dead-letter on pruned
-        // workspace. No user-facing error is posted; the finally block below
-        // calls markFailed to clear the row from the sweep.
-      }
-    } finally {
-      await this.inboxRepo
-        .markFailed({
-          inboxId: entry.id,
-          ownerId: config.podId,
-          reason: "workspace_missing",
-          userMessage,
-        })
-        .catch((err) => logErr(`markFailed failed for inbox ${entry.id}`, err));
-    }
+    const marked = await this.inboxRepo
+      .markFailed({
+        inboxId: entry.id,
+        ownerId: config.podId,
+        reason: "workspace_missing",
+        userMessage: WORKSPACE_MISSING_MESSAGE,
+      })
+      .catch((err) => {
+        logErr(`markFailed failed for inbox ${entry.id}`, err);
+        return [];
+      });
+    const target = entry.reply_targets[0];
+    if (marked.length === 0 || !target) return;
+    await this.integrations[entry.source]
+      .deliver({ signal: new AbortController().signal, log: logger }, target, {
+        type: "failure",
+        cause: "workspace_missing",
+        round: entry,
+      })
+      .catch((err) => logErr(`workspace_missing notice failed for inbox ${entry.id}`, err));
   }
 }
 
@@ -401,11 +350,6 @@ function logErr(msg: string, err: unknown): void {
 function logDebugErr(msg: string, err: unknown): void {
   const e = err instanceof Error ? err : new Error(String(err));
   logger.debug(msg, { message: e.message, stack: e.stack });
-}
-
-// 1-arg variant for `.catch(logErrSwallow)` on fire-and-forget calls.
-function logErrSwallow(err: unknown): void {
-  logErr("fire-and-forget call failed", err);
 }
 
 // Strip CP-internal persistence metadata from a row, keeping only the wire

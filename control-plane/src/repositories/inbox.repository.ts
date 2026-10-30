@@ -187,9 +187,9 @@ export class InboxRepository {
     return asRows<RawInboxRow>(result).map(mapRow);
   }
 
-  // Every non-terminal row of a task (pending or delivered). failTask walks
-  // these to broadcast the failure message to each reply target before
-  // dead-lettering.
+  // Every non-terminal row of a task (pending or delivered). failTask reads
+  // these before dead-lettering, then sends the failure message to the reply
+  // targets of the rows failTaskInbox transitioned.
   async listNonTerminalByTask(taskId: string): Promise<InboxRow[]> {
     const result = await db.execute<RawInboxRow>(sql`
       SELECT * FROM inbox
@@ -258,8 +258,8 @@ export class InboxRepository {
   // task-failure paths (provision failure, sandbox crash/timeout) call this so
   // a failed task cannot leave a row stuck pre-terminal — a non-terminal row
   // pins the idle reaper, and on a no-sandbox provision failure a 'pending'
-  // row would otherwise stay claimable forever. Returns the affected row ids
-  // for the caller to log.
+  // row would otherwise stay claimable forever. Returns the affected row ids:
+  // the caller logs them and sends the failure message only to those rows.
   async failTaskInbox(params: {
     taskId: string;
     ownerId: string;

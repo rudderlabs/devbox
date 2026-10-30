@@ -90,6 +90,9 @@ mock.module("../../clients/github", () => ({
 }));
 
 const { TaskProcessorService } = await import("../taskProcessor.service");
+const { LinearIntegration } = await import("../../integrations/linear");
+const { githubIntegration } = await import("../../integrations/github");
+const { apiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
@@ -276,6 +279,11 @@ describe("TaskProcessorService", () => {
       eventDispatcher,
       inboxService,
       slackNotifier,
+      {
+        linear: new LinearIntegration(linearTokenProvider),
+        api: apiIntegration,
+        github: githubIntegration,
+      },
     );
   });
 
@@ -639,18 +647,38 @@ describe("TaskProcessorService", () => {
   });
 
   describe("handleTaskError — pruned workspace", () => {
-    it("a throwing workspace-missing dead-letter (Linear token) escapes before the lease is released", async () => {
-      // characterization: changes in phase 1a (spec §15 bug 2)
-      deadLetterWorkspaceMissing.mockRejectedValue(new Error("token refresh failed"));
+    it("a throwing workspace-missing dead-letter is logged and the lease is still released", async () => {
+      deadLetterWorkspaceMissing.mockRejectedValue(new Error("db connection reset"));
       const task = makeTask({ sandboxId: null, pvcName: "pvc-1" });
 
-      await expect(
-        (
-          service as unknown as { handleTaskError(t: Task, e: unknown): Promise<void> }
-        ).handleTaskError(task, new PvcNotFoundError("pvc-1")),
-      ).rejects.toThrow("token refresh failed");
+      await (
+        service as unknown as { handleTaskError(t: Task, e: unknown): Promise<void> }
+      ).handleTaskError(task, new PvcNotFoundError("pvc-1"));
 
-      expect(releaseLease).not.toHaveBeenCalled();
+      expect(releaseLease).toHaveBeenCalledWith({
+        taskId: "task-1",
+        ownerId: "pod-test",
+        alsoClearSandbox: true,
+      });
+    });
+  });
+
+  describe("dispatch", () => {
+    it("a throw from handleTaskError itself is logged, not left unhandled", async () => {
+      // Transient provision failure → releaseLeaseIfNoSandbox, whose release throws.
+      createSandboxWithPvc.mockRejectedValue(new SandboxApiException({ statusCode: 503 }));
+      releaseLease.mockRejectedValue(new Error("db connection reset"));
+      const error = spyOn(logger, "error").mockImplementation(() => logger);
+      claimNext.mockResolvedValueOnce(makeTask()).mockResolvedValue(null);
+      try {
+        service.start();
+        await waitFor(() =>
+          error.mock.calls.some(([msg]) => msg === "handleTaskError failed for task task-1"),
+        );
+        await service.stop();
+      } finally {
+        error.mockRestore();
+      }
     });
   });
 
@@ -724,8 +752,12 @@ describe("TaskProcessorService", () => {
       });
     });
 
-    it("posts before dead-lettering, and posts even when failTaskInbox transitions no row", async () => {
-      // characterization: changes in phase 1a (spec §4 I15 / §15 bug 7)
+    it("dead-letters before posting, and posts only to the rows it dead-lettered", async () => {
+      (inboxRepo.listNonTerminalByTask as ReturnType<typeof mock>).mockResolvedValue([
+        row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
+        // Responded by a late `completed` before failTaskInbox ran: not transitioned.
+        row("gc", "comment", "github", [issueComment("555", 7, 555)]),
+      ]);
       const order: string[] = [];
       emitError.mockImplementation(() => {
         order.push("post");
@@ -738,7 +770,7 @@ describe("TaskProcessorService", () => {
       });
       failTaskInbox.mockImplementation(() => {
         order.push("mark");
-        return Promise.resolve([]);
+        return Promise.resolve([{ id: "a" }]);
       });
       releaseLease.mockImplementation(() => {
         order.push("release");
@@ -747,7 +779,8 @@ describe("TaskProcessorService", () => {
 
       await failTask(makeTask());
 
-      expect(order).toEqual(["post", "kill", "mark", "release"]);
+      expect(order).toEqual(["mark", "post", "kill", "release"]);
+      expect(postIssueComment).not.toHaveBeenCalled();
     });
 
     it("a Linear token failure skips only the Linear post; GitHub posts, dead-letter and release go on", async () => {
