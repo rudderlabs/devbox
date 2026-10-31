@@ -3,7 +3,7 @@ import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
 import { type Outbound, RetryableError } from "./outbound";
 import type { Integration, IntegrationName } from "./types";
 
-// Shared rules for integrations' outbound HTTP (I16): the typed errors clients
+// Shared rules for integrations' outbound HTTP: the typed errors clients
 // throw, which failures may be retried, and how long one send may take.
 
 // Upper bound on one deliver() call.
