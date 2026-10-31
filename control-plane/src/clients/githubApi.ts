@@ -13,6 +13,7 @@
 import { readFileSync } from "node:fs";
 import { config } from "../config";
 import { githubApiBaseUrl } from "../githubToken/mint";
+import { HttpError, parseRetryAfter, rateLimitWaitMs, TokenFetchError } from "../integrations/http";
 import { logger } from "../logger";
 import {
   type GithubTokenProvider,
@@ -42,8 +43,13 @@ function tokenProvider(): GithubTokenProvider {
   return githubToken;
 }
 
+// No token means nothing was sent, so a send may be retried (TokenFetchError).
 function token(): string {
-  return tokenProvider()();
+  try {
+    return tokenProvider()();
+  } catch (err) {
+    throw new TokenFetchError(err instanceof Error ? err.message : String(err));
+  }
 }
 
 // The token provider's state, for GET /api/integrations/github.
@@ -60,22 +66,39 @@ function githubHeaders(): Record<string, string> {
   };
 }
 
-// One request. Throws on non-2xx with status + a truncated body snippet — the
-// token is never included in the message.
+// One request. Throws an HttpError on non-2xx with status + a truncated body
+// snippet (and Retry-After) — the token is never included in the message.
 async function githubFetch(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<{ status: number; json: unknown }> {
   const resp = await fetch(`${API_BASE}${path}`, {
     method,
     headers: githubHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   const text = await resp.text();
   if (!resp.ok) {
     const snippet = text.slice(0, 500);
-    throw new Error(`GitHub ${method} ${path} failed: HTTP ${resp.status} ${snippet}`);
+    // `?.`: the client tests stub fetch with header-less partial responses.
+    const header = (name: string) => resp.headers?.get(name) ?? null;
+    // GitHub's rate limit is a 429, or a 403 carrying x-ratelimit-remaining: 0
+    // or Retry-After; any other 403 is a refusal. Without Retry-After, a rate
+    // limit waits for x-ratelimit-reset (epoch seconds), and at least a minute.
+    const rateLimited =
+      resp.status === 429 ||
+      (resp.status === 403 &&
+        (header("x-ratelimit-remaining") === "0" || header("retry-after") !== null));
+    throw new HttpError(
+      `GitHub ${method} ${path} failed: HTTP ${resp.status} ${snippet}`,
+      resp.status,
+      parseRetryAfter(header("retry-after")) ??
+        (rateLimited ? rateLimitWaitMs(Number(header("x-ratelimit-reset")) * 1000) : undefined),
+      rateLimited,
+    );
   }
   let json: unknown = null;
   if (text.length > 0) {
@@ -99,11 +122,13 @@ export async function postIssueComment(
   repo: string,
   prNumber: number,
   body: string,
+  signal?: AbortSignal,
 ): Promise<{ id: number; url: string }> {
   const { json } = await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${prNumber}/comments`,
     { body },
+    signal,
   );
   const r = asRecord(json);
   return { id: Number(r.id), url: String(r.html_url ?? "") };
@@ -117,11 +142,13 @@ export async function requestReviewers(
   repo: string,
   prNumber: number,
   reviewers: string[],
+  signal?: AbortSignal,
 ): Promise<void> {
   await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/requested_reviewers`,
     { reviewers },
+    signal,
   );
 }
 
@@ -133,11 +160,13 @@ export async function postReviewCommentReply(
   prNumber: number,
   inReplyTo: number,
   body: string,
+  signal?: AbortSignal,
 ): Promise<{ id: number; url: string }> {
   const { json } = await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/comments`,
     { body, in_reply_to: inReplyTo },
+    signal,
   );
   const r = asRecord(json);
   return { id: Number(r.id), url: String(r.html_url ?? "") };
@@ -150,11 +179,13 @@ export async function addIssueCommentReaction(
   repo: string,
   commentId: number,
   content: ReactionContent,
+  signal?: AbortSignal,
 ): Promise<void> {
   await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/comments/${commentId}/reactions`,
     { content },
+    signal,
   );
 }
 
@@ -165,11 +196,13 @@ export async function addReviewCommentReaction(
   repo: string,
   commentId: number,
   content: ReactionContent,
+  signal?: AbortSignal,
 ): Promise<void> {
   await githubFetch(
     "POST",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/comments/${commentId}/reactions`,
     { content },
+    signal,
   );
 }
 
@@ -294,8 +327,16 @@ export async function addPrAssignees(
 // GET /user/{id} — resolve an immutable numeric GitHub account id to the
 // current login. Ids survive renames and are never re-issued, so this is the
 // rename-proof lookup. Throws on 404 (githubFetch); callers catch.
-export async function getUserById(id: string | number): Promise<{ login: string; id: number }> {
-  const { json } = await githubFetch("GET", `/user/${encodeURIComponent(String(id))}`);
+export async function getUserById(
+  id: string | number,
+  signal?: AbortSignal,
+): Promise<{ login: string; id: number }> {
+  const { json } = await githubFetch(
+    "GET",
+    `/user/${encodeURIComponent(String(id))}`,
+    undefined,
+    signal,
+  );
   const r = asRecord(json);
   return { login: String(r.login ?? ""), id: Number(r.id) };
 }

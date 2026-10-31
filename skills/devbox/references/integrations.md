@@ -67,6 +67,8 @@ works with one Linear workspace. Everything:
 
 Kubernetes only: `integrations.slack` in the target file and `SLACK_BOT_TOKEN`
 ([docs/kubernetes/customizing.md](../../../docs/kubernetes/customizing.md#integrations)).
+Finished Linear tasks post by default; `notifySources: ["linear", "api"]` adds
+API tasks.
 
 ## Turning one off
 

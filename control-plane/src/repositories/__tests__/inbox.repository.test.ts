@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { sql } from "drizzle-orm";
+import { sql, TransactionRollbackError } from "drizzle-orm";
 
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://devbox:devbox@localhost:5432/devbox";
@@ -115,6 +115,101 @@ describe("InboxRepository", () => {
 
       const rows = await db.execute<{ n: string }>(sql`SELECT count(*) AS n FROM inbox`);
       expect(Number(rows[0]?.n)).toBe(1);
+    });
+
+    const ghComment = (externalId: string) => ({
+      source: "github" as const,
+      kind: "comment" as const,
+      external_id: externalId,
+      payload: {
+        target_id: externalId,
+        body: "@bot fix",
+        task_id: "task-1",
+        task_key: "T-1",
+        pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+        created_at: "",
+      },
+    });
+
+    it("a redelivered comment adds nothing, even after its round finished", async () => {
+      const task = await insertTask();
+      const first = await repo.appendInbox({
+        taskId: task.id,
+        message: ghComment("555"),
+        replyTargets: [],
+      });
+      await db.execute(sql`UPDATE inbox SET status = 'responded'`);
+
+      expect(
+        await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] }),
+      ).toBeNull();
+      const rows = await db.execute<{ id: string; status: string }>(
+        sql`SELECT id, status FROM inbox`,
+      );
+      expect([...rows]).toEqual([{ id: first?.id as string, status: "responded" }]);
+    });
+
+    it("dedupes across kinds: a review whose id equals a stored comment id is dropped", async () => {
+      // characterization: changes once the old index is dropped. The
+      // (source, kind, external_id) index allows this row, but the old
+      // (source, external_id) one still rejects it.
+      const task = await insertTask();
+      await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
+
+      const review = await repo.appendInbox({
+        taskId: task.id,
+        message: {
+          source: "github",
+          kind: "review",
+          external_id: "555",
+          payload: {
+            review_body: { target_id: "555", body: "@bot" },
+            inline_comments: [],
+            task_id: "task-1",
+            task_key: "T-1",
+            pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+            created_at: "",
+          },
+        },
+        replyTargets: [],
+      });
+
+      expect(review).toBeNull();
+      const kinds = await db.execute<{ kind: string }>(sql`SELECT kind FROM inbox`);
+      expect([...kinds]).toEqual([{ kind: "comment" }]);
+    });
+
+    it("dedupes on (source, kind, external_id) once the old index is gone", async () => {
+      // A later release drops inbox_source_external_uniq; here it goes in a
+      // transaction that is rolled back, so the insert's conflict target
+      // must be the new index.
+      const task = await insertTask();
+      const review = {
+        source: "github" as const,
+        kind: "review" as const,
+        external_id: "555",
+        payload: {
+          review_body: { target_id: "555", body: "@bot" },
+          inline_comments: [],
+          task_id: "task-1",
+          task_key: "T-1",
+          pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+          created_at: "",
+        },
+      };
+      const results: unknown[] = [];
+      await expect(
+        db.transaction(async (tx) => {
+          await tx.execute(sql`DROP INDEX inbox_source_external_uniq`);
+          for (const message of [ghComment("555"), ghComment("555"), review]) {
+            results.push(
+              await repo.appendInbox({ taskId: task.id, message, replyTargets: [] }, tx),
+            );
+          }
+          tx.rollback();
+        }),
+      ).rejects.toThrow(TransactionRollbackError);
+      expect(results).toEqual([{ id: expect.any(String) }, null, { id: expect.any(String) }]);
     });
   });
 
@@ -240,6 +335,30 @@ describe("InboxRepository", () => {
       expect(await repo.listPendingByTask(task.id)).toEqual([]);
     });
 
+    it("returns the rows it failed, whole, in arrival order", async () => {
+      const task = await insertTask({ ownerId: "pod-a" });
+      const ids: string[] = [];
+      for (const external_id of ["first", "second"]) {
+        const row = await repo.appendInbox({
+          taskId: task.id,
+          message: {
+            source: "linear",
+            kind: "assignment",
+            external_id,
+            payload: assignmentPayload,
+          },
+          replyTargets: [linearTarget(`s-${external_id}`)],
+        });
+        if (!row) throw new Error("insert failed");
+        ids.push(row.id);
+      }
+
+      const failed = await repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "x" });
+
+      expect(failed as unknown[]).toEqual(await Promise.all(ids.map((id) => repo.getById(id))));
+      expect(failed[0]?.reply_targets).toEqual([linearTarget("s-first")]);
+    });
+
     it("does not touch an already-responded row", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
       const row = await repo.appendInbox({
@@ -300,6 +419,22 @@ describe("InboxRepository", () => {
       // must not.
       expect(await repo.getById(rowA.id)).not.toBeNull();
       expect(await repo.getByIdForTask(rowA.id, taskB.id)).toBeNull();
+    });
+  });
+
+  describe("getAssignment", () => {
+    it("returns the task's assignment row, never another round or another task's", async () => {
+      const task = await insertTask();
+      const other = await insertTask();
+      await insertRow(task.id, { source: "github", kind: "comment", status: "pending" });
+      const assignment = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
+
+      expect((await repo.getAssignment(task.id))?.id).toBe(assignment.id);
+      expect(await repo.getAssignment(other.id)).toBeNull();
     });
   });
 

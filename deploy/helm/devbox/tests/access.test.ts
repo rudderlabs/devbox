@@ -252,6 +252,14 @@ describe("integration env", () => {
     expect(await envOf(["slack.yaml"])).toEqual({ SLACK_ENABLED: "true", SLACK_CHANNEL_ID: "C0123456789" });
   });
 
+  it("slack notifySources renders SLACK_NOTIFY_SOURCES", async () => {
+    expect(await envOf(["slack.yaml"], [], ['integrations.slack.notifySources=["linear","api"]'])).toEqual({
+      SLACK_ENABLED: "true",
+      SLACK_CHANNEL_ID: "C0123456789",
+      SLACK_NOTIFY_SOURCES: "linear,api",
+    });
+  });
+
   it("the GitHub App on renders the webhook switch, bot identity and CI results", async () => {
     expect(await envOf(["github-app.yaml"])).toEqual({
       GITHUB_WEBHOOKS_ENABLED: "true",

@@ -7,10 +7,13 @@
 
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { taskSource } from "../../src/db/schema";
 import { parsePublicUrl } from "./publicUrl";
 
 export type LinearIntegration = { enabled: boolean; clientId?: string };
-export type SlackIntegration = { enabled: boolean; channelId?: string };
+// notifySources: the task sources whose tasks post (SLACK_NOTIFY_SOURCES);
+// unset means the control plane's default, linear.
+export type SlackIntegration = { enabled: boolean; channelId?: string; notifySources?: string[] };
 // The GitHub App and its webhooks, one switch. tokenScope and ciResults
 // are always filled with their defaults; the other keys are required only when
 // enabled is true.
@@ -138,9 +141,22 @@ function parseLinear(raw: unknown, fail: Fail): LinearIntegration {
 }
 
 function parseSlack(raw: unknown, fail: Fail): SlackIntegration {
-  const b = block(raw, "slack", ["channelId"], fail);
-  const channelId = setting(b, "integrations.slack", "channelId", nonEmpty(fail), fail);
-  return { enabled: b.enabled, ...(channelId !== undefined ? { channelId } : {}) };
+  const f = "integrations.slack";
+  const b = block(raw, "slack", ["channelId", "notifySources"], fail);
+  const channelId = setting(b, f, "channelId", nonEmpty(fail), fail);
+  const sources = b.obj.notifySources;
+  const known: readonly unknown[] = taskSource.enumValues;
+  if (
+    sources !== undefined &&
+    !(Array.isArray(sources) && sources.length > 0 && sources.every((s) => known.includes(s)))
+  ) {
+    return fail(`${f}.notifySources: must be a non-empty list of: ${known.join(", ")}`);
+  }
+  return {
+    enabled: b.enabled,
+    ...(channelId !== undefined ? { channelId } : {}),
+    ...(sources !== undefined ? { notifySources: sources as string[] } : {}),
+  };
 }
 
 function parseGithubApp(

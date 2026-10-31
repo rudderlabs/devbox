@@ -62,6 +62,8 @@ spec:
       serviceAccountName: devbox-control-plane
 {{ include "devbox.controlPlaneImagePullSecrets" . | indent 6 }}
       securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
+      # Shutdown finishes the task it is reconciling, then drains for SHUTDOWN_DRAIN_MS.
+      terminationGracePeriodSeconds: {{ .Values.controlPlane.terminationGracePeriodSeconds }}
       containers:
         - name: control-plane
           image: {{ include "devbox.controlPlaneImage" . }}
@@ -141,6 +143,9 @@ spec:
             {{- end }}
             {{- with $slack.channelId }}
             - { name: SLACK_CHANNEL_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $slack.notifySources }}
+            - { name: SLACK_NOTIFY_SOURCES, value: {{ join "," . | quote }} }
             {{- end }}
             {{- /* A disabled App block may hold an App not yet installed: none of it renders. */}}
             {{- if $app.enabled }}

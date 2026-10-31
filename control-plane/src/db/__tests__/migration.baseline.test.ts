@@ -15,6 +15,15 @@ const journal = JSON.parse(readFileSync("drizzle/meta/_journal.json", "utf8")) a
   entries: Array<{ tag: string; when: number }>;
 };
 
+describe("drizzle journal", () => {
+  it("has strictly increasing timestamps", () => {
+    // The migrator applies a migration only when its `when` is past the last
+    // applied one, so a file out of order would be skipped for good.
+    const whens = journal.entries.map((e) => e.when);
+    expect(whens.every((w, i) => i === 0 || w > (whens[i - 1] ?? Number.NaN))).toBe(true);
+  });
+});
+
 async function applyBaseline(client: SQL): Promise<void> {
   const migration = readFileSync(`drizzle/${journal.entries[0]?.tag}.sql`, "utf8");
   for (const statement of migration.split("--> statement-breakpoint")) {

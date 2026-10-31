@@ -1,6 +1,7 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type { Clock } from "../../clock";
 import { ApiError } from "../../errors";
+import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
 import { logger } from "../../logger";
 import { createApiRoutes } from "../../routes/api";
 import type { ApiEventEnvelope, SseStateData } from "../../types/api";
@@ -123,10 +124,15 @@ function setup(o: {
     {
       authEnabled: false,
       allowedHosts: [],
-      linearStatus: async () => ({ configured: false }),
-      githubStatus: () => ({
-        token: { source: "env", expiresAt: null, readAt: null, lastError: null },
-        webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
+      integrations: fakeIntegrations({
+        linear: { status: async () => ({ configured: false }) },
+        github: {
+          status: async () => ({
+            token: { source: "env", expiresAt: null, readAt: null, lastError: null },
+            webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
+          }),
+        },
+        api: { status: async () => ({ enabled: true }) },
       }),
     },
   );

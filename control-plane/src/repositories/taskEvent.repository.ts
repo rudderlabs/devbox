@@ -7,6 +7,8 @@ import type { HarnessEvent } from "../types/harnessEvent";
 // Both are no-ops for non-API tasks; Linear tasks do not use this event log.
 
 export type SqlExecutor = Pick<typeof db, "execute">;
+// A transaction handle, for writes that also run inside a caller's transaction.
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export type CpEventType =
   | "task_created"

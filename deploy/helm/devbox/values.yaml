@@ -112,6 +112,8 @@ integrations:
     enabled: false
     # -- Required when enabled: the Slack channel ID.
     channelId: ""
+    # -- Task sources whose finished tasks post (SLACK_NOTIFY_SOURCES): `linear`, `api`. Empty: `linear`.
+    notifySources: []
   githubApp:
     # -- Turns the GitHub App on: webhooks at /webhook/github (GITHUB_WEBHOOKS_ENABLED) and, with
     # `tokens: devbox`, the token minter. GITHUB_WEBHOOK_SECRET goes in the integrations Secret.
@@ -149,6 +151,11 @@ controlPlane:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 1Gi }
+  # -- Seconds between SIGTERM and SIGKILL. At least the rest of one task's
+  # reconcile (up to 90s when platforms are slow: shutdown stops after the event
+  # in hand) plus SHUTDOWN_DRAIN_MS (10s) for in-flight provisions and
+  # integration hooks; raise it with SHUTDOWN_DRAIN_MS.
+  terminationGracePeriodSeconds: 150
 
 postgresql:
   # -- A minimal bundled Postgres for trying devbox: no backups, HA or automated upgrades.

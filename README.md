@@ -266,8 +266,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   reasoning, on port 80 or 443 under a DNS name.
 - New tasks come from the CLI and Linear. On GitHub, DevBox only picks up
   follow-ups on its own pull requests; it doesn't start work from GitHub
-  issues. Slack gets only completion updates for Linear tasks. No Jira and no
-  web UI.
+  issues. Slack gets only completion updates, for Linear tasks unless
+  configured for API tasks too. No Jira and no web UI.
 - Stopping a task from Linear isn't supported yet.
 - No stable extension interface. [docs/extending.md](docs/extending.md) shows where hooks would go.
 

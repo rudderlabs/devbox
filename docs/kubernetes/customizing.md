@@ -251,6 +251,7 @@ enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 | `integrations.linear.clientId` | The Linear app's client ID. Required when enabled. |
 | `integrations.slack.enabled` | Turns on Slack notifications when a task finishes. |
 | `integrations.slack.channelId` | The Slack channel ID. Required when enabled. |
+| `integrations.slack.notifySources` | The task sources whose finished tasks post, from `linear` and `api`. Default: `linear`. |
 | `integrations.githubApp.enabled` | Turns on the GitHub App: webhooks at `/webhook/github` (`@<botLogin>` mentions, reviews and failed CI runs reach the agent) and, with `tokens: devbox`, the token minter. See [docs/github.md](../github.md). |
 | `integrations.githubApp.appId`, `integrations.githubApp.installationId`, `integrations.githubApp.botUserId` | The App's ID, its installation's ID and the bot's numeric GitHub user ID. Required when enabled. |
 | `integrations.githubApp.botLogin` | The App's slug. The installer copies it from `slug` in the target file's block. Required when enabled. |

@@ -96,8 +96,10 @@ export const config = {
   // integrationsConfig.ts.
   linear: parseLinearConfig(process.env),
   // Undefined unless SLACK_ENABLED=true; then SLACK_BOT_TOKEN (xoxb-…, posts
-  // task-completion updates) and SLACK_CHANNEL_ID (C…) are required. The token
-  // matches the /token/i log-redaction pattern. Parsed by integrationsConfig.ts.
+  // task-completion updates) and SLACK_CHANNEL_ID (C…) are required, and
+  // SLACK_NOTIFY_SOURCES picks the task sources that post (default linear).
+  // The token matches the /token/i log-redaction pattern. Parsed by
+  // integrationsConfig.ts.
   slack: parseSlackConfig(process.env),
   github: {
     // The control plane's own GitHub token (it runs outside the sandbox

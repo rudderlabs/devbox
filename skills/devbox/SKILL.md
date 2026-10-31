@@ -91,6 +91,7 @@ Say so instead of looking for a way around it:
   self-hosted model needs a server that speaks the Responses API with
   reasoning, on port 80 or 443 under a DNS name.
 - Work comes in from the CLI, Linear and GitHub. Slack only gets completion
-  updates for Linear tasks. No Jira, no web UI.
+  updates, for Linear tasks unless `notifySources` adds API tasks. No Jira, no
+  web UI.
 - A task can't be stopped from Linear yet.
 - No stable extension interface ([docs/extending.md](../../docs/extending.md)).

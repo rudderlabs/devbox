@@ -274,10 +274,12 @@ def _emit_round_failure(
     # comment / review — the round died before (or part-way through) the agent
     # posting its replies. Derive the primary target_id from `payload` (the
     # daemon's inbox file carries no reply_targets — that is a CP-only column).
-    # Failures ride on agent_error (not agent_response): CP routes them to the
-    # Linear session via emitError, the same lane the assignment-stage terminal
-    # failure uses — keeps "this round broke" as a structured error block
-    # rather than masquerading as a normal reply.
+    # Failures ride on agent_error (not agent_response), so "this round broke"
+    # never masquerades as a normal reply. CP labels it a round failure with
+    # this exception text as its raw detail, and the round's integration
+    # decides what to show: Linear shows it on the agent session; GitHub posts a
+    # generic retry message instead (a PR is public); a CI round stays silent.
+    # test_daemon pins this format (TestAgentErrorContract).
     if entry["kind"] == "review":
         primary_target_id = (payload.get("review_body") or {}).get("target_id")
     else:  # comment / ci_result

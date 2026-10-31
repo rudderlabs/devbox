@@ -1,6 +1,25 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import type { Context } from "hono";
+import type { TaskIntake } from "../integrations/intake";
+import type { IntegrationName } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
-import { createWebhookRoutes } from "../routes/webhook";
+import { createWebhookRoutes as createRoutes } from "../routes/webhook";
+
+const intake = {} as TaskIntake;
+
+// The routes for enabled integrations with these webhooks.
+function createWebhookRoutes(
+  webhooks: Partial<Record<IntegrationName, { handleWebhook: (c: Context) => Promise<Response> }>>,
+) {
+  return createRoutes(
+    Object.entries(webhooks).map(([name, w]) => ({
+      name: name as IntegrationName,
+      enabled: true,
+      webhook: (c: Context) => w.handleWebhook(c),
+    })),
+    intake,
+  );
+}
 
 const OVERSIZED_BODY = "x".repeat(WEBHOOK_BODY_LIMIT_BYTES + 1);
 
@@ -88,6 +107,34 @@ describe("createWebhookRoutes", () => {
     } finally {
       error.mockRestore();
     }
+  });
+
+  it("serves no webhook for a disabled integration, and hands the intake to an enabled one", async () => {
+    const seen: unknown[] = [];
+    const app = createRoutes(
+      [
+        {
+          name: "linear",
+          enabled: false,
+          webhook: async () => new Response(null, { status: 200 }),
+        },
+        {
+          name: "github",
+          enabled: true,
+          webhook: async (_c, i) => {
+            seen.push(i);
+            return new Response(null, { status: 200 });
+          },
+        },
+        { name: "api", enabled: true },
+      ],
+      intake,
+    );
+    expect((await app.request("/webhook/linear", { method: "POST", body: "{}" })).status).toBe(404);
+    expect((await app.request("/webhook/api", { method: "POST", body: "{}" })).status).toBe(404);
+    expect((await app.request("/webhook/github", { method: "POST", body: "{}" })).status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(intake);
   });
 
   it("leaves disabled and unknown webhook routes as 404 even for oversized bodies", async () => {

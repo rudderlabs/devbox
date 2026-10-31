@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Hono } from "hono";
 import type { Task } from "../../db/schema";
+import type { TaskIntake } from "../../integrations/intake";
 import { logger } from "../../logger";
-import type { TaskRepository } from "../../repositories/task.repository";
 import type { InboxService } from "../../services/inbox.service";
 
 const WEBHOOK_SECRET = "gh-test-secret";
@@ -373,7 +373,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       enqueueReview,
       enqueueCiResult,
     } as unknown as InboxServiceLike as InboxService;
-    const taskRepo = { findByPrUrl } as unknown as TaskRepository;
+    const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskIntake;
     // Reset the module-mocked fetchOrgMembers so per-test mockImplementationOnce
     // overrides don't leak across cases. Default: resolves to the trusted-set
     // logins used across positive-path bodies. The bot login `acme-bot[bot]` is
@@ -384,7 +384,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     getUserIdByLogin.mockReset();
     getUserIdByLogin.mockResolvedValue(null);
     clock = { now: 1_000_000 };
-    controller = new GitHubWebhookController(inboxService, taskRepo, SETTINGS, () => clock.now);
+    controller = new GitHubWebhookController(inboxService, intake, SETTINGS, () => clock.now);
     const a = new Hono();
     a.post("/webhook/github", (c) => controller.handleWebhook(c));
     return a;
@@ -460,6 +460,17 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(enqueueComment.mock.calls[0]?.[0]).toMatchObject({ task: linearTask, commentId: 555 });
     await flushMicrotasks();
     expect(addIssueCommentReaction).toHaveBeenCalledWith("o", "r", 555, "eyes");
+  });
+
+  // No delivery-id dedupe here: the inbox's ON CONFLICT drops the duplicate row.
+  it("a redelivered comment enqueues and reacts again", async () => {
+    const body = commentBody("alice");
+    expect((await post(body, "issue_comment", sign(body))).status).toBe(200);
+    expect((await post(body, "issue_comment", sign(body))).status).toBe(200);
+    await flushMicrotasks();
+    expect(enqueueComment).toHaveBeenCalledTimes(2);
+    expect(enqueueComment.mock.calls[1]).toEqual(enqueueComment.mock.calls[0]);
+    expect(addIssueCommentReaction).toHaveBeenCalledTimes(2);
   });
 
   it("does not react to a shortened alias of the bot login", async () => {
@@ -687,6 +698,29 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(addReviewCommentReaction).toHaveBeenCalledTimes(2);
     expect(addReviewCommentReaction).toHaveBeenCalledWith("o", "r", 11, "eyes");
     expect(addReviewCommentReaction).toHaveBeenCalledWith("o", "r", 12, "eyes");
+  });
+
+  it("a redelivered review refetches its inline comments, enqueues and reacts again", async () => {
+    getReviewComments.mockResolvedValue([
+      { id: 11, path: "a.ts", line: 3, body: "nit", user: { login: "reviewer" } },
+    ]);
+    const body = JSON.stringify({
+      action: "submitted",
+      repository: { name: "r", owner: { login: "o" } },
+      pull_request: { number: 7, user: { login: "acme-bot[bot]" } },
+      review: {
+        id: 88,
+        body: "@acme-bot please handle this review",
+        user: { login: "a", id: 2 },
+        submitted_at: "2026-04-23T12:00:00Z",
+      },
+    });
+    expect((await post(body, "pull_request_review", sign(body))).status).toBe(200);
+    expect((await post(body, "pull_request_review", sign(body))).status).toBe(200);
+    await flushMicrotasks();
+    expect(getReviewComments).toHaveBeenCalledTimes(2);
+    expect(enqueueReview).toHaveBeenCalledTimes(2);
+    expect(addReviewCommentReaction).toHaveBeenCalledTimes(2);
   });
 
   it("enqueues a review on an API task's PR without parsing its URL", async () => {
@@ -934,11 +968,11 @@ describe("GitHubWebhookController.handleWebhook", () => {
       enqueueReview: mock(() => Promise.resolve()),
       enqueueCiResult: flagOffEnqueueCiResult,
     } as unknown as InboxService;
-    const flagOffRepo = { findByPrUrl: flagOffFindByPrUrl } as unknown as TaskRepository;
+    const flagOffIntake = { findTaskByPrUrl: flagOffFindByPrUrl } as unknown as TaskIntake;
     fetchOrgMembers.mockResolvedValue(new Set([1, 2, 3]) as ReadonlySet<number>);
     const flagOffApp = new Hono();
     flagOffApp.post("/webhook/github", (c) =>
-      new Ctrl(flagOffService, flagOffRepo, SETTINGS).handleWebhook(c),
+      new Ctrl(flagOffService, flagOffIntake, SETTINGS).handleWebhook(c),
     );
 
     const body = workflowRunBody();
@@ -1102,10 +1136,10 @@ describe("GitHubWebhookController.handleWebhook", () => {
         enqueueReview,
         enqueueCiResult,
       } as unknown as InboxService;
-      const taskRepo = { findByPrUrl } as unknown as TaskRepository;
+      const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskIntake;
       controller = new GitHubWebhookController(
         inboxService,
-        taskRepo,
+        intake,
         { ...SETTINGS, ...settings },
         () => clock.now,
       );

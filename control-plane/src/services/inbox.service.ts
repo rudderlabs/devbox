@@ -1,28 +1,24 @@
-import {
-  addIssueCommentReaction,
-  addReviewCommentReaction,
-  postIssueComment,
-  postReviewCommentReply,
-} from "../clients/github";
-import { emitError } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
+import { deliverToRound } from "../integrations/http";
+import type { TaskIntake } from "../integrations/intake";
+import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type {
   InboxRepository,
   InboxRow,
   ReplyTarget,
   ReplyTargetSpec,
-  ReviewPayload,
 } from "../repositories/inbox.repository";
-import { taskIdentity } from "../repositories/inbox.repository";
 import type { InboxMessage } from "../types/inboxMessage";
-import type { LinearTokenProvider } from "./linearTokenProvider";
+import type { IntegrationHooks } from "./integrationHooks";
 import type { SandboxManager } from "./sandboxManager.service";
 
-// InboxService owns inbox enqueue (comment/review/Linear-comment), the sweep
-// that delivers pending rows to the sandbox (recreating it from the preserved
-// PVC when it has been reaped), and the PVC-missing per-row dead-letter.
+// InboxService builds the GitHub and Linear follow-up rounds (comment, review,
+// CI result, Linear comment) and queues them through TaskIntake.followUp; it
+// owns the sweep that delivers pending rows to the sandbox (recreating it from
+// the preserved PVC when it has been reaped), and the PVC-missing per-row
+// dead-letter.
 export const WORKSPACE_MISSING_MESSAGE =
   "The workspace for this task has been cleaned up and can no longer be resumed. " +
   "Please reach out to the harness team or open a new ticket to continue.";
@@ -31,7 +27,9 @@ export class InboxService {
   constructor(
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
+    private integrations: Record<IntegrationName, Integration>,
+    private hooks: IntegrationHooks,
+    private intake: Pick<TaskIntake, "followUp">,
   ) {}
 
   // ──── Enqueue paths ────
@@ -46,8 +44,9 @@ export class InboxService {
     createdAt: string;
   }): Promise<void> {
     const externalId = String(params.commentId);
-    await this.inboxRepo.appendInbox({
-      taskId: params.task.id,
+    const prUrl = `https://github.com/${params.spec.owner}/${params.spec.repo}/pull/${params.spec.prNumber}`;
+    await this.intake.followUp({
+      task: params.task,
       message: {
         source: "github",
         kind: "comment",
@@ -55,15 +54,12 @@ export class InboxService {
         payload: {
           target_id: externalId, // matches reply_targets[0].id
           body: params.body,
-          ...taskIdentity(params.task),
-          pr: {
-            repo: params.spec.repo,
-            pr_url: `https://github.com/${params.spec.owner}/${params.spec.repo}/pull/${params.spec.prNumber}`,
-          },
+          pr: { repo: params.spec.repo, pr_url: prUrl },
           created_at: params.createdAt,
         },
       },
-      replyTargets: [{ id: externalId, spec: params.spec }],
+      targets: [{ id: externalId, spec: params.spec }],
+      prUrl,
     });
   }
 
@@ -88,8 +84,9 @@ export class InboxService {
     createdAt: string;
   }): Promise<void> {
     const reviewIdStr = String(params.reviewId);
+    const prUrl = `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`;
 
-    const payload: ReviewPayload = {
+    const payload = {
       review_body: { target_id: reviewIdStr, body: params.reviewBody },
       inline_comments: params.inlineComments.map((c) => ({
         target_id: String(c.id),
@@ -98,13 +95,7 @@ export class InboxService {
         start_line: c.startLine,
         body: c.body,
       })),
-      ...taskIdentity(params.task),
-      pr: {
-        owner: params.owner,
-        repo: params.repo,
-        prNumber: params.prNumber,
-        pr_url: `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`,
-      },
+      pr: { owner: params.owner, repo: params.repo, prNumber: params.prNumber, pr_url: prUrl },
       reviewer_login: params.reviewerLogin,
       created_at: params.createdAt,
     };
@@ -139,40 +130,35 @@ export class InboxService {
       },
     ];
 
-    await this.inboxRepo.appendInbox({
-      taskId: params.task.id,
-      message: {
-        source: "github",
-        kind: "review",
-        external_id: reviewIdStr,
-        payload,
-      },
-      replyTargets,
+    await this.intake.followUp({
+      task: params.task,
+      message: { source: "github", kind: "review", external_id: reviewIdStr, payload },
+      targets: replyTargets,
+      prUrl,
     });
   }
 
   // Linear `prompted` — a follow-up comment on the agent session. Same inbox
   // path as a GitHub comment; the single reply target routes to the Linear
   // session. Idempotent on the Linear activity UUID — a duplicate redelivery
-  // is a no-op insert.
+  // is dropped.
   async enqueueLinearComment(params: {
     task: Pick<Task, "id" | "key">;
     agentActivityId: string;
     agentSessionId: string;
     body: string;
   }): Promise<void> {
-    await this.inboxRepo.appendInbox({
-      taskId: params.task.id,
+    await this.intake.followUp({
+      task: params.task,
       message: {
         source: "linear",
         kind: "comment",
-        // Linear activity UUID — drives idempotency at (source, external_id).
+        // Linear activity UUID — drives idempotency at (source, kind, external_id).
         external_id: params.agentActivityId,
         payload: {
           // Replies route to the Linear agent session — matches reply_targets[0].id.
           target_id: params.agentSessionId,
           body: params.body,
-          ...taskIdentity(params.task),
           // Linear comment isn't PR-scoped — lives on the agent session.
           pr: null,
           // Linear-sourced → the daemon never injects PR discussion (gated on
@@ -180,14 +166,14 @@ export class InboxService {
           created_at: "",
         },
       },
-      replyTargets: [{ id: params.agentSessionId, spec: { kind: "linear_session" } }],
+      targets: [{ id: params.agentSessionId, spec: { kind: "linear_session" } }],
     });
   }
 
   // GitHub `workflow_run` completed — one row per task whose PR URL matches.
   // external_id includes runAttempt (re-runs share runId but bump attempt) and
-  // prNumber (one run can touch multiple PRs) for the global (source, external_id)
-  // unique index.
+  // prNumber (one run can touch multiple PRs). followUp applies the per-task
+  // loop breaker.
   async enqueueCiResult(params: {
     task: Pick<Task, "id" | "key">;
     runId: number;
@@ -202,30 +188,11 @@ export class InboxService {
     repo: string;
     prNumber: number;
   }): Promise<void> {
-    // Loop breaker. harness fixes CI → pushes → CI re-runs → may fail again,
-    // ad infinitum. Once a task has accumulated `ciResultMaxPerTask` ci_result
-    // rows, stop forwarding new failures to the harness. The count/insert is
-    // not transactional, so concurrent webhooks for one task may overshoot by a
-    // few — fine for a circuit breaker. 0 / negative disables the breaker.
-    const max = config.github.ciResultMaxPerTask;
-    if (max > 0) {
-      const seen = await this.inboxRepo.countCiResultsByTask(params.task.id);
-      if (seen >= max) {
-        logger.warn("ci_result loop breaker tripped — dropping CI failure", {
-          taskId: params.task.id,
-          seen,
-          max,
-          runId: params.runId,
-          prNumber: params.prNumber,
-        });
-        return;
-      }
-    }
-
     const runIdStr = String(params.runId);
     const externalId = `workflow_run:${params.runId}:${params.runAttempt}:${params.prNumber}`;
-    await this.inboxRepo.appendInbox({
-      taskId: params.task.id,
+    const prUrl = `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`;
+    await this.intake.followUp({
+      task: params.task,
       message: {
         source: "github",
         kind: "ci_result",
@@ -238,14 +205,10 @@ export class InboxService {
           run_url: params.runUrl,
           head_sha: params.headSha,
           head_branch: params.headBranch,
-          ...taskIdentity(params.task),
-          pr: {
-            repo: params.repo,
-            pr_url: `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`,
-          },
+          pr: { repo: params.repo, pr_url: prUrl },
         },
       },
-      replyTargets: [
+      targets: [
         {
           id: runIdStr,
           spec: {
@@ -259,6 +222,7 @@ export class InboxService {
           },
         },
       ],
+      prUrl,
     });
   }
 
@@ -303,8 +267,8 @@ export class InboxService {
   }
 
   // A task whose PVC no longer exists cannot be resumed. Dead-letters every
-  // still-open ('pending'/'delivered') row of the task (per-row user notice + mark
-  // failed) so it stops pinning the reaper. Called by runTask's recreate-from-PVC
+  // still-open ('pending'/'delivered') row of the task (mark failed + per-row
+  // user notice) so it stops pinning the reaper. Called by runTask's recreate-from-PVC
   // path when createSandboxFromExistingPvc reports the PVC gone.
   // Re-checks each row's status from DB so a row a reassignment superseded mid-tick
   // is left untouched.
@@ -313,83 +277,44 @@ export class InboxService {
     for (const row of rows) {
       const latest = await this.inboxRepo.getById(row.id);
       if (!latest || (latest.status !== "pending" && latest.status !== "delivered")) continue;
-      await this.handlePvcMissing(latest);
+      await this.handlePvcMissing(task, latest);
     }
   }
 
-  // PVC-missing per-row dead-letter. Once-per-row: emit a Linear error / GH
-  // reply + confused reaction, then mark the row failed so the sweep skips it.
-  private async handlePvcMissing(entry: InboxRow): Promise<void> {
-    const userMessage = WORKSPACE_MISSING_MESSAGE;
-
-    try {
-      if (entry.source === "api") {
-        // No outbound channel: the round_failed event markFailed writes below
-        // is how the user sees it.
-      } else if (entry.source === "linear") {
-        // reply_targets[0].id IS the agent session id by construction
-        // (assignment and prompted enqueue paths both stamp it).
-        const sessionTarget = entry.reply_targets.find((t) => t.spec.kind === "linear_session");
-        if (sessionTarget) {
-          const linearClient = await this.linearTokenProvider.getAuthorizedLinearClient();
-          await emitError(linearClient, sessionTarget.id, userMessage).catch(logErrSwallow);
-        }
-      } else if (entry.source === "github" && entry.kind === "comment") {
-        const target = entry.reply_targets[0];
-        if (target?.spec.kind === "issue_comment") {
-          await postIssueComment(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.prNumber,
-            userMessage,
-          ).catch(logErrSwallow);
-          await addIssueCommentReaction(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.commentId,
-            "confused",
-          ).catch(logErrSwallow);
-        } else if (target?.spec.kind === "review_comment") {
-          await postReviewCommentReply(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.prNumber,
-            target.spec.inReplyTo,
-            userMessage,
-          ).catch(logErrSwallow);
-          await addReviewCommentReaction(
-            target.spec.owner,
-            target.spec.repo,
-            target.spec.commentId,
-            "confused",
-          ).catch(logErrSwallow);
-        }
-      } else if (entry.source === "github" && entry.kind === "review") {
-        // Top-level PR comment — the review body has no reply / reactions API.
-        const reviewBodyTarget = entry.reply_targets.find((t) => t.spec.kind === "review_body");
-        if (reviewBodyTarget?.spec.kind === "review_body") {
-          await postIssueComment(
-            reviewBodyTarget.spec.owner,
-            reviewBodyTarget.spec.repo,
-            reviewBodyTarget.spec.prNumber,
-            userMessage,
-          ).catch(logErrSwallow);
-        }
-      } else if (entry.source === "github" && entry.kind === "ci_result") {
-        // CI result rows are informational — silently dead-letter on pruned
-        // workspace. No user-facing error is posted; the finally block below
-        // calls markFailed to clear the row from the sweep.
-      }
-    } finally {
-      await this.inboxRepo
-        .markFailed({
-          inboxId: entry.id,
-          ownerId: config.podId,
-          reason: "workspace_missing",
-          userMessage,
-        })
-        .catch((err) => logErr(`markFailed failed for inbox ${entry.id}`, err));
-    }
+  // PVC-missing per-row dead-letter. Marks the row failed first, so the sweep
+  // skips it, then hands a workspace_missing failure to the round's integration
+  // only if this call transitioned the row (a racing restart or a late
+  // `completed` gets no contradictory notice). One notice per row, no target-id
+  // dedupe (unlike failTask); reply_targets[0] is the round's thread, and the
+  // integration words the notice by round kind. At most once: there is no
+  // cursor to hold, so a delivery error (RetryableError included) is logged and
+  // dropped, and the task's remaining rows still dead-letter. A dead-lettered
+  // assignment also finishes its round as failed (onRoundFinished, detached).
+  private async handlePvcMissing(task: Task, entry: InboxRow): Promise<void> {
+    const marked = await this.inboxRepo
+      .markFailed({
+        inboxId: entry.id,
+        ownerId: config.podId,
+        reason: "workspace_missing",
+        userMessage: WORKSPACE_MISSING_MESSAGE,
+      })
+      .catch((err) => {
+        logErr(`markFailed failed for inbox ${entry.id}`, err);
+        return [];
+      });
+    if (marked.length === 0) return;
+    if (entry.kind === "assignment") this.hooks.roundFinished(task, entry, "failed", true);
+    const target = entry.reply_targets[0];
+    if (!target) return;
+    // A row whose integration is unknown or disabled gets no notice; it is
+    // still failed. No cursor to hold, so a RetryableError is dropped too.
+    await deliverToRound(
+      this.integrations,
+      entry,
+      target,
+      { type: "failure", cause: "workspace_missing", round: entry },
+      { taskId: task.id },
+    ).catch((err) => logErr(`workspace_missing notice for inbox ${entry.id} dropped`, err));
   }
 }
 
@@ -401,11 +326,6 @@ function logErr(msg: string, err: unknown): void {
 function logDebugErr(msg: string, err: unknown): void {
   const e = err instanceof Error ? err : new Error(String(err));
   logger.debug(msg, { message: e.message, stack: e.stack });
-}
-
-// 1-arg variant for `.catch(logErrSwallow)` on fire-and-forget calls.
-function logErrSwallow(err: unknown): void {
-  logErr("fire-and-forget call failed", err);
 }
 
 // Strip CP-internal persistence metadata from a row, keeping only the wire

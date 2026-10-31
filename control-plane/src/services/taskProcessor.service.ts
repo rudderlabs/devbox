@@ -1,17 +1,18 @@
 import type { SandboxInfo } from "@alibaba-group/opensandbox";
-import type { LinearClient } from "@linear/sdk";
-import { postIssueComment, postReviewCommentReply } from "../clients/github";
-import { emitAction, emitError, emitThought, setIssueStarted } from "../clients/linear";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
+import { deliverToRound } from "../integrations/http";
+import type { Outbound } from "../integrations/outbound";
+import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
-import type { InboxRepository, ReplyTarget } from "../repositories/inbox.repository";
+import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
 import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
-import type { LinearTokenProvider } from "./linearTokenProvider";
+import type { IntegrationHooks } from "./integrationHooks";
+import type { ReplyHolds } from "./replyHolds";
 import { type PodStatus, SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
 
@@ -23,7 +24,11 @@ export class TaskProcessorService {
   private running = false;
   private loopPromise: Promise<void> | null = null;
   private sleepAbort: AbortController | null = null;
-  private readonly inflight = new Set<Promise<void>>();
+  // Provisions running on this pod, by task id.
+  private readonly inflight = new Map<string, Promise<void>>();
+  // The last renewal of this pod's leases: when it was sent and what it renewed.
+  private leasesRenewedAt = 0;
+  private renewedTaskIds = new Set<string>();
   // First tick (per task) we saw the backing pod ABSENT (kubectl NotFound). A
   // pod can be briefly gone between create and scheduling, so absence gets a
   // grace window (config.sandboxAbsentGraceMs) before we fail. Cleared the
@@ -37,28 +42,39 @@ export class TaskProcessorService {
   private readonly reconcileFilesUnavailableSince = new Map<string, number>();
   private readonly taskRepo: TaskRepository;
   private readonly inboxRepo: InboxRepository;
-  private readonly linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
   private readonly sandboxManager: SandboxManager;
   private readonly eventDispatcher: EventDispatcher;
   private readonly inboxService: InboxService;
-  private readonly slackNotifier: SlackNotifierService;
+  private readonly slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">;
+  private readonly integrations: Record<IntegrationName, Integration>;
+  private readonly holds: ReplyHolds;
+  // Sources this build has an integration for; claimNext and
+  // listInFlightOwnedBy see only these tasks.
+  private readonly taskSources: Task["source"][];
+  private readonly hooks: IntegrationHooks;
 
   constructor(
     taskRepo: TaskRepository,
     inboxRepo: InboxRepository,
-    linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
     sandboxManager: SandboxManager,
     eventDispatcher: EventDispatcher,
     inboxService: InboxService,
-    slackNotifier: SlackNotifierService,
+    slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">,
+    integrations: Record<IntegrationName, Integration>,
+    holds: ReplyHolds,
+    taskSources: Task["source"][],
+    hooks: IntegrationHooks,
   ) {
     this.taskRepo = taskRepo;
     this.inboxRepo = inboxRepo;
-    this.linearTokenProvider = linearTokenProvider;
     this.sandboxManager = sandboxManager;
     this.eventDispatcher = eventDispatcher;
     this.inboxService = inboxService;
     this.slackNotifier = slackNotifier;
+    this.integrations = integrations;
+    this.holds = holds;
+    this.taskSources = taskSources;
+    this.hooks = hooks;
   }
 
   start(): void {
@@ -76,9 +92,12 @@ export class TaskProcessorService {
       await this.loopPromise.catch(() => {});
     }
 
-    const drain = Promise.allSettled([...this.inflight]);
+    // In-flight provisions, then detached hooks (some started by those
+    // provisions), share one shutdownDrainMs budget.
+    const drain = Promise.allSettled([...this.inflight.values()]);
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, config.shutdownDrainMs));
     await Promise.race([drain, timeout]);
+    await this.hooks.drain(timeout);
 
     // Backdate own heartbeat so any survivors become immediately reclaimable
     // instead of waiting the full LEASE_TIMEOUT_MS.
@@ -102,14 +121,25 @@ export class TaskProcessorService {
 
   private async tick(): Promise<void> {
     // 1. Heartbeat refresh — keep owned-task leases warm.
-    await this.taskRepo.heartbeatOwnedBy(config.podId);
+    await this.renewLeases();
 
     // 2. Idle reaper — kill sandboxes idle past the ceiling, release leases.
     await this.reapIdle().catch((err) => logErr("reapIdle failed", err));
 
-    // 3. Reconcile owned tasks with live sandboxes.
-    const owned = await this.taskRepo.listInFlightOwnedBy(config.podId);
+    // 3. Reconcile owned tasks with live sandboxes. Before each reconcile and
+    //    each event inside it, every lease this pod holds (in-flight provisions
+    //    included) is renewed once a quarter of the lease has passed, so slow
+    //    sends can't let a lease expire mid-tick; a task not renewed was taken
+    //    over.
+    const owned = await this.taskRepo.listInFlightOwnedBy(config.podId, this.taskSources);
     for (const task of owned) {
+      // Shutting down: leave the rest to siblings (stop() backdates our
+      // heartbeats), so shutdown waits for one task's reconcile at most.
+      if (!this.running) break;
+      if (!(await this.leaseHeld(task.id))) {
+        logger.info("lease lost before reconcile; skipping", { taskId: task.id });
+        continue;
+      }
       await this.reconcileOne(task)
         .then(() => {
           logger.debug("reconcileOne: succeeded", { taskId: task.id, sandboxId: task.sandboxId });
@@ -125,25 +155,49 @@ export class TaskProcessorService {
         });
     }
 
-    // Drop grace/window timers for any task this pod no longer owns (lease handed
-    // off, retried away, or terminally failed). Keyed by task.id with no other GC,
-    // these Maps would otherwise leak for the process lifetime AND let a stale
-    // `since` from a prior ownership epoch skip the grace/window on a re-claimed
-    // task's first fault. `owned` is this tick's owned, sandbox-bound set.
+    // Drop grace/window timers and reply holds for any task this pod no longer
+    // owns (lease handed off, retried away, or terminally failed). Keyed by
+    // task.id with no other GC, these Maps would otherwise leak for the process
+    // lifetime AND let a stale `since` from a prior ownership epoch skip the
+    // grace/window on a re-claimed task's first fault. `owned` is this tick's
+    // owned, sandbox-bound set.
     const ownedIds = new Set(owned.map((t) => t.id));
     for (const id of this.sandboxAbsentSince.keys())
       if (!ownedIds.has(id)) this.sandboxAbsentSince.delete(id);
     for (const id of this.reconcileFilesUnavailableSince.keys())
       if (!ownedIds.has(id)) this.reconcileFilesUnavailableSince.delete(id);
+    this.holds.retain(ownedIds);
 
     // 4. Claim new work (fresh-pending OR comment-pickup OR stale-lease
-    //    takeover — single predicate).
+    //    takeover — single predicate). None while shutting down.
+    if (!this.running) return;
     const claimed = await this.taskRepo.claimNext({
       ownerId: config.podId,
       leaseTimeoutMs: config.leaseTimeoutMs,
       maxConcurrentSandboxes: config.maxConcurrentSandboxes,
+      sources: this.taskSources,
     });
-    if (claimed) this.dispatch(claimed);
+    if (!claimed) return;
+    // A hold from before (say, a restart claimed in this same tick) belongs to
+    // the old run; it must not delay the new one.
+    this.holds.release(claimed.id);
+    this.dispatch(claimed);
+  }
+
+  // Renews every lease this pod holds and notes which it renewed.
+  private async renewLeases(): Promise<void> {
+    const at = Date.now();
+    const rows = await this.taskRepo.heartbeatOwnedBy(config.podId);
+    this.leasesRenewedAt = at;
+    this.renewedTaskIds = new Set(rows.map((r) => r.id));
+  }
+
+  // Renews every lease once a quarter of the lease has passed since the last
+  // renewal (each step between checks is bounded well under a lease), then says
+  // whether `taskId` is still ours: one missing from the renewal was taken over.
+  private async leaseHeld(taskId: string): Promise<boolean> {
+    if (Date.now() - this.leasesRenewedAt >= config.leaseTimeoutMs / 4) await this.renewLeases();
+    return this.renewedTaskIds.has(taskId);
   }
 
   private async reapIdle(): Promise<void> {
@@ -164,16 +218,25 @@ export class TaskProcessorService {
   }
 
   private dispatch(task: Task): void {
+    // A provision still running here whose lease expired can be claimed back;
+    // a second one would orphan a sandbox and a PVC.
+    if (this.inflight.has(task.id)) {
+      logger.warn("claimed a task whose provision is still running here; skipping", {
+        taskId: task.id,
+      });
+      return;
+    }
     const p = this.runTask(task)
       .catch((err) => this.handleTaskError(task, err))
-      .finally(() => this.inflight.delete(p));
-    this.inflight.add(p);
+      // Nothing awaits p, so a throw from handleTaskError itself (e.g. a DB
+      // error releasing the lease) would be an unhandled rejection. Log it.
+      .catch((err) => logErr(`handleTaskError failed for task ${task.id}`, err))
+      .finally(() => this.inflight.delete(task.id));
+    this.inflight.set(task.id, p);
   }
 
   // Creates or attaches a sandbox. Branches on `sandbox_id` nullability:
   // (sandbox_id=null) is a fresh provision; (sandbox_id set) is an adoption.
-  //
-  // Linear and API tasks share this path; Linear-only emits are gated below.
   private async runTask(task: Task): Promise<void> {
     if (task.sandboxId) {
       // Adoption — resume the existing sandbox. Attach is best-effort: a failure
@@ -232,36 +295,20 @@ export class TaskProcessorService {
       return;
     }
 
-    // Fresh provision. Linear tasks: assert issue state + lifecycle emits on
-    // the agent session. API tasks have no Linear surface; their log gets
-    // sandbox_started from attachSandboxResources instead.
-    const isLinear = task.source === "linear";
-    if (isLinear) {
-      try {
-        const client = await this.linearTokenProvider.getAuthorizedLinearClient();
-        await setIssueStarted(client, task.externalId);
-      } catch (err) {
-        logErr(`setIssueStarted failed for task ${task.id}`, err);
-      }
-    }
-
-    // Reply target id on the assignment inbox row is the canonical destination
-    // for task-scoped lifecycle emits. A claimed task must have an assignment
-    // row (claimNext requires at least one non-terminal inbox row, and the
-    // `created` path always inserts one) — a missing target id means the row
-    // was deleted out from under us, which is a hard invariant break.
-    const replyTargetId = await this.inboxRepo.getAssignmentReplyTargetId(task.id);
-    if (!replyTargetId) {
+    // Fresh provision. The assignment row's reply target is the canonical
+    // destination for task-scoped lifecycle emits. A claimed task must have an
+    // assignment row (claimNext requires at least one non-terminal inbox row,
+    // and the `created` path always inserts one) — a missing target means the
+    // row was deleted out from under us, which is a hard invariant break.
+    const assignment = await this.inboxRepo.getAssignment(task.id);
+    if (!assignment?.reply_targets[0]) {
       throw new Error(`runTask: assignment inbox row missing reply target for task ${task.id}`);
     }
-    if (isLinear) {
-      try {
-        const client = await this.linearTokenProvider.getAuthorizedLinearClient();
-        await emitAction(client, replyTargetId, "Provisioning", "infra");
-      } catch (err) {
-        logErr(`emitAction(Provisioning) failed for task ${task.id}`, err);
-      }
-    }
+
+    // The owner integration's onTaskStarted (Linear: issue state and the
+    // Provisioning action), at most once per assignment on this pod. Never
+    // throws. API tasks' logs get sandbox_started from attachSandboxResources.
+    await this.hooks.taskStarted(task);
 
     // WORKSPACE is the only task-specific input passed at creation; the daemon
     // derives its .harness dir from it and reads everything else from the inbox file
@@ -299,20 +346,7 @@ export class TaskProcessorService {
         });
         return;
       }
-
-      if (isLinear) {
-        try {
-          const client = await this.linearTokenProvider.getAuthorizedLinearClient();
-          await emitThought(
-            client,
-            replyTargetId,
-            `Sandbox provisioned.\n- sandboxId: \`${sandboxId}\`\n- pvcName: \`${pvcName}\``,
-          );
-        } catch (err) {
-          logErr(`emitThought(provisioned-ids) failed for task ${task.id}`, err);
-        }
-      }
-      // No further Linear emit here — the daemon emits the Planning action via
+      // No Linear emit here — the daemon emits the Planning action via
       // events.jsonl once it starts processing the inbox file.
     } catch (err) {
       // A throw after a successful create (e.g. attachSandboxResources hit a
@@ -359,6 +393,10 @@ export class TaskProcessorService {
     // Sweep: deliver any undelivered inbox rows to the sandbox.
     await this.inboxService.sweepUndelivered(task);
 
+    // A held event waiting out its Retry-After: skip this task's events this
+    // tick (the sweep above still hands new rounds to the sandbox).
+    if (this.holds.waiting(task.id)) return;
+
     // Read events.jsonl since cursor; dispatch each new event. Re-fetch the
     //    task between events because dispatcher cases mutate task state
     //    (appendPrUrl, setSandboxId).
@@ -366,34 +404,58 @@ export class TaskProcessorService {
     const events = await this.sandboxManager.readEvents(task.sandboxId, task.lastObservedEventSeq);
     for (const event of events) {
       if (currentTask === null) break; // self-evict: lease lost or task gone
-
-      // handle() returns "self_evict" when an owner-guarded write inside the
-      // dispatcher (e.g. appendPrUrl) returned 0 rows — the lease was taken
-      // over mid-tick. Stop BEFORE advancing the cursor: a sibling pod owns
-      // this task and will resume from its own cursor.
-      const result = await this.eventDispatcher.handle(event, currentTask);
-      if (result === "self_evict") {
-        logger.info("dispatcher self-evicted (lease lost); stopping reconcile", {
+      // Shutting down: stop after the event in hand (the cursor is persisted
+      // per event), so shutdown waits for one event, not the backlog.
+      if (!this.running) break;
+      // A long run of slow sends must not let any lease expire; ours lost
+      // means a sibling took this task over.
+      if (!(await this.leaseHeld(currentTask.id))) {
+        logger.info("lease lost mid-reconcile; self-evicting", {
           taskId: currentTask.id,
           seq: event.seq,
         });
-        break;
+        return;
       }
-      if (result === "abort") {
-        // The dispatcher found a foreign durable event in this task's stream (a
-        // cross-task leak). Stop here WITHOUT advancing the cursor — we neither
-        // apply nor skip past the leaked event. The task intentionally halts
-        // (and re-logs each tick) so the leak surfaces for an operator rather
-        // than being silently absorbed. Detail is in `cross_task_leak_detected`.
-        logger.error("reconcile halted: cross-task leak detected; not advancing cursor", {
-          event: "reconcile_halted_cross_task_leak",
-          taskId: currentTask.id,
-          taskExternalId: currentTask.externalId,
-          sandboxId: currentTask.sandboxId,
-          podId: config.podId,
-          seq: event.seq,
-        });
-        break;
+
+      const result = await this.eventDispatcher.handle(event, currentTask);
+      switch (result) {
+        case "ok":
+        case "dropped":
+          break;
+        case "hold":
+          // A send failed before anything went out. Stop BEFORE advancing the
+          // cursor and return normally (not a reconcile error): the event is
+          // retried on a later tick, and nothing after it runs ahead of it.
+          return;
+        case "self_evict":
+          // An owner-guarded write inside the dispatcher (e.g. appendPrUrl)
+          // returned 0 rows — the lease was taken over mid-tick. Stop BEFORE
+          // advancing the cursor: a sibling pod owns this task and will resume
+          // from its own cursor.
+          logger.info("dispatcher self-evicted (lease lost); stopping reconcile", {
+            taskId: currentTask.id,
+            seq: event.seq,
+          });
+          return;
+        case "abort":
+          // The dispatcher found a foreign durable event in this task's stream (a
+          // cross-task leak). Stop here WITHOUT advancing the cursor — we neither
+          // apply nor skip past the leaked event. The task intentionally halts
+          // (and re-logs each tick) so the leak surfaces for an operator rather
+          // than being silently absorbed. Detail is in `cross_task_leak_detected`.
+          logger.error("reconcile halted: cross-task leak detected; not advancing cursor", {
+            event: "reconcile_halted_cross_task_leak",
+            taskId: currentTask.id,
+            taskExternalId: currentTask.externalId,
+            sandboxId: currentTask.sandboxId,
+            podId: config.podId,
+            seq: event.seq,
+          });
+          return;
+        default: {
+          const _exhaustive: never = result;
+          void _exhaustive;
+        }
       }
 
       const advanced = await this.taskRepo.recordEventCursor({
@@ -410,6 +472,11 @@ export class TaskProcessorService {
         });
         break;
       }
+      // The cursor is past any held event now.
+      this.holds.release(currentTask.id);
+      // A dropped send (timed out or failed for good) ends this task's events
+      // for the tick, so a slow or failing platform can't eat the tick.
+      if (result === "dropped") break;
 
       // Re-fetch (owner-scoped) to pick up dispatcher mutations (pr_urls
       // append, etc.). An owner-scoped fetch returns null on a takeover in the
@@ -713,54 +780,70 @@ export class TaskProcessorService {
   }
 
   // Hard task failure (provision failure, sandbox timeout/crash, sandbox
-  // unreachable). Broadcast the failure message to every reply target on the
-  // task's non-terminal inbox rows (so each pending @harness comment + the
-  // Linear session sees why their round didn't complete), kill the sandbox,
-  // dead-letter the rows, release the lease. The dead-letter is what keeps
-  // the task from wedging: a 'pending'/'delivered' row left behind is
-  // un-claimable to no end (claimNext needs 'pending' but the task has no
-  // sandbox) and pins the idle reaper.
+  // unreachable). Dead-letter the task's open inbox rows, tell every reply
+  // target on the rows this call dead-lettered why their round didn't complete
+  // (each @harness comment + the Linear session), kill the sandbox, release the
+  // lease. The dead-letter is what keeps the task from wedging: a
+  // 'pending'/'delivered' row left behind is un-claimable to no end (claimNext
+  // needs 'pending' but the task has no sandbox) and pins the idle reaper.
   // killSandbox=false is for a crossed binding: the sandbox isn't ours to kill (a
   // sibling task owns it). We still dead-letter our rows + release the lease
   // (which clears our sandbox_id), so the task fails cleanly. The structured
   // failure log lives at each call site (with its pod/forensic detail); failTask
-  // only does the broadcast + teardown.
+  // only does the dead-letter, broadcast + teardown.
   private async failTask(
     task: Task,
     message: string,
     opts: { killSandbox?: boolean } = {},
   ): Promise<void> {
     const { killSandbox = true } = opts;
-    const nonTerminal = await this.inboxRepo
-      .listNonTerminalByTask(task.id)
-      .catch((e): Awaited<ReturnType<InboxRepository["listNonTerminalByTask"]>> => {
-        logErr(`failTask: listNonTerminalByTask failed for ${task.id}`, e);
+    // Dead-letter the inbox rows FIRST, and BEFORE releaseLease — failTaskInbox
+    // is owner-guarded and needs owner_id still set. Only the rows it
+    // transitions (as it returns them) get a failure message, so a racing
+    // restart or a late `completed` can't draw a "Task failed" on a live or
+    // finished round, and every row it fails gets one.
+    const failed = await this.inboxRepo
+      .failTaskInbox({ taskId: task.id, ownerId: config.podId, reason: message })
+      .catch((e): InboxRow[] => {
+        logErr(`failTaskInbox failed for task ${task.id}`, e);
         return [];
       });
-    // Dedupe by target id — a Linear-source task has many rows sharing the
-    // same linear_session target id; posting once per id keeps the user from
-    // seeing the same error N times.
+    const assignment = failed.find((r) => r.kind === "assignment");
+    if (failed.length > 0) {
+      logger.warn("inbox rows dead-lettered on task failure", {
+        taskId: task.id,
+        inboxIds: failed.map((r) => r.id),
+        reason: message,
+      });
+    }
+
+    // Dedupe by target — a Linear-source task has many rows sharing the
+    // same linear_session target id; posting once per target keeps the user
+    // from seeing the same error N times. Keyed by source too: two platforms'
+    // ids can collide. A row whose integration is unknown or disabled gets no
+    // notice; it is still failed.
     const seen = new Set<string>();
-    let cachedLinearClient: LinearClient | null = null;
-    const getLinearClient = async (): Promise<LinearClient | null> => {
-      if (cachedLinearClient) return cachedLinearClient;
-      try {
-        cachedLinearClient = await this.linearTokenProvider.getAuthorizedLinearClient();
-        return cachedLinearClient;
-      } catch (e) {
-        logErr("failTask: getAuthorizedLinearClient failed", e);
-        return null;
-      }
-    };
-    for (const row of nonTerminal) {
+    for (const row of failed) {
       for (const t of row.reply_targets) {
-        if (seen.has(t.id)) continue;
-        seen.add(t.id);
-        await this.postFailureToTarget(t, message, getLinearClient).catch((e) =>
-          logErr(`failTask: post to ${t.spec.kind} target ${t.id} failed`, e),
+        const key = `${row.source}:${t.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const notice: Outbound = {
+          type: "failure",
+          cause: "task_failed",
+          round: row,
+          summary: message,
+        };
+        // At most once: there is no cursor to hold, so a RetryableError is
+        // dropped too.
+        await deliverToRound(this.integrations, row, t, notice, { taskId: task.id }).catch((e) =>
+          logErr(`failTask: notice to target ${t.id} dropped`, e),
         );
       }
     }
+
+    // The assignment's integration finishes its round as failed (detached).
+    if (assignment) this.hooks.roundFinished(task, assignment, "failed", true);
 
     // Kill the sandbox the task ACTUALLY holds, read from the DB — NOT the
     // dispatch-time `task` closure, whose sandbox_id can be stale (a recreate
@@ -771,85 +854,30 @@ export class TaskProcessorService {
       const current = await this.taskRepo.getByIdOwnedBy(task.id, config.podId);
       if (current?.sandboxId) await this.killSandboxQuietly(current.sandboxId);
     }
-    // Dead-letter the inbox rows BEFORE releaseLease — failTaskInbox is
-    // owner-guarded and needs owner_id still set.
-    const failed = await this.inboxRepo
-      .failTaskInbox({ taskId: task.id, ownerId: config.podId, reason: message })
-      .catch((e) => {
-        logErr(`failTaskInbox failed for task ${task.id}`, e);
-        return [] as { id: string }[];
-      });
-    if (failed.length > 0) {
-      logger.warn("inbox rows dead-lettered on task failure", {
-        taskId: task.id,
-        inboxIds: failed.map((r) => r.id),
-        reason: message,
-      });
-      // Slack failure update to the configured channel. Gated on
-      // the ASSIGNMENT (top-level) round being among the rows just dead-lettered,
-      // mirroring the completion path's kind === "assignment" gate in
-      // eventDispatcher. Without this, a failing follow-up comment/review/
-      // ci_result round (a new inbox row on the SAME Linear task, appended after
-      // the assignment already completed and posted "✅ devbox completed") would
-      // post a contradictory "❌ devbox failed" into that same thread — only the
-      // top-level delegated task should ever notify Slack. Tying it to this
-      // failTaskInbox transition also keeps it at-most-once. Fire-and-forget: a
-      // Slack outage must not affect teardown; the notifier no-ops when Slack is
-      // disabled.
-      const failedIds = new Set(failed.map((r) => r.id));
-      const assignmentFailed = nonTerminal.some(
-        (r) => r.kind === "assignment" && failedIds.has(r.id),
+    // Slack failure update to the configured channel, for a task whose source
+    // is opted in (SLACK_NOTIFY_SOURCES). Gated on the ASSIGNMENT (top-level)
+    // round being among the rows just dead-lettered, mirroring the completion
+    // path's kind === "assignment" gate in eventDispatcher. Without this, a
+    // failing follow-up comment/review/ci_result round (a new inbox row on the
+    // SAME task, appended after the assignment already completed and posted
+    // "✅ devbox completed") would post a contradictory "❌ devbox failed" into
+    // that same thread — only the top-level delegated task should ever notify
+    // Slack. Tying it to this failTaskInbox transition also keeps it
+    // at-most-once. Detached: a Slack outage must not affect teardown.
+    if (assignment && this.slackNotifier.notifies(task.source)) {
+      this.hooks.detach(
+        task.id,
+        "slack",
+        this.slackNotifier
+          .notifyTerminal(task, "failed", message)
+          .catch((e) => logErr(`slack failure notify failed for task ${task.id}`, e)),
       );
-      if (assignmentFailed && task.source === "linear") {
-        const client = await getLinearClient();
-        if (client) {
-          void this.slackNotifier
-            .notifyTerminal(client, task, "failed", message)
-            .catch((e) => logErr(`slack failure notify failed for task ${task.id}`, e));
-        }
-      }
     }
     await this.taskRepo.releaseLease({
       taskId: task.id,
       ownerId: config.podId,
       alsoClearSandbox: true,
     });
-  }
-
-  // Posts `message` to one reply target, switching on spec.kind. Used by
-  // failTask to broadcast a failure message to every pending thread before
-  // dead-lettering. Mirrors handlePvcMissing in inbox.service.ts — same per-
-  // spec branching; if a third caller appears, extract into a shared helper.
-  private async postFailureToTarget(
-    target: ReplyTarget,
-    message: string,
-    getLinearClient: () => Promise<LinearClient | null>,
-  ): Promise<void> {
-    switch (target.spec.kind) {
-      case "linear_session": {
-        const client = await getLinearClient();
-        if (client) await emitError(client, target.id, message);
-        return;
-      }
-      case "issue_comment":
-        await postIssueComment(target.spec.owner, target.spec.repo, target.spec.prNumber, message);
-        return;
-      case "review_comment":
-        await postReviewCommentReply(
-          target.spec.owner,
-          target.spec.repo,
-          target.spec.prNumber,
-          target.spec.inReplyTo,
-          message,
-        );
-        return;
-      case "review_body":
-        // No reply-to-review-body API — top-level PR comment instead.
-        await postIssueComment(target.spec.owner, target.spec.repo, target.spec.prNumber, message);
-        return;
-      case "api_session":
-        return; // API tasks: round_failed in the event log carries it
-    }
   }
 
   // THE single classifier for everything runTask raises (it's the dispatch
@@ -863,7 +891,11 @@ export class TaskProcessorService {
   //      stays in server logs only; the user sees a generic message.
   private async handleTaskError(task: Task, err: unknown): Promise<void> {
     if (err instanceof PvcNotFoundError) {
-      await this.inboxService.deadLetterWorkspaceMissing(task);
+      // A throw here (a DB error) must not skip the release: an unreleased lease
+      // with no sandbox stays heartbeated by this pod and is never re-claimed.
+      await this.inboxService
+        .deadLetterWorkspaceMissing(task)
+        .catch((e) => logErr(`deadLetterWorkspaceMissing failed for task ${task.id}`, e));
       await this.taskRepo
         .releaseLease({ taskId: task.id, ownerId: config.podId, alsoClearSandbox: true })
         .catch((e) => logErr(`releaseLease after workspace-missing failed for task ${task.id}`, e));

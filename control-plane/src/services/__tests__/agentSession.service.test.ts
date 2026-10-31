@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
-import type { InboxRepository } from "../../repositories/inbox.repository";
-import type { TaskRepository } from "../../repositories/task.repository";
+import type { TaskIntake, TaskRef } from "../../integrations/intake";
+import type { ReplyTarget } from "../../repositories/inbox.repository";
 import type { AgentSessionCreated, AgentSessionPrompted } from "../../types/agentSession";
 import type { InboxService } from "../inbox.service";
 import type { LinearTokenProvider } from "../linearTokenProvider";
-import type { SandboxManager } from "../sandboxManager.service";
 
 const emitResponse = mock(() => Promise.resolve());
 const emitAction = mock(() => Promise.resolve());
@@ -63,19 +62,26 @@ const foundTask = {
 } as Task;
 
 describe("AgentSessionService", () => {
-  let taskRepo: TaskRepository;
-  let inboxRepo: InboxRepository;
+  let intake: TaskIntake;
   let linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
-  let sandboxManager: SandboxManager;
   let inboxService: InboxService;
-  let upsertFromAgentSessionWithInbox: ReturnType<typeof mock>;
-  let restartTaskWithInbox: ReturnType<typeof mock>;
-  let findByLinearIssueId: ReturnType<typeof mock>;
-  let getAssignmentReplyTargetId: ReturnType<typeof mock>;
+  let assign: ReturnType<typeof mock>;
+  let findTask: ReturnType<typeof mock>;
   let enqueueLinearComment: ReturnType<typeof mock>;
   let getAuthorizedLinearClient: ReturnType<typeof mock>;
-  let killSandbox: ReturnType<typeof mock>;
   let service: InstanceType<typeof AgentSessionService>;
+
+  type AssignArg = {
+    source: string;
+    externalId: string;
+    key: { hint: string };
+    title: string;
+    description: string | null;
+    flags: string[];
+    url: (t: TaskRef) => string;
+    target: (t: TaskRef) => ReplyTarget;
+  };
+  const ref = { id: "task-1", key: "ISS-1" };
 
   beforeEach(() => {
     emitResponse.mockReset();
@@ -83,25 +89,9 @@ describe("AgentSessionService", () => {
     emitAction.mockReset();
     emitAction.mockResolvedValue(undefined);
 
-    upsertFromAgentSessionWithInbox = mock(() =>
-      Promise.resolve({ taskId: "task-1", created: true }),
-    );
-    restartTaskWithInbox = mock(() =>
-      Promise.resolve({
-        prevSandboxId: null,
-        assignmentId: null,
-        supersededRoundIds: [] as string[],
-      }),
-    );
-    findByLinearIssueId = mock(() => Promise.resolve(foundTask));
-    taskRepo = {
-      upsertFromAgentSessionWithInbox,
-      restartTaskWithInbox,
-      findByLinearIssueId,
-    } as unknown as TaskRepository;
-
-    getAssignmentReplyTargetId = mock(() => Promise.resolve(null as string | null));
-    inboxRepo = { getAssignmentReplyTargetId } as unknown as InboxRepository;
+    assign = mock(() => Promise.resolve({ taskId: "task-1", key: "ISS-1", result: "created" }));
+    findTask = mock(() => Promise.resolve(foundTask));
+    intake = { assign, findTask } as unknown as TaskIntake;
 
     getAuthorizedLinearClient = mock(() => Promise.resolve({} as unknown as LinearClient));
     linearTokenProvider = { getAuthorizedLinearClient } as unknown as Pick<
@@ -109,55 +99,28 @@ describe("AgentSessionService", () => {
       "getAuthorizedLinearClient"
     >;
 
-    killSandbox = mock(() => Promise.resolve());
-    sandboxManager = { killSandbox } as unknown as SandboxManager;
-
     enqueueLinearComment = mock(() => Promise.resolve());
     inboxService = { enqueueLinearComment } as unknown as InboxService;
 
-    service = new AgentSessionService(
-      taskRepo,
-      inboxRepo,
-      linearTokenProvider,
-      sandboxManager,
-      inboxService,
-    );
+    service = new AgentSessionService(intake, linearTokenProvider, inboxService);
   });
 
   describe("handleEvent created", () => {
     it("writes task + inbox row and emits Evaluating on fresh insert", async () => {
-      upsertFromAgentSessionWithInbox.mockResolvedValue({
-        taskId: "task-1",
-        created: true,
-      });
-
       const result = await service.handleEvent(createdEvent());
 
       expect(result).toEqual({ status: "ok" });
-      expect(upsertFromAgentSessionWithInbox).toHaveBeenCalledTimes(1);
-      const arg = upsertFromAgentSessionWithInbox.mock.calls[0]?.[0] as {
-        taskExternalId: string;
-        taskKey: string;
-        taskTitle: string;
-        taskExternalUrl: string;
-        inboxPayload: {
-          title: string;
-          description: string | null;
-          target_id: string;
-        };
-        inboxReplyTargets: Array<{ id: string; spec: { kind: string } }>;
-        metadata: { experimentalFlags: string[] };
-      };
-      expect(arg.taskExternalId).toBe("issue-1");
-      expect(arg.taskKey).toBe("ISS-1");
-      expect(arg.taskExternalUrl).toBe("https://linear.app/x/issue/ISS-1");
-      expect(arg.inboxPayload.description).toBe("desc");
-      expect(arg.metadata.experimentalFlags).toEqual([]);
-      // Agent session id is carried by the assignment row's reply_targets +
-      // payload.target_id — the canonical store after dropping the column.
-      expect(arg.inboxPayload.target_id).toBe("sess-1");
-      expect(arg.inboxReplyTargets[0]?.id).toBe("sess-1");
-      expect(arg.inboxReplyTargets[0]?.spec.kind).toBe("linear_session");
+      expect(assign).toHaveBeenCalledTimes(1);
+      const arg = assign.mock.calls[0]?.[0] as AssignArg;
+      expect(arg.source).toBe("linear");
+      expect(arg.externalId).toBe("issue-1");
+      expect(arg.key).toEqual({ hint: "ISS-1" });
+      expect(arg.url(ref)).toBe("https://linear.app/x/issue/ISS-1");
+      expect(arg.description).toBe("desc");
+      expect(arg.flags).toEqual([]);
+      // The agent session id is the delegation id: the assignment row's reply
+      // target (intake stamps it as payload.target_id too).
+      expect(arg.target(ref)).toEqual({ id: "sess-1", spec: { kind: "linear_session" } });
 
       await flushMicrotasks();
       expect(emitResponse).not.toHaveBeenCalled();
@@ -179,30 +142,18 @@ describe("AgentSessionService", () => {
       const result = await service.handleEvent(event);
 
       expect(result).toEqual({ status: "ok" });
-      const arg = upsertFromAgentSessionWithInbox.mock.calls[0]?.[0] as {
-        inboxPayload: { description: string | null };
-        metadata: { experimentalFlags: string[] };
-      };
-      expect(arg.metadata.experimentalFlags).toEqual(["FAST_PATH", "TRACE2"]);
-      expect(arg.inboxPayload.description).toBe(
-        "Please validate the new path.\n\n\n#devbox:exp:lowercase\n",
-      );
+      const arg = assign.mock.calls[0]?.[0] as AssignArg;
+      expect(arg.flags).toEqual(["FAST_PATH", "TRACE2"]);
+      expect(arg.description).toBe("Please validate the new path.\n\n\n#devbox:exp:lowercase\n");
     });
 
-    it("restarts on conflict (new agent session id): calls restartTaskWithInbox, acks restart", async () => {
-      upsertFromAgentSessionWithInbox.mockResolvedValue({
-        taskId: "task-1",
-        created: false,
-      });
-      getAssignmentReplyTargetId.mockResolvedValue("sess-old");
-      restartTaskWithInbox.mockResolvedValue({ prevSandboxId: null });
+    it("restarts on a new agent session id: acks the restart", async () => {
+      assign.mockResolvedValue({ taskId: "task-1", key: "ISS-1", result: "restarted" });
 
       const result = await service.handleEvent(createdEvent());
 
       expect(result).toEqual({ status: "ok" });
-      expect(restartTaskWithInbox).toHaveBeenCalledTimes(1);
-      const restartArg = restartTaskWithInbox.mock.calls[0]?.[0] as { taskId: string };
-      expect(restartArg.taskId).toBe("task-1");
+      expect(assign).toHaveBeenCalledTimes(1);
 
       await flushMicrotasks();
       const respArgs = emitResponse.mock.calls[0] as unknown as [unknown, string, string];
@@ -213,48 +164,22 @@ describe("AgentSessionService", () => {
       expect(actArgs[3]).toBe("task");
     });
 
-    it("kills the preempted sandbox when a re-delegation restarts a live run", async () => {
-      upsertFromAgentSessionWithInbox.mockResolvedValue({
-        taskId: "task-1",
-        created: false,
-      });
-      getAssignmentReplyTargetId.mockResolvedValue("sess-old");
-      restartTaskWithInbox.mockResolvedValue({ prevSandboxId: "sb-old" });
-
-      const result = await service.handleEvent(createdEvent());
-
-      expect(result).toEqual({ status: "ok" });
-      await flushMicrotasks();
-      expect(killSandbox).toHaveBeenCalledTimes(1);
-      expect(killSandbox.mock.calls[0]?.[0]).toBe("sb-old");
-    });
-
     it("ignores a duplicate webhook redelivery (same agent session id): no restart", async () => {
       // Linear redelivers the same `created` event — the existing assignment
       // row's reply_targets already carries the event's session id, so it is
-      // not a new delegation. No restart, no sandbox kill, no re-emit.
-      upsertFromAgentSessionWithInbox.mockResolvedValue({
-        taskId: "task-1",
-        created: false,
-      });
-      getAssignmentReplyTargetId.mockResolvedValue("sess-1");
+      // not a new delegation. No restart, no re-emit.
+      assign.mockResolvedValue({ taskId: "task-1", key: "ISS-1", result: "duplicate" });
 
       const result = await service.handleEvent(createdEvent());
 
       expect(result).toEqual({ status: "ok" });
-      expect(restartTaskWithInbox).not.toHaveBeenCalled();
 
       await flushMicrotasks();
       expect(emitResponse).not.toHaveBeenCalled();
       expect(emitAction).not.toHaveBeenCalled();
-      expect(killSandbox).not.toHaveBeenCalled();
     });
 
     it("does not throw when linear emit fails (fire-and-forget)", async () => {
-      upsertFromAgentSessionWithInbox.mockResolvedValue({
-        taskId: "task-1",
-        created: true,
-      });
       getAuthorizedLinearClient.mockImplementation(() => Promise.reject(new Error("boom")));
 
       const result = await service.handleEvent(createdEvent());
@@ -271,7 +196,7 @@ describe("AgentSessionService", () => {
       const result = await service.handleEvent(promptedEvent());
 
       expect(result).toEqual({ status: "ok" });
-      expect(findByLinearIssueId).toHaveBeenCalledWith("issue-1");
+      expect(findTask).toHaveBeenCalledWith("linear", "issue-1");
       expect(enqueueLinearComment).toHaveBeenCalledWith({
         task: foundTask,
         agentActivityId: "activity-1",
@@ -285,8 +210,17 @@ describe("AgentSessionService", () => {
       expect(emitAction).toHaveBeenCalledWith(expect.anything(), "sess-1", "Evaluating", "");
     });
 
+    it("a redelivered prompted re-acks and enqueues again (the inbox drops the duplicate row)", async () => {
+      await service.handleEvent(promptedEvent());
+      await service.handleEvent(promptedEvent());
+      await flushMicrotasks();
+      expect(enqueueLinearComment).toHaveBeenCalledTimes(2);
+      expect(enqueueLinearComment.mock.calls[1]).toEqual(enqueueLinearComment.mock.calls[0]);
+      expect(emitAction).toHaveBeenCalledTimes(2);
+    });
+
     it("fires the Evaluating ack even when the task is not yet known (session_not_found)", async () => {
-      findByLinearIssueId.mockResolvedValue(null);
+      findTask.mockResolvedValue(null);
 
       const result = await service.handleEvent(promptedEvent());
 

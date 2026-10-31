@@ -117,7 +117,11 @@
         "slack": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "enabled": { "type": "boolean" }, "channelId": { "type": "string" } }
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "channelId": { "type": "string" },
+            "notifySources": { "type": "array", "items": { "enum": ["linear", "api"] } }
+          }
         },
         "githubApp": {
           "type": "object",
@@ -149,7 +153,8 @@
       "properties": {
         "replicas": { "type": "integer", "minimum": 1 },
         "publicBaseUrl": { "type": "string" },
-        "resources": { "type": "object" }
+        "resources": { "type": "object" },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 }
       }
     },
     "postgresql": {

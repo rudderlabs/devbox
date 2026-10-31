@@ -72,6 +72,8 @@ type UploadIssueAttachmentParams = {
   contentType: string;
   subtitle?: string;
   metadata?: Record<string, string | number>;
+  // The SDK calls take the client's own signal; this one bounds the raw upload.
+  signal?: AbortSignal;
 };
 
 // Uploads bytes to Linear-managed object storage, then attaches the uploaded
@@ -104,6 +106,7 @@ export async function uploadIssueAttachment(
     method: "PUT",
     headers: uploadHeaders,
     body: params.bytes,
+    signal: params.signal,
   });
   if (!uploadResp.ok) {
     const responseBody = (await uploadResp.text().catch(() => "")).slice(0, 500);

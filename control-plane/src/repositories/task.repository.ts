@@ -1,91 +1,178 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "../db";
 import type { Task } from "../db/schema";
+import type { TaskRef } from "../integrations/intake";
+import type { Person, TaskSource } from "../integrations/types";
 import { logger } from "../logger";
 import type { HarnessEvent } from "../types/harnessEvent";
-import type { AssignmentContent, ReplyTarget } from "./inbox.repository";
-import { insertCpEventIfApi, insertDaemonEvent } from "./taskEvent.repository";
+import type { AssignmentPayload } from "../types/inboxMessage";
+import {
+  type AssignmentContent,
+  isUniqueViolation,
+  type ReplyTarget,
+  taskIdentity,
+} from "./inbox.repository";
+import {
+  insertCpEventIfApi,
+  insertDaemonEvent,
+  type SqlExecutor,
+  type Tx,
+} from "./taskEvent.repository";
+
+function asRows<T>(result: unknown): T[] {
+  return Array.isArray(result) ? (result as T[]) : [];
+}
 
 export class TaskRepository {
-  // Single tx for a Linear `created` event. UPSERT the tasks row (infra) +
-  // INSERT the assignment inbox row (work content + reply destinations).
-  // Returns the task id and an insert-vs-update bit (`created`).
-  //
-  // A re-delegation conflict refreshes the display fields + metadata only — the
-  // inbox INSERT keys off the Linear issue UUID, so it DO-NOTHINGs and the
-  // assignment row is left untouched. The caller branches on `created` and
-  // routes a re-delegation to `restartTaskWithInbox` — duplicate-webhook
-  // detection (same session id) is the caller's job via
-  // `inboxRepo.getAssignmentReplyTargetId(taskId)`.
-  async upsertFromAgentSessionWithInbox(params: {
-    taskExternalId: string;
-    taskKey: string;
-    taskTitle: string;
-    taskExternalUrl: string;
-    inboxPayload: AssignmentContent;
-    inboxReplyTargets: ReplyTarget[];
-    metadata: unknown;
-  }): Promise<{ taskId: string; created: boolean }> {
-    // bun-sql JSON-encodes a JS string param, so `${jsonStr}::jsonb` would
-    // store a JSON *string scalar* rather than the array/object. Casting via
-    // `::text::jsonb` forces PG to parse the raw text into proper jsonb.
-    // `?? {}` / `?? []` guard against `JSON.stringify(undefined)` returning
-    // `undefined`, which would bind as SQL NULL and violate NOT NULL.
-    const metadataJson = JSON.stringify(params.metadata ?? {});
-    const payloadJson = JSON.stringify(params.inboxPayload);
-    const replyTargetsJson = JSON.stringify(params.inboxReplyTargets ?? []);
-
+  // TaskIntake.assign's transaction. Inserts the task, or finds it by
+  // (source, external_id) and locks it, then compares the stored delegation
+  // (the assignment row's reply target) with the incoming one: when both carry
+  // an order, one not above the stored order is a duplicate; otherwise the
+  // same id is. A duplicate changes nothing; anything else restarts the task.
+  // A new task gets its assignment row and, for API tasks, task_created.
+  // Returns the preempted sandbox for the caller to kill after commit, and on
+  // a restart the replaced delegation's target id.
+  async assign(p: {
+    source: TaskSource;
+    externalId?: string; // required with a hint key; a sequence key is its own
+    key: { hint: string } | { sequencePrefix: string };
+    title: string;
+    description: string | null;
+    flags: string[];
+    url: (t: TaskRef) => string;
+    target: (t: TaskRef) => ReplyTarget;
+    requester?: Person;
+    createdBy?: string;
+  }): Promise<
+    TaskRef & {
+      result: "created" | "restarted" | "duplicate";
+      prevSandboxId: string | null;
+      prevTargetId?: string;
+    }
+  > {
     return db.transaction(async (tx) => {
-      // 1. UPSERT tasks. RETURNING (xmax = 0) AS created: xmax=0 means a fresh
-      //    INSERT, non-zero means an ON CONFLICT UPDATE path was taken.
-      const taskRows = await tx.execute<{ id: string; key: string; created: boolean }>(sql`
-        INSERT INTO tasks (source, external_id, key, title, external_url, metadata)
-             VALUES ('linear', ${params.taskExternalId}, ${params.taskKey}, ${params.taskTitle},
-                     ${params.taskExternalUrl}, ${metadataJson}::text::jsonb)
-        ON CONFLICT (source, external_id) DO UPDATE
-           SET title = EXCLUDED.title,
-               external_url = EXCLUDED.external_url,
-               -- MERGE, don't replace. A duplicate created-webhook redelivery
-               -- passes metadata={}; a blind = EXCLUDED.metadata would wipe the
-               -- durable retry budget (metadata.retryCount), silently resetting
-               -- the sandbox-retry cap. The jsonb || keeps existing keys while
-               -- still letting a real EXCLUDED value overlay. A genuine
-               -- re-delegation resets the budget via restartTaskWithInbox.
-               metadata = tasks.metadata || EXCLUDED.metadata,
-               updated_at = now()
-        RETURNING id, key, (xmax = 0) AS created;
-      `);
-      const taskRow = Array.isArray(taskRows) ? taskRows[0] : undefined;
-      if (!taskRow)
-        throw new Error("upsertFromAgentSessionWithInbox: tasks upsert returned no row");
+      // In a savepoint so a key collision leaves the transaction usable: a
+      // concurrent insert can take the key between the check and the insert,
+      // and the retry then sees it.
+      const insert = () => tx.transaction((sp) => this.insertTask(sp, p));
+      const inserted = await insert().catch((err) => {
+        if (!isUniqueViolation(err, "tasks_key_lower_uniq")) throw err;
+        return insert();
+      });
 
-      // 2. INSERT inbox. external_id is the Linear issue UUID, so a re-delegation
-      //    conflicts here and DO NOTHING leaves the assignment row untouched — the
-      //    caller routes the re-delegation to restartTaskWithInbox instead.
-      await tx.execute(sql`
-        INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
-             VALUES (${taskRow.id}, 'linear', 'assignment', ${params.taskExternalId},
-                     ${payloadJson}::text::jsonb || jsonb_build_object(
-                       'task_id', ${taskRow.id}::text,
-                       'task_key', ${taskRow.key}::text),
-                     ${replyTargetsJson}::text::jsonb)
-        ON CONFLICT (source, external_id) DO NOTHING;
-      `);
+      if (inserted) {
+        const t = { id: inserted.id, key: inserted.key };
+        const target = p.target(t);
+        const payload: AssignmentPayload = {
+          title: p.title,
+          description: p.description,
+          external_url: inserted.url,
+          target_id: target.id,
+          ...taskIdentity(t),
+        };
+        // external_id is the task's: the platform's id, or the API task key.
+        const [round] = asRows<{ id: string }>(
+          await tx.execute(sql`
+            INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
+                 VALUES (${t.id}, ${p.source}, 'assignment', ${inserted.externalId},
+                         ${JSON.stringify(payload)}::text::jsonb,
+                         ${JSON.stringify([target])}::text::jsonb)
+            RETURNING id;`),
+        );
+        if (!round) throw new Error("assign: inbox insert returned no row");
+        await insertCpEventIfApi(tx, {
+          taskId: t.id,
+          type: "task_created",
+          inboxId: round.id,
+          data: { title: p.title, description: p.description, experimental_flags: p.flags },
+        });
+        return { ...t, result: "created", prevSandboxId: null };
+      }
 
-      return { taskId: taskRow.id, created: taskRow.created };
+      const [t] = asRows<TaskRef>(
+        await tx.execute(sql`
+          SELECT id, key FROM tasks
+           WHERE source = ${p.source} AND external_id = ${p.externalId ?? null}
+             FOR NO KEY UPDATE`),
+      );
+      if (!t) throw new Error("assign: task not found after a conflicting insert");
+      // Read after the lock, so a restart that committed meanwhile is seen.
+      const [stored] = asRows<{ target: ReplyTarget | null }>(
+        await tx.execute(sql`
+          SELECT reply_targets->0 AS target FROM inbox
+           WHERE task_id = ${t.id} AND kind = 'assignment' LIMIT 1`),
+      );
+      const prev = stored?.target ?? null;
+      const next = p.target(t);
+      const duplicate =
+        prev !== null &&
+        (typeof prev.order === "number" && typeof next.order === "number"
+          ? next.order <= prev.order
+          : next.id === prev.id);
+      if (duplicate) return { ...t, result: "duplicate", prevSandboxId: null };
+
+      const url = p.url(t);
+      const { prevSandboxId } = await this.restartTaskWithInbox(
+        {
+          taskId: t.id,
+          inboxPayload: {
+            title: p.title,
+            description: p.description,
+            external_url: url,
+            target_id: next.id,
+          },
+          inboxReplyTargets: [next],
+          delegation: { flags: p.flags, requester: p.requester },
+        },
+        tx,
+      );
+      return { ...t, result: "restarted", prevSandboxId, prevTargetId: prev?.id };
     });
   }
 
-  // Re-delegation restart. The caller routes here when
-  // upsertFromAgentSessionWithInbox returned `created: false` AND the prior
-  // session id differs from the event's. PREEMPTS any in-flight run and
-  // restarts from scratch, in one tx:
+  // assign's insert. Picks the key: a hint is used as is unless another task
+  // holds it (case-insensitively), then `${SOURCE}-${hint}`; a sequence key is
+  // the prefix plus api_task_key_seq. Returns null when (source, external_id)
+  // already exists.
+  private async insertTask(
+    ex: SqlExecutor,
+    p: Parameters<TaskRepository["assign"]>[0],
+  ): Promise<(TaskRef & { externalId: string; url: string }) | null> {
+    const picked =
+      "hint" in p.key
+        ? sql`CASE WHEN EXISTS (
+                SELECT 1 FROM tasks
+                 WHERE lower(key) = lower(${p.key.hint})
+                   AND NOT (source = ${p.source} AND external_id = ${p.externalId ?? null})
+              ) THEN ${`${p.source.toUpperCase()}-${p.key.hint}`}::text ELSE ${p.key.hint}::text END`
+        : sql`${p.key.sequencePrefix}::text || nextval('api_task_key_seq')::text`;
+    const [pick] = asRows<TaskRef>(
+      await ex.execute(sql`SELECT uuidv7()::text AS id, ${picked} AS key`),
+    );
+    if (!pick) throw new Error("assign: key selection returned no row");
+    const externalId = p.externalId ?? pick.key;
+    const url = p.url(pick);
+    const metadataJson = JSON.stringify({ experimentalFlags: p.flags, requester: p.requester });
+    const [row] = asRows<{ id: string }>(
+      await ex.execute(sql`
+        INSERT INTO tasks (id, source, external_id, key, title, external_url, metadata, created_by)
+             VALUES (${pick.id}, ${p.source}, ${externalId}, ${pick.key}, ${p.title}, ${url},
+                     ${metadataJson}::text::jsonb, ${p.createdBy ?? null})
+        ON CONFLICT (source, external_id) DO NOTHING
+        RETURNING id;`),
+    );
+    return row ? { ...pick, externalId, url } : null;
+  }
+
+  // Restart: assign's newer delegation, or TaskIntake.restart (API). PREEMPTS
+  // any in-flight run and restarts from scratch, in one tx (the caller's, when
+  // given: assign already holds the task row lock):
   //   1. Reset the task to a clean slate — pvc_name / sandbox_id / owner_id /
   //      heartbeat_at cleared, cursor reset. The old owner pod self-evicts on
   //      its next owner-guarded write (owner_id gone).
   //   2. Re-pend the task's single `assignment` inbox row (one per task, created
-  //      by upsertFromAgentSessionWithInbox) with a fresh id plus the new
-  //      event's payload + reply_targets. The inbox id is the daemon-visible run
+  //      by assign) with a fresh id plus the new event's payload +
+  //      reply_targets. The inbox id is the daemon-visible run
   //      identity (`inbox/<id>.json`) and feeds the harness PR branch suffixes;
   //      the logical task row id and assignment external_id remain stable.
   //   3. Dead-letter every still-open NON-assignment inbox row (pending
@@ -93,108 +180,119 @@ export class TaskRepository {
   //      re-delivered.
   //      Not owner-guarded — it forcibly supersedes whatever pod ran the old round.
   //   4. With `api`: also set the new title and experimental flags in step 1,
-  //      and write `task_restarted` to the log.
+  //      and write `task_restarted` to the log. With `delegation`: also set the
+  //      payload's title and URL and the new flags and requester in step 1.
   //
   // Returns `prevSandboxId` — the preempted sandbox the caller must kill;
   // `assignmentId` — the re-pended assignment row's new id (null if the task
   // has none); and `supersededRoundIds` — the rows dead-lettered in step 3.
-  // Duplicate webhook deliveries do not route here; the service checks the
-  // prior session first.
-  async restartTaskWithInbox(params: {
-    taskId: string;
-    inboxPayload: AssignmentContent;
-    inboxReplyTargets: ReplyTarget[];
-    api?: { title: string; description: string | null; experimentalFlags: string[] };
-  }): Promise<{
+  // Duplicate deliveries do not route here; assign compares delegations first.
+  async restartTaskWithInbox(
+    params: {
+      taskId: string;
+      inboxPayload: AssignmentContent;
+      inboxReplyTargets: ReplyTarget[];
+      api?: { title: string; description: string | null; experimentalFlags: string[] };
+      delegation?: { flags: string[]; requester?: Person };
+    },
+    tx?: Tx,
+  ): Promise<{
     prevSandboxId: string | null;
     assignmentId: string | null;
     supersededRoundIds: string[];
   }> {
+    if (!tx) return db.transaction((t) => this.restartTaskWithInbox(params, t));
+    const { api, delegation } = params;
     const payloadJson = JSON.stringify(params.inboxPayload);
-    // An API restart also applies the new title and flags. The
+    // An API restart or a re-delegation also applies the new title and flags
+    // (a re-delegation its URL and requester too, dropping a stale one). The
     // description lives on the assignment payload (step 2).
-    const apiSet = params.api
-      ? sql`, title = ${params.api.title},
-              metadata = jsonb_set(metadata - 'retryCount', '{experimentalFlags}',
-                                   ${JSON.stringify(params.api.experimentalFlags)}::text::jsonb)`
-      : sql`, metadata = metadata - 'retryCount'`;
+    const flags = api?.experimentalFlags ?? delegation?.flags;
+    const definition = JSON.stringify({
+      experimentalFlags: flags,
+      requester: delegation?.requester,
+    });
+    const definitionSet =
+      flags === undefined
+        ? sql`, metadata = metadata - 'retryCount'`
+        : sql`, title = ${params.inboxPayload.title},
+              metadata = (metadata - 'retryCount' - 'requester') || ${definition}::text::jsonb
+              ${delegation ? sql`, external_url = ${params.inboxPayload.external_url}` : sql``}`;
     const replyTargetsJson = JSON.stringify(params.inboxReplyTargets ?? []);
 
-    return db.transaction(async (tx) => {
-      // 1. Reset the task to a clean slate. PG18 `RETURNING old.sandbox_id` is
-      //    the preempted sandbox the caller kills.
-      const taskRows = await tx.execute<{ prev_sandbox_id: string | null }>(sql`
-        UPDATE tasks
-           SET pvc_name = NULL,
-               sandbox_id = NULL,
-               owner_id = NULL,
-               heartbeat_at = NULL,
-               last_observed_event_seq = 0,
-               pr_urls = '[]'::jsonb
-               -- Clean slate also resets the sandbox-retry budget (retryCount
-               -- is dropped in the metadata fragment) — a genuine
-               -- re-delegation is a fresh attempt, not a continuation.
-               ${apiSet},
-               updated_at = now()
-         WHERE id = ${params.taskId}
-        RETURNING old.sandbox_id AS prev_sandbox_id;
-      `);
-      const taskRow = Array.isArray(taskRows) ? taskRows[0] : undefined;
-      if (!taskRow) throw new Error("restartTaskWithInbox: task not found");
+    // 1. Reset the task to a clean slate. PG18 `RETURNING old.sandbox_id` is
+    //    the preempted sandbox the caller kills.
+    const taskRows = await tx.execute<{ prev_sandbox_id: string | null }>(sql`
+      UPDATE tasks
+         SET pvc_name = NULL,
+             sandbox_id = NULL,
+             owner_id = NULL,
+             heartbeat_at = NULL,
+             last_observed_event_seq = 0,
+             pr_urls = '[]'::jsonb
+             -- Clean slate also resets the sandbox-retry budget (retryCount
+             -- is dropped in the metadata fragment) — a genuine
+             -- re-delegation is a fresh attempt, not a continuation.
+             ${definitionSet},
+             updated_at = now()
+       WHERE id = ${params.taskId}
+      RETURNING old.sandbox_id AS prev_sandbox_id;
+    `);
+    const taskRow = Array.isArray(taskRows) ? taskRows[0] : undefined;
+    if (!taskRow) throw new Error("restartTaskWithInbox: task not found");
 
-      // 2. Re-pend the task's single `assignment` inbox row with a new id plus
-      //    the new event's payload + reply targets — this drives the fresh run.
-      //    The row remains the one assignment for this task / Linear issue, but
-      //    the daemon sees a new run identity via `inbox/<id>.json`.
-      const reRows = await tx.execute<{ id: string }>(sql`
-        UPDATE inbox i
-           SET id = uuidv7(),
-               status = 'pending',
-               failure_reason = NULL,
-               -- a re-run never inherits the previous run's outcome
-               outcome = NULL,
-               payload = ${payloadJson}::text::jsonb || jsonb_build_object(
-                 'task_id', t.id::text, 'task_key', t.key),
-               reply_targets = ${replyTargetsJson}::text::jsonb,
-               updated_at = now()
-          FROM tasks t
-         WHERE t.id = i.task_id
-           AND i.task_id = ${params.taskId}
-           AND i.kind = 'assignment'
-        RETURNING i.id;
-      `);
-      const assignmentId = (Array.isArray(reRows) ? reRows[0]?.id : undefined) ?? null;
+    // 2. Re-pend the task's single `assignment` inbox row with a new id plus
+    //    the new event's payload + reply targets — this drives the fresh run.
+    //    The row remains the one assignment for this task / Linear issue, but
+    //    the daemon sees a new run identity via `inbox/<id>.json`.
+    const reRows = await tx.execute<{ id: string }>(sql`
+      UPDATE inbox i
+         SET id = uuidv7(),
+             status = 'pending',
+             failure_reason = NULL,
+             -- a re-run never inherits the previous run's outcome
+             outcome = NULL,
+             payload = ${payloadJson}::text::jsonb || jsonb_build_object(
+               'task_id', t.id::text, 'task_key', t.key),
+             reply_targets = ${replyTargetsJson}::text::jsonb,
+             updated_at = now()
+        FROM tasks t
+       WHERE t.id = i.task_id
+         AND i.task_id = ${params.taskId}
+         AND i.kind = 'assignment'
+      RETURNING i.id;
+    `);
+    const assignmentId = (Array.isArray(reRows) ? reRows[0]?.id : undefined) ?? null;
 
-      // 3. Dead-letter every still-open NON-assignment inbox row (pending
-      //    comment / review rows). The re-pended `assignment` row (step 2)
-      //    is excluded by `kind <> 'assignment'`.
-      const supRows = await tx.execute<{ id: string }>(sql`
-        UPDATE inbox
-           SET status = 'failed',
-               failure_reason = 'superseded by re-delegation',
-               updated_at = now()
-         WHERE task_id = ${params.taskId}
-           AND status IN ('pending', 'delivered')
-           AND kind <> 'assignment'
-        RETURNING id;
-      `);
-      const supersededRoundIds = (Array.isArray(supRows) ? supRows : []).map((r) => r.id);
+    // 3. Dead-letter every still-open NON-assignment inbox row (pending
+    //    comment / review rows). The re-pended `assignment` row (step 2)
+    //    is excluded by `kind <> 'assignment'`.
+    const supRows = await tx.execute<{ id: string }>(sql`
+      UPDATE inbox
+         SET status = 'failed',
+             failure_reason = 'superseded by re-delegation',
+             updated_at = now()
+       WHERE task_id = ${params.taskId}
+         AND status IN ('pending', 'delivered')
+         AND kind <> 'assignment'
+      RETURNING id;
+    `);
+    const supersededRoundIds = (Array.isArray(supRows) ? supRows : []).map((r) => r.id);
 
-      if (params.api) {
-        await insertCpEventIfApi(tx, {
-          taskId: params.taskId,
-          type: "task_restarted",
-          inboxId: assignmentId,
-          data: {
-            title: params.api.title,
-            description: params.api.description,
-            experimental_flags: params.api.experimentalFlags,
-            superseded_round_ids: supersededRoundIds,
-          },
-        });
-      }
-      return { prevSandboxId: taskRow.prev_sandbox_id, assignmentId, supersededRoundIds };
-    });
+    if (params.api) {
+      await insertCpEventIfApi(tx, {
+        taskId: params.taskId,
+        type: "task_restarted",
+        inboxId: assignmentId,
+        data: {
+          title: params.api.title,
+          description: params.api.description,
+          experimental_flags: params.api.experimentalFlags,
+          superseded_round_ids: supersededRoundIds,
+        },
+      });
+    }
+    return { prevSandboxId: taskRow.prev_sandbox_id, assignmentId, supersededRoundIds };
   }
 
   // Retry reset — RESUME, not restart. The backing sandbox failed (terminal /
@@ -290,10 +388,15 @@ export class TaskRepository {
   //       on that delivered row; throughout its recreate-from-PVC window sandbox_id
   //       is NULL, so excluding 'delivered' here would let a retry wave over-admit
   //       past the cap. Matches the claimable predicate's IN ('pending','delivered').
+  //
+  // Only tasks of `sources` (the sources this build has an integration for) are
+  // claimed, so an older image never takes a task of a source it doesn't know:
+  // rollbacks and rolling overlaps stay safe without draining.
   async claimNext(params: {
     ownerId: string;
     leaseTimeoutMs: number;
     maxConcurrentSandboxes: number;
+    sources: Task["source"][];
   }): Promise<Task | null> {
     const leaseCutoff = `${params.leaseTimeoutMs} milliseconds`;
     const rows = await db.execute<RawTaskRow>(sql`
@@ -315,7 +418,8 @@ export class TaskRepository {
       claimable AS (
         SELECT t.id
         FROM tasks t, running
-        WHERE EXISTS (
+        WHERE t.source IN ${params.sources}
+          AND EXISTS (
                 SELECT 1 FROM inbox i
                  WHERE i.task_id = t.id
                    AND i.status IN ('pending', 'delivered')
@@ -352,21 +456,28 @@ export class TaskRepository {
 
   // Tasks this pod owns with a sandbox attached — the reconcile loop iterates
   // these every tick. Comment-pickup tasks with sandbox_id NULL are reconciled
-  // via claimNext + sweep, not here.
-  async listInFlightOwnedBy(ownerId: string): Promise<Task[]> {
+  // via claimNext + sweep, not here. Filtered to `sources` like claimNext.
+  async listInFlightOwnedBy(ownerId: string, sources: Task["source"][]): Promise<Task[]> {
     return db
       .select()
       .from(schema.tasks)
-      .where(and(eq(schema.tasks.ownerId, ownerId), sql`${schema.tasks.sandboxId} IS NOT NULL`));
+      .where(
+        and(
+          eq(schema.tasks.ownerId, ownerId),
+          sql`${schema.tasks.sandboxId} IS NOT NULL`,
+          inArray(schema.tasks.source, sources),
+        ),
+      );
   }
 
   // As long as a pod owns a task it heartbeats; if it loses interest it calls
-  // releaseLease.
-  async heartbeatOwnedBy(ownerId: string): Promise<void> {
-    await db
+  // releaseLease. Returns the tasks renewed: one missing was taken over.
+  async heartbeatOwnedBy(ownerId: string): Promise<{ id: string }[]> {
+    return db
       .update(schema.tasks)
       .set({ heartbeatAt: sql`now()` })
-      .where(eq(schema.tasks.ownerId, ownerId));
+      .where(eq(schema.tasks.ownerId, ownerId))
+      .returning({ id: schema.tasks.id });
   }
 
   // Backdate heartbeats on own tasks so survivors become immediately
@@ -433,6 +544,8 @@ export class TaskRepository {
   // a replay of a passed event, a pod without the lease, and the old owner
   // after a restart (owner_id cleared) all change 0 rows and log nothing.
   // Returns 0 rows when the lease is lost OR the cursor is already past seq.
+  // Each advance also renews the lease, so a long run of slow but successful
+  // sends can't outlive it mid-reconcile.
   async recordEventCursor(params: {
     taskId: string;
     ownerId: string;
@@ -442,7 +555,7 @@ export class TaskRepository {
     return db.transaction(async (tx) => {
       const result = await tx.execute<{ id: string; source: string }>(sql`
         UPDATE tasks
-           SET last_observed_event_seq = ${event.seq}, updated_at = now()
+           SET last_observed_event_seq = ${event.seq}, heartbeat_at = now(), updated_at = now()
          WHERE id = ${params.taskId}
            AND owner_id = ${params.ownerId}
            AND last_observed_event_seq < ${event.seq}
@@ -459,7 +572,8 @@ export class TaskRepository {
   // Owner-guarded append to pr_urls; dedupes on (url) within the array.
   // Returns 0 rows on stale-lease takeover — the caller (EventDispatcher's
   // pr_opened case) treats that as a self-eviction signal, matching every
-  // other state-advancing repo method.
+  // other state-advancing repo method. A URL already there still returns the
+  // row; `firstTime` (PG18 `old.`) says whether this call added it.
   async appendPrUrl(params: {
     taskId: string;
     ownerId: string;
@@ -467,7 +581,7 @@ export class TaskRepository {
     repo: string;
     branch: string;
     commitSha: string;
-  }): Promise<{ id: string }[]> {
+  }): Promise<{ id: string; firstTime: boolean }[]> {
     const entry = sql`jsonb_build_object(
       'repo', ${params.repo}::text,
       'url', ${params.prUrl}::text,
@@ -490,7 +604,10 @@ export class TaskRepository {
         updatedAt: new Date(),
       })
       .where(this.ownedByUs(params.taskId, params.ownerId))
-      .returning({ id: schema.tasks.id });
+      .returning({
+        id: schema.tasks.id,
+        firstTime: sql<boolean>`old.pr_urls IS DISTINCT FROM new.pr_urls`,
+      });
   }
 
   // GitHub webhook PR → task lookup. GIN-indexed. LIMIT 2 (not 1) so that a PR
@@ -517,12 +634,13 @@ export class TaskRepository {
     return row ? mapTaskRow(row) : null;
   }
 
-  // tasks.external_id IS the Linear issue UUID. Replaces findByAgentSessionId.
-  async findByLinearIssueId(issueId: string): Promise<Task | null> {
+  // tasks.external_id is the platform's id (the Linear issue UUID, the API
+  // task key).
+  async findByExternalId(source: TaskSource, externalId: string): Promise<Task | null> {
     const rows = await db
       .select()
       .from(schema.tasks)
-      .where(and(eq(schema.tasks.source, "linear"), eq(schema.tasks.externalId, issueId)))
+      .where(and(eq(schema.tasks.source, source), eq(schema.tasks.externalId, externalId)))
       .limit(1);
     return rows[0] ?? null;
   }
@@ -638,7 +756,7 @@ export class TaskRepository {
 // Raw row shape from db.execute (snake_case).
 type RawTaskRow = {
   id: string;
-  source: "linear" | "api";
+  source: TaskSource;
   external_id: string;
   key: string;
   created_by: string | null;

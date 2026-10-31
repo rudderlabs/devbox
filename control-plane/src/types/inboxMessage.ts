@@ -33,8 +33,8 @@ export type AssignmentPayload = TaskIdentity & {
   title: string;
   description: string | null;
   external_url: string;
-  // Linear agent session id. Matches the row's reply_targets[0].id (a
-  // linear_session target); daemon stamps it as the per-round `--target` for
+  // The delegation id (Linear: the agent session id). Matches the row's
+  // reply_targets[0].id; daemon stamps it as the per-round `--target` for
   // emits.
   target_id: string;
 };
@@ -107,7 +107,7 @@ export type CiResultPayload = TaskIdentity & {
 //   external_id — Upstream identifier (GH comment/review id stringified,
 //                 Linear activity UUID, Linear issue UUID for assignment, the task key for an API assignment;
 //                 a new UUID for an API comment).
-//                 Drives idempotency at CP's `(source, external_id)` unique
+//                 Drives idempotency at CP's `(source, kind, external_id)` unique
 //                 index AND flows through to event reply-target routing.
 //   payload     — Kind-specific body. See the payload types above.
 export type InboxMessage =

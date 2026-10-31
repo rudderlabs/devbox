@@ -8,10 +8,10 @@ import {
   getUserIdByLogin,
 } from "../clients/github";
 import { config } from "../config";
+import type { TaskIntake } from "../integrations/intake";
 import type { GithubWebhooksConfig } from "../integrationsConfig";
 import { logger } from "../logger";
 import type { ReplyTargetSpec } from "../repositories/inbox.repository";
-import type { TaskRepository } from "../repositories/task.repository";
 import type { InboxService } from "../services/inbox.service";
 
 // ──── Parsed event surface ────
@@ -159,7 +159,7 @@ export function extractPrOpenerLogin(eventHeader: string | undefined, payload: u
 }
 
 // Canonical PR URL — built deterministically so it is byte-identical to the
-// html_url the harness stores via pr_opened (findByPrUrl does an exact jsonb
+// html_url the harness stores via pr_opened (findTaskByPrUrl does an exact jsonb
 // containment match). Never trust the payload's html_url formatting.
 function prUrlOf(owner: string, repo: string, prNumber: number): string {
   return `https://github.com/${owner}/${repo}/pull/${prNumber}`;
@@ -341,7 +341,7 @@ export class GitHubWebhookController {
 
   constructor(
     private inboxService: InboxService,
-    private taskRepo: TaskRepository,
+    private intake: Pick<TaskIntake, "findTaskByPrUrl">,
     private readonly settings: GithubWebhooksConfig,
     private readonly now: () => number = Date.now,
   ) {
@@ -453,7 +453,7 @@ export class GitHubWebhookController {
     // trust gate and DB lookup so unrelated org activity doesn't fan out
     // into API calls.
     // workflow_run events have no single PR opener field. The task-lookup
-    // (findByPrUrl) already scopes to bot-opened PRs, so the pre-filter is
+    // (findTaskByPrUrl) already scopes to bot-opened PRs, so the pre-filter is
     // redundant for this event type.
     if (eventHeader !== "workflow_run" && prOpenerLogin !== this.botPayloadLogin) {
       this.reject(c, "not_bot_pr");
@@ -510,7 +510,7 @@ export class GitHubWebhookController {
         // and logs each trip — nothing to surface in the response here.
         for (const pr of parsed.pullRequests) {
           const prUrl = prUrlOf(parsed.owner, parsed.repo, pr.number);
-          const task = await this.taskRepo.findByPrUrl(prUrl);
+          const task = await this.intake.findTaskByPrUrl(prUrl);
           if (!task) continue;
           logger.debug("workflow_run matched a bot-opened task; enqueueing ci_result", {
             taskId: task.id,
@@ -550,7 +550,7 @@ export class GitHubWebhookController {
       // comment / review — task has no status; every comment enqueues an inbox
       // row. The sweep recreates the sandbox from PVC if needed and surfaces a
       // PVC-missing error if the workspace has already been pruned.
-      const task = await this.taskRepo.findByPrUrl(parsed.prUrl);
+      const task = await this.intake.findTaskByPrUrl(parsed.prUrl);
       if (!task) return c.json({ status: "ignored" }, 200);
 
       if (parsed.kind === "comment") {

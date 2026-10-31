@@ -8,6 +8,20 @@
       "when": 1792183649849,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793368811788,
+      "tag": "0001_inbox_source_kind_external",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793368820991,
+      "tag": "0002_tasks_key_lower",
+      "breakpoints": true
     }
   ]
 }

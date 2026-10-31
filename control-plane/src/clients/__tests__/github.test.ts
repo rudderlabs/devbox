@@ -25,8 +25,11 @@ const {
   getUserById,
   getUserIdByLogin,
   parsePrUrl,
+  postIssueComment,
   requestReviewers,
 } = (await import("../githubApi.ts" + "?github-impl-test")) as typeof import("../githubApi");
+const { HttpError, retryable } = await import("../../integrations/http");
+const { RetryableError } = await import("../../integrations/outbound");
 
 // Build a fetch stub that returns each page in `pages` as a 200 JSON response,
 // recording the requested URLs. githubFetch does resp.text() → JSON.parse, so
@@ -349,6 +352,63 @@ describe("requestReviewers", () => {
       } as unknown as Response)) as unknown as typeof fetch;
 
     await expect(requestReviewers("o", "r", 5, ["octocat"])).rejects.toThrow("HTTP 422");
+  });
+});
+
+describe("githubFetch errors and signal", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("a non-2xx is an HttpError with status and Retry-After; the message is unchanged", async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response('{"message":"API rate limit exceeded"}', {
+          status: 429,
+          headers: { "retry-after": "30" },
+        }),
+      )) as unknown as typeof fetch;
+
+    const err = await postIssueComment("o", "r", 1, "hi").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as InstanceType<typeof HttpError>).status).toBe(429);
+    expect((err as InstanceType<typeof HttpError>).retryAfterMs).toBe(30_000);
+    expect((err as Error).message).toBe(
+      'GitHub POST /repos/o/r/issues/1/comments failed: HTTP 429 {"message":"API rate limit exceeded"}',
+    );
+  });
+
+  it("a rate-limit 403 holds like a 429, waiting for x-ratelimit-reset and at least a minute; any other 403 drops", async () => {
+    const classify = async (status: number, headers: Record<string, string>) => {
+      globalThis.fetch = (() =>
+        Promise.resolve(new Response("{}", { status, headers }))) as unknown as typeof fetch;
+      return retryable(await postIssueComment("o", "r", 1, "hi").catch((e: unknown) => e));
+    };
+    const inFiveMinutes = Math.floor(Date.now() / 1000) + 300; // epoch seconds
+    const exhausted = await classify(403, {
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": String(inFiveMinutes),
+    });
+    expect(exhausted).toBeInstanceOf(RetryableError);
+    expect(exhausted?.retryAfterMs).toBeGreaterThan(290_000);
+    expect(exhausted?.retryAfterMs).toBeLessThanOrEqual(300_000);
+    expect((await classify(403, { "retry-after": "30" }))?.retryAfterMs).toBe(30_000);
+    // No Retry-After and no reset ahead: at least a minute, never the next tick.
+    expect((await classify(429, {}))?.retryAfterMs).toBe(60_000);
+    expect(await classify(403, { "x-ratelimit-remaining": "12" })).toBeUndefined();
+  });
+
+  it("passes the caller's signal to fetch", async () => {
+    let seen: AbortSignal | null | undefined;
+    globalThis.fetch = ((_url: string, init?: RequestInit) => {
+      seen = init?.signal;
+      return Promise.resolve(Response.json({ id: 1, html_url: "u" }));
+    }) as unknown as typeof fetch;
+
+    const ac = new AbortController();
+    await postIssueComment("o", "r", 1, "hi", ac.signal);
+    expect(seen).toBe(ac.signal);
   });
 });
 

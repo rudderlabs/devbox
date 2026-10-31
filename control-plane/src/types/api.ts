@@ -2,6 +2,8 @@
 // values, so the devbox CLI can import it without pulling
 // in server modules. Guarded by src/types/__tests__/api.test.ts.
 
+// The task_source enum, as a literal union: this file can't import db/schema.
+// integrations/types.ts checks the two stay equal.
 export type ApiTaskSource = "linear" | "api";
 export type ApiTaskState = "queued" | "running" | "idle" | "failed";
 export type ApiRoundStatus = "pending" | "delivered" | "responded" | "failed";

@@ -25,6 +25,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | controlPlane.resources.limits.memory | string | `"1Gi"` |  |
 | controlPlane.resources.requests.cpu | string | `"100m"` |  |
 | controlPlane.resources.requests.memory | string | `"256Mi"` |  |
+| controlPlane.terminationGracePeriodSeconds | int | `150` | Seconds between SIGTERM and SIGKILL. At least the rest of one task's reconcile (up to 90s when platforms are slow: shutdown stops after the event in hand) plus SHUTDOWN_DRAIN_MS (10s) for in-flight provisions and integration hooks; raise it with SHUTDOWN_DRAIN_MS. |
 | database.existingSecret | string | `""` | With postgresql.enabled false: a Secret with key `DATABASE_URL`. |
 | extraEnv | list | `[]` | Extra control-plane env. Only explicitly allowlisted HARNESS_* settings reach sandboxes; never put a real secret in a forwarded name. |
 | extraManifests | list | `[]` | Extra manifests, rendered with tpl. |
@@ -59,6 +60,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | integrations.linear.enabled | bool | `false` | Turns Linear on (LINEAR_ENABLED). Its secrets go in the integrations Secret. |
 | integrations.slack.channelId | string | `""` | Required when enabled: the Slack channel ID. |
 | integrations.slack.enabled | bool | `false` | Turns Slack on (SLACK_ENABLED). SLACK_BOT_TOKEN goes in the integrations Secret. |
+| integrations.slack.notifySources | list | `[]` | Task sources whose finished tasks post (SLACK_NOTIFY_SOURCES): `linear`, `api`. Empty: `linear`. |
 | ironProxy.clusterIP | string | `""` | Required. A free address in the cluster's Service range; sandboxes use it as their DNS server. `bun run k8s:install` picks one. |
 | ironProxy.extraAllowlist | list | `[]` | Extra allowlist rules ({host, methods, paths}), appended as-is. |
 | ironProxy.image.repository | string | `"ironsh/iron-proxy"` |  |
