@@ -18,9 +18,13 @@ on:
       - main
   pull_request:
 
+# A release on main's HEAD has the same sha as the push build, so a sha key let
+# one cancel the other. Publish runs key on event and ref and never cancel a
+# running build. A newer push replaces only a pending one, so `main` gets the
+# newest commit.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -34,6 +38,7 @@ jobs:
   # no-ops outside a release.
   check-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -43,6 +48,8 @@ jobs:
           egress-policy: audit
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: The git tag must equal the chart's appVersion
         env:

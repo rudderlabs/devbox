@@ -51,6 +51,7 @@ jobs:
   docker-meta:
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       tags: ${{ steps.meta.outputs.tags }}
       arm64_tags: ${{ steps.arm64_meta.outputs.tags }}
@@ -124,6 +125,7 @@ jobs:
             labels: ${{ needs.docker-meta.outputs.amd64_labels }}
             platform: linux/amd64
     runs-on: ${{ matrix.build-config.os }}
+    timeout-minutes: 30
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
@@ -131,6 +133,8 @@ jobs:
           egress-policy: audit
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Login to DockerHub
         if: inputs.push
@@ -192,6 +196,7 @@ jobs:
   create-manifest:
     if: inputs.push
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [docker-build, docker-meta]
     steps:
       - name: Harden the runner (Audit all outbound calls)
