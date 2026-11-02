@@ -76,14 +76,21 @@ export type ReviewPayload = TaskIdentity & {
   created_at: string;
 };
 
+export type CiSource = "workflow_run" | "check_run" | "status";
+
 export type CiResultPayload = TaskIdentity & {
-  // run id stringified — matches reply_targets[0].id
+  // run, check run or status id stringified — matches reply_targets[0].id
   target_id: string;
+  // Absent on rows written before it existed, which are all workflow runs.
+  ci_source?: CiSource;
   workflow_name: string;
   workflow_path: string;
   // "success" | "failure" | "cancelled" | "skipped" | "timed_out" | ...
   conclusion: string;
   run_url: string;
+  // check_run and status only.
+  details_url?: string;
+  summary?: string;
   head_sha: string;
   head_branch: string;
   pr: PrScope;

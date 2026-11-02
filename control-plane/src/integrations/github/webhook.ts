@@ -6,10 +6,17 @@ import {
   fetchOrgMembers,
   getReviewComments,
   getUserIdByLogin,
+  listOpenPrNumbersForCommit,
 } from "../../clients/github";
 import type { Logger, TaskService } from "../types";
 import type { GithubConfig } from "./config";
-import { type CommentSpec, enqueueCiResult, enqueueComment, enqueueReview } from "./rounds";
+import {
+  type CommentSpec,
+  enqueueCiCheckResult,
+  enqueueCiResult,
+  enqueueComment,
+  enqueueReview,
+} from "./rounds";
 
 // ──── Parsed event surface ────
 //
@@ -22,6 +29,8 @@ import { type CommentSpec, enqueueCiResult, enqueueComment, enqueueReview } from
 //    mention gate for reviews runs later in the controller, after fetching
 //    inline comments (see handleWebhook)
 //  - workflow_run (completed, conclusion=failure) → ci_result enqueue
+//  - check_run (completed, conclusion=failure, not from Actions) → ci_result enqueue
+//  - status (state=failure) → ci_result enqueue, via the open PRs at its commit
 //  - pull_request (closed) is intentionally NOT handled here yet.
 export type ParsedGitHubEvent =
   | {
@@ -63,7 +72,43 @@ export type ParsedGitHubEvent =
       pullRequests: Array<{ number: number }>;
       owner: string;
       repo: string;
+    }
+  | {
+      kind: "check_run";
+      checkRunId: number;
+      name: string;
+      conclusion: string;
+      htmlUrl: string;
+      detailsUrl: string;
+      summary: string;
+      headSha: string;
+      headBranch: string;
+      pullRequests: Array<{ number: number }>;
+      owner: string;
+      repo: string;
+    }
+  | {
+      kind: "status";
+      statusId: number;
+      context: string;
+      state: string;
+      targetUrl: string;
+      description: string;
+      sha: string;
+      // A branch whose tip is this commit; "" when none.
+      headBranch: string;
+      owner: string;
+      repo: string;
     };
+
+type CiFailureEvent = Extract<ParsedGitHubEvent, { kind: "workflow_run" | "check_run" | "status" }>;
+
+// Sent by the CI system, so the bot-self and PR-opener filters don't apply.
+const CI_EVENTS: ReadonlySet<string> = new Set(["workflow_run", "check_run", "status"]);
+const isCiEvent = (eventHeader: string | undefined): boolean =>
+  eventHeader !== undefined && CI_EVENTS.has(eventHeader);
+
+const GITHUB_ACTIONS_APP_SLUG = "github-actions";
 
 // Mention trigger, built from the configured bot login: `@<botLogin>`.
 export function mentionRegex(botLogin: string): RegExp {
@@ -84,7 +129,7 @@ function escapeRegExp(v: string): string {
   return v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Pull the login of the actor for the four trigger event types — used for
+// Pull the login of the actor for the trigger event types — used for
 // logging only (login is mutable: GitHub releases a renamed handle after 90
 // days, so a stranger could later own it). Returns "" for any unknown shape.
 export function extractUserLogin(eventHeader: string | undefined, payload: unknown): string {
@@ -100,6 +145,8 @@ export function extractUserLogin(eventHeader: string | undefined, payload: unkno
       // (the PR opener). Use sender so pr-action events check the actual actor.
       return str(rec(p.sender).login);
     case "workflow_run":
+    case "check_run":
+    case "status":
       return str(rec(p.sender).login);
     default:
       return "";
@@ -125,6 +172,8 @@ export function extractUserId(eventHeader: string | undefined, payload: unknown)
       raw = rec(p.sender).id;
       break;
     case "workflow_run":
+    case "check_run":
+    case "status":
       raw = rec(p.sender).id;
       break;
     default:
@@ -162,7 +211,7 @@ function prUrlOf(owner: string, repo: string, prNumber: number): string {
   return `https://github.com/${owner}/${repo}/pull/${prNumber}`;
 }
 
-// Discriminated parser over the four GH event types. Returns null for anything
+// Discriminated parser over the GH event types. Returns null for anything
 // outside the trigger rules (the controller maps null → 200 ignored).
 export function parseGithubEvent(
   eventHeader: string | undefined,
@@ -281,10 +330,7 @@ export function parseGithubEvent(
     if (!owner || !repo || !conclusion || runId <= 0) return null;
     // Only failed runs need agent attention — success/cancelled/skipped are noise.
     if (conclusion !== "failure") return null;
-    const rawPrs = Array.isArray(workflowRun.pull_requests) ? workflowRun.pull_requests : [];
-    const pullRequests = (rawPrs as unknown[])
-      .map((pr) => ({ number: num(rec(pr).number) }))
-      .filter((pr) => Number.isFinite(pr.number) && pr.number > 0);
+    const pullRequests = prNumbersOf(workflowRun.pull_requests);
     return {
       kind: "workflow_run",
       runId,
@@ -301,7 +347,63 @@ export function parseGithubEvent(
     };
   }
 
+  if (eventHeader === "check_run") {
+    if (action !== "completed") return null;
+    const checkRun = rec(p.check_run);
+    // Actions' own check runs arrive as workflow_run, with their logs.
+    if (str(rec(checkRun.app).slug) === GITHUB_ACTIONS_APP_SLUG) return null;
+    const checkRunId = num(checkRun.id);
+    const conclusion = str(checkRun.conclusion);
+    if (!owner || !repo || !Number.isFinite(checkRunId) || checkRunId <= 0) return null;
+    if (conclusion !== "failure") return null;
+    return {
+      kind: "check_run",
+      checkRunId,
+      name: str(checkRun.name),
+      conclusion,
+      htmlUrl: str(checkRun.html_url),
+      detailsUrl: str(checkRun.details_url),
+      summary: str(rec(checkRun.output).title),
+      headSha: str(checkRun.head_sha),
+      headBranch: str(rec(checkRun.check_suite).head_branch),
+      pullRequests: prNumbersOf(checkRun.pull_requests),
+      owner,
+      repo,
+    };
+  }
+
+  if (eventHeader === "status") {
+    // "error" means the CI system itself broke, which no code change fixes.
+    const state = str(p.state);
+    if (state !== "failure") return null;
+    const statusId = num(p.id);
+    const sha = str(p.sha);
+    if (!owner || !repo || !sha || !Number.isFinite(statusId) || statusId <= 0) return null;
+    // `branches` lists any branch containing the commit; only a tip is current.
+    const rawBranches = Array.isArray(p.branches) ? (p.branches as unknown[]) : [];
+    const tip = rawBranches.map(rec).find((b) => str(rec(b.commit).sha) === sha);
+    return {
+      kind: "status",
+      statusId,
+      context: str(p.context),
+      state,
+      targetUrl: str(p.target_url),
+      description: str(p.description),
+      sha,
+      headBranch: str(tip?.name),
+      owner,
+      repo,
+    };
+  }
+
   return null;
+}
+
+function prNumbersOf(raw: unknown): Array<{ number: number }> {
+  const prs = Array.isArray(raw) ? (raw as unknown[]) : [];
+  return prs
+    .map((pr) => ({ number: num(rec(pr).number) }))
+    .filter((pr) => Number.isFinite(pr.number) && pr.number > 0);
 }
 
 // HMAC verify for x-hub-signature-256 (format: "sha256=<hex>").
@@ -325,6 +427,8 @@ export class GitHubWebhookController {
   // broken gate. A resolved value is dropped after TRUSTED_SET_TTL_MS.
   private trustedPromise: Promise<ReadonlySet<number>> | null = null;
   private trustedFetchedAt = 0;
+  // The ciReporters logins resolved to ids, once: ids never change.
+  private ciReportersPromise: Promise<ReadonlySet<number>> | null = null;
 
   private readonly mention: RegExp;
   // Login as it appears in webhook payloads. GitHub Apps surface as
@@ -405,6 +509,133 @@ export class GitHubWebhookController {
     return this.trustedPromise;
   }
 
+  private async enqueueCiFailure(parsed: CiFailureEvent): Promise<void> {
+    switch (parsed.kind) {
+      case "workflow_run":
+        // One workflow_run can list multiple PRs; enqueue per matching task.
+        for (const pr of parsed.pullRequests) {
+          const prUrl = prUrlOf(parsed.owner, parsed.repo, pr.number);
+          const task = await this.tasks.findTaskByPrUrl(prUrl);
+          if (!task) continue;
+          this.log.debug("workflow_run matched a bot-opened task; enqueueing ci_result", {
+            taskId: task.id,
+            taskExternalUrl: task.externalUrl,
+            runId: parsed.runId,
+            prNumber: pr.number,
+          });
+
+          await enqueueCiResult(
+            this.tasks,
+            {
+              task,
+              runId: parsed.runId,
+              runAttempt: parsed.runAttempt,
+              workflowName: parsed.workflowName,
+              workflowPath: parsed.workflowPath,
+              conclusion: parsed.conclusion,
+              runUrl: parsed.runUrl,
+              headSha: parsed.headSha,
+              headBranch: parsed.headBranch,
+              owner: parsed.owner,
+              repo: parsed.repo,
+              prNumber: pr.number,
+              limit: this.settings.ciResultMaxPerTask,
+            },
+            this.log,
+          );
+        }
+        return;
+      case "check_run":
+        for (const pr of parsed.pullRequests) {
+          const prUrl = prUrlOf(parsed.owner, parsed.repo, pr.number);
+          const task = await this.tasks.findTaskByPrUrl(prUrl);
+          if (!task) continue;
+          this.log.debug("check_run matched a bot-opened task; enqueueing ci_result", {
+            taskId: task.id,
+            checkRunId: parsed.checkRunId,
+            prNumber: pr.number,
+          });
+          await enqueueCiCheckResult(
+            this.tasks,
+            {
+              limit: this.settings.ciResultMaxPerTask,
+              task,
+              check: { source: "check_run", checkRunId: parsed.checkRunId },
+              name: parsed.name,
+              conclusion: parsed.conclusion,
+              runUrl: parsed.htmlUrl,
+              detailsUrl: parsed.detailsUrl,
+              summary: parsed.summary,
+              headSha: parsed.headSha,
+              headBranch: parsed.headBranch,
+              owner: parsed.owner,
+              repo: parsed.repo,
+              prNumber: pr.number,
+            },
+            this.log,
+          );
+        }
+        return;
+      case "status":
+        for (const prNumber of await listOpenPrNumbersForCommit(
+          parsed.owner,
+          parsed.repo,
+          parsed.sha,
+        )) {
+          const task = await this.tasks.findTaskByPrUrl(
+            prUrlOf(parsed.owner, parsed.repo, prNumber),
+          );
+          if (!task) continue;
+          this.log.debug("status matched a bot-opened task; enqueueing ci_result", {
+            taskId: task.id,
+            statusId: parsed.statusId,
+            prNumber,
+          });
+          await enqueueCiCheckResult(
+            this.tasks,
+            {
+              limit: this.settings.ciResultMaxPerTask,
+              task,
+              check: { source: "status", statusId: parsed.statusId, context: parsed.context },
+              name: parsed.context,
+              conclusion: parsed.state,
+              runUrl: parsed.targetUrl,
+              detailsUrl: parsed.targetUrl,
+              summary: parsed.description,
+              headSha: parsed.sha,
+              headBranch: parsed.headBranch,
+              owner: parsed.owner,
+              repo: parsed.repo,
+              prNumber,
+            },
+            this.log,
+          );
+        }
+        return;
+    }
+  }
+
+  private getCiReporters(): Promise<ReadonlySet<number>> {
+    if (!this.ciReportersPromise) {
+      this.ciReportersPromise = (async () => {
+        const ids = new Set<number>();
+        for (const login of this.settings.ciReporters) {
+          const id = await getUserIdByLogin(login);
+          if (id === null) {
+            this.log.warn("CI reporter login did not resolve; ignoring it", { login });
+            continue;
+          }
+          ids.add(id);
+        }
+        return ids;
+      })().catch((err) => {
+        this.ciReportersPromise = null;
+        throw err;
+      });
+    }
+    return this.ciReportersPromise;
+  }
+
   async handleWebhook(c: Context): Promise<Response> {
     const body = await c.req.text();
     const signature = c.req.header("x-hub-signature-256");
@@ -447,7 +678,7 @@ export class GitHubWebhookController {
     // push, so its sender IS the bot. That's the case we WANT to handle (CI
     // failed on the bot's PR), not suppress — validWebhookRequest allows it via
     // botUserId. Exempt it here so the self-loop guard doesn't drop CI results.
-    if (eventHeader !== "workflow_run" && userLogin === this.botPayloadLogin) {
+    if (!isCiEvent(eventHeader) && userLogin === this.botPayloadLogin) {
       this.reject(c, "self_event");
       return c.json({ status: "ignored", reason: "bot self-event" }, 200);
     }
@@ -457,10 +688,9 @@ export class GitHubWebhookController {
     // by anyone else are unrelated to harness's work — drop them BEFORE the
     // trust gate and DB lookup so unrelated org activity doesn't fan out
     // into API calls.
-    // workflow_run events have no single PR opener field. The task-lookup
-    // (findTaskByPrUrl) already scopes to bot-opened PRs, so the pre-filter is
-    // redundant for this event type.
-    if (eventHeader !== "workflow_run" && prOpenerLogin !== this.botPayloadLogin) {
+    // CI events have no single PR opener field. The task lookup already scopes
+    // them to bot-opened PRs, so the pre-filter is redundant for them.
+    if (!isCiEvent(eventHeader) && prOpenerLogin !== this.botPayloadLogin) {
       this.reject(c, "not_bot_pr");
       return c.json({ status: "ignored", reason: "PR not opened by bot" }, 200);
     }
@@ -475,9 +705,13 @@ export class GitHubWebhookController {
     // trusted set is loaded lazily (`/orgs/{org}/members` per org, one lookup
     // per user) on the first webhook and cached for TRUSTED_SET_TTL_MS (6 h);
     // concurrent webhooks share one in-flight fetch.
+    // check_run and status count only from the accounts in github.ciReporters,
+    // never from trusted members. Every check on every PR arrives here, so an
+    // unlisted sender is ignored, not refused.
+    const reportEvent = eventHeader === "check_run" || eventHeader === "status";
     let trusted: ReadonlySet<number>;
     try {
-      trusted = await this.getTrusted();
+      trusted = reportEvent ? await this.getCiReporters() : await this.getTrusted();
     } catch (err) {
       // GitHub unreachable / token scope problem. Return 503 so GitHub retries
       // per its delivery policy rather than dropping the event as a hard 403.
@@ -487,6 +721,11 @@ export class GitHubWebhookController {
         message: e.message,
       });
       return c.json({ error: "service unavailable" }, 503);
+    }
+
+    if (reportEvent && !(userId && trusted.has(userId))) {
+      this.reject(c, "not_ci_reporter");
+      return c.json({ status: "ignored", reason: "not a CI reporter" }, 200);
     }
 
     if (!validWebhookRequest(eventHeader, userId, trusted, this.settings.botUserId)) {
@@ -502,45 +741,14 @@ export class GitHubWebhookController {
       return c.json({ status: "ignored", reason: "in-review dedup" }, 200);
     }
 
-    if (parsed.kind === "workflow_run") {
+    if (parsed.kind === "workflow_run" || parsed.kind === "check_run" || parsed.kind === "status") {
       if (!this.settings.ciResultEnabled) {
         return c.json({ status: "ignored", reason: "ci_result disabled" }, 200);
       }
       try {
-        // One workflow_run can list multiple PRs; enqueue per matching task.
         // The loop breaker drops failures past the per-task cap and logs each
         // trip — nothing to surface in the response here.
-        for (const pr of parsed.pullRequests) {
-          const prUrl = prUrlOf(parsed.owner, parsed.repo, pr.number);
-          const task = await this.tasks.findTaskByPrUrl(prUrl);
-          if (!task) continue;
-          this.log.debug("workflow_run matched a bot-opened task; enqueueing ci_result", {
-            taskId: task.id,
-            taskExternalUrl: task.externalUrl,
-            runId: parsed.runId,
-            prNumber: pr.number,
-          });
-
-          await enqueueCiResult(
-            this.tasks,
-            {
-              task,
-              runId: parsed.runId,
-              runAttempt: parsed.runAttempt,
-              workflowName: parsed.workflowName,
-              workflowPath: parsed.workflowPath,
-              conclusion: parsed.conclusion,
-              runUrl: parsed.runUrl,
-              headSha: parsed.headSha,
-              headBranch: parsed.headBranch,
-              owner: parsed.owner,
-              repo: parsed.repo,
-              prNumber: pr.number,
-              limit: this.settings.ciResultMaxPerTask,
-            },
-            this.log,
-          );
-        }
+        await this.enqueueCiFailure(parsed);
         return c.json({ status: "ok" }, 200);
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));

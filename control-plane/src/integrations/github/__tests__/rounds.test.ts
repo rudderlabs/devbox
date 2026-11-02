@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../../db/schema";
 import { logger } from "../../../logger";
 import type { TaskService } from "../../../services/task.service";
-import { enqueueCiResult, enqueueComment, enqueueReview } from "../rounds";
+import { enqueueCiCheckResult, enqueueCiResult, enqueueComment, enqueueReview } from "../rounds";
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -347,6 +347,89 @@ describe("GitHub rounds", () => {
         ],
         limit: 20,
       });
+    });
+
+    const checkParams = (check: Parameters<typeof enqueueCiCheckResult>[1]["check"]) => ({
+      task: apiTask,
+      check,
+      name: check.source === "status" ? check.context : "ci/circleci: test",
+      conclusion: "failure",
+      runUrl: "https://github.com/o/r/runs/555",
+      detailsUrl: "https://circleci.com/gh/o/r/77",
+      summary: "2 tests failed",
+      headSha: "abc",
+      headBranch: "devbox/DBX-API-7-x",
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      limit: 20,
+    });
+
+    it("enqueueCiCheckResult for a check run", async () => {
+      await enqueueCiCheckResult(
+        tasks,
+        checkParams({ source: "check_run", checkRunId: 555 }),
+        logger,
+      );
+      expect(enqueueRound).toHaveBeenCalledWith({
+        task: apiTask,
+        kind: "ci_result",
+        externalId: "check_run:555:7",
+        payload: {
+          target_id: "555",
+          ci_source: "check_run",
+          workflow_name: "ci/circleci: test",
+          workflow_path: "",
+          conclusion: "failure",
+          run_url: "https://github.com/o/r/runs/555",
+          details_url: "https://circleci.com/gh/o/r/77",
+          summary: "2 tests failed",
+          head_sha: "abc",
+          head_branch: "devbox/DBX-API-7-x",
+          pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+        },
+        prUrl: "https://github.com/o/r/pull/7",
+        targets: [
+          {
+            id: "555",
+            spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: 0 },
+          },
+        ],
+        limit: 20,
+      });
+    });
+
+    it("enqueueCiCheckResult keys a status by commit and context", async () => {
+      await enqueueCiCheckResult(
+        tasks,
+        checkParams({ source: "status", statusId: 9001, context: "ci/jenkins" }),
+        logger,
+      );
+      const arg = enqueueRound.mock.calls[0]?.[0] as {
+        externalId: string;
+        payload: Record<string, unknown>;
+        targets: Array<{ id: string }>;
+      };
+      expect(arg.externalId).toBe("status:abc:ci/jenkins:7");
+      expect(arg.payload).toMatchObject({ target_id: "9001", ci_source: "status" });
+      expect(arg.targets[0]?.id).toBe("9001");
+    });
+
+    it("enqueueCiCheckResult logs the loop-breaker line when the cap drops the round", async () => {
+      enqueueRound.mockResolvedValue({ dropped: "limit", count: 20 });
+      const warn = spyOn(logger, "warn").mockImplementation(() => logger);
+      await enqueueCiCheckResult(
+        tasks,
+        checkParams({ source: "check_run", checkRunId: 555 }),
+        logger,
+      );
+      expect(warn).toHaveBeenCalledWith("ci_result loop breaker tripped — dropping CI failure", {
+        taskId: "task-api",
+        seen: 20,
+        max: 20,
+        externalId: "check_run:555:7",
+      });
+      warn.mockRestore();
     });
   });
 });
