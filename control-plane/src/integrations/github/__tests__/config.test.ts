@@ -21,9 +21,18 @@ describe("parseGithubConfig", () => {
       botUserId: 42,
       trustedOrgs: ["acme"],
       trustedUsers: ["alice"],
+      ciReporters: [],
       ciResultEnabled: false,
       ciResultMaxPerTask: 20,
     });
+  });
+
+  it("reads the CI reporters as a list of logins", () => {
+    const out = parseGithubConfig({
+      ...ON,
+      GITHUB_CI_REPORTERS: "circleci-checks[bot], jenkins-ci",
+    });
+    expect(out?.ciReporters).toEqual(["circleci-checks[bot]", "jenkins-ci"]);
   });
 
   it("GITHUB: accepts users alone or orgs alone as the trust setting", () => {
