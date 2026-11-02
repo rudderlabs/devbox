@@ -328,16 +328,22 @@ export async function listOpenPrNumbersForCommit(
   repo: string,
   sha: string,
 ): Promise<number[]> {
-  const { json } = await githubFetch(
-    "GET",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls`,
-  );
-  if (!Array.isArray(json)) return [];
-  return json
-    .map(asRecord)
-    .filter((pr) => pr.state === "open" && asRecord(pr.head).sha === sha)
-    .map((pr) => Number(pr.number))
-    .filter((n) => Number.isInteger(n) && n > 0);
+  const numbers: number[] = [];
+  for (let page = 1; ; page++) {
+    const { json } = await githubFetch(
+      "GET",
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls?per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(json) || json.length === 0) break;
+    for (const pr of json.map(asRecord)) {
+      const n = Number(pr.number);
+      if (pr.state === "open" && asRecord(pr.head).sha === sha && Number.isInteger(n) && n > 0) {
+        numbers.push(n);
+      }
+    }
+    if (json.length < 100) break;
+  }
+  return numbers;
 }
 
 // GET /user/{id} — resolve an immutable numeric GitHub account id to the

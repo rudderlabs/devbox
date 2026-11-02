@@ -532,7 +532,22 @@ describe("listOpenPrNumbersForCommit", () => {
     globalThis.fetch = fn as unknown as typeof fetch;
 
     expect(await listOpenPrNumbersForCommit("o", "r", "abc")).toEqual([7]);
-    expect(calls[0]).toBe("https://api.github.com/repos/o/r/commits/abc/pulls");
+    expect(calls).toEqual([
+      "https://api.github.com/repos/o/r/commits/abc/pulls?per_page=100&page=1",
+    ]);
+  });
+
+  it("reads every page", async () => {
+    const closed = { number: 1, state: "closed", head: { sha: "abc" } };
+    const { fn, calls } = fetchReturning([
+      Array.from({ length: 100 }, () => closed),
+      [{ number: 130, state: "open", head: { sha: "abc" } }],
+    ]);
+    globalThis.fetch = fn as unknown as typeof fetch;
+
+    expect(await listOpenPrNumbersForCommit("o", "r", "abc")).toEqual([130]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBe("https://api.github.com/repos/o/r/commits/abc/pulls?per_page=100&page=2");
   });
 });
 
