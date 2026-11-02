@@ -24,6 +24,7 @@ const {
   getReviewComments,
   getUserById,
   getUserIdByLogin,
+  listOpenPrNumbersForCommit,
   parsePrUrl,
   postIssueComment,
   requestReviewers,
@@ -511,6 +512,27 @@ describe("getUserById", () => {
       } as unknown as Response)) as unknown as typeof fetch;
 
     await expect(getUserById(1)).rejects.toThrow("HTTP 404");
+  });
+});
+
+describe("listOpenPrNumbersForCommit", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("returns the open PRs whose head is the commit", async () => {
+    const { fn, calls } = fetchReturning([
+      [
+        { number: 7, state: "open", head: { sha: "abc" } },
+        { number: 8, state: "closed", head: { sha: "abc" } },
+        { number: 9, state: "open", head: { sha: "newer" } },
+      ],
+    ]);
+    globalThis.fetch = fn as unknown as typeof fetch;
+
+    expect(await listOpenPrNumbersForCommit("o", "r", "abc")).toEqual([7]);
+    expect(calls[0]).toBe("https://api.github.com/repos/o/r/commits/abc/pulls");
   });
 });
 

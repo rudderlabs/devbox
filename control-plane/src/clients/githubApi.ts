@@ -321,6 +321,25 @@ export async function addPrAssignees(
   return { assigned };
 }
 
+// GET /repos/{owner}/{repo}/commits/{sha}/pulls — the open PRs whose head is
+// this commit. A commit status names a commit, not a PR.
+export async function listOpenPrNumbersForCommit(
+  owner: string,
+  repo: string,
+  sha: string,
+): Promise<number[]> {
+  const { json } = await githubFetch(
+    "GET",
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls`,
+  );
+  if (!Array.isArray(json)) return [];
+  return json
+    .map(asRecord)
+    .filter((pr) => pr.state === "open" && asRecord(pr.head).sha === sha)
+    .map((pr) => Number(pr.number))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
 // GET /user/{id} — resolve an immutable numeric GitHub account id to the
 // current login. Ids survive renames and are never re-issued, so this is the
 // rename-proof lookup. Throws on 404 (githubFetch); callers catch.
