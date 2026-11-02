@@ -159,6 +159,9 @@ spec:
             {{- with $github.trustedUsers }}
             - { name: GITHUB_TRUSTED_USERS, value: {{ join "," . | quote }} }
             {{- end }}
+            {{- with $github.ciReporters }}
+            - { name: GITHUB_CI_REPORTERS, value: {{ join "," . | quote }} }
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

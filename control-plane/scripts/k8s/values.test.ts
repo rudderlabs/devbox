@@ -7,7 +7,7 @@ const cfg: DevboxConfig = {
     { url: "https://github.com/acme/widgets.git", branch: "main", owner: "acme", name: "widgets" },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "gpt-test" },
-  github: { trustedOrgs: [], trustedUsers: [] },
+  github: { trustedOrgs: [], trustedUsers: [], ciReporters: [] },
   integrations: {},
 };
 const user: Values = {

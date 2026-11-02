@@ -48,7 +48,7 @@ type BaseDevboxConfig = {
   publicUrl?: string;
   // Who may drive the agent from GitHub (Compose; on k8s these are chart
   // values). Empty lists by default.
-  github: { trustedOrgs: string[]; trustedUsers: string[] };
+  github: { trustedOrgs: string[]; trustedUsers: string[]; ciReporters: string[] };
   // Per-deployment integrations; {} when absent.
   integrations: Integrations;
 };
@@ -231,17 +231,17 @@ function parseTrustList(raw: Record<string, unknown>, key: string): string[] {
 }
 
 function parseGithub(raw: unknown): DevboxConfig["github"] {
-  if (raw === undefined) return { trustedOrgs: [], trustedUsers: [] };
+  if (raw === undefined) return { trustedOrgs: [], trustedUsers: [], ciReporters: [] };
   if (!isObject(raw)) return fail("github: must be an object");
-  const extra = Object.keys(raw).find((k) => k !== "trustedOrgs" && k !== "trustedUsers");
+  const allowed = ["trustedOrgs", "trustedUsers", "ciReporters"];
+  const extra = Object.keys(raw).find((k) => !allowed.includes(k));
   if (extra !== undefined) {
-    return fail(
-      `github: unknown key ${JSON.stringify(extra)} (allowed: trustedOrgs, trustedUsers)`,
-    );
+    return fail(`github: unknown key ${JSON.stringify(extra)} (allowed: ${allowed.join(", ")})`);
   }
   return {
     trustedOrgs: parseTrustList(raw, "trustedOrgs"),
     trustedUsers: parseTrustList(raw, "trustedUsers"),
+    ciReporters: parseTrustList(raw, "ciReporters"),
   };
 }
 

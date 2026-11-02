@@ -31,6 +31,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | extraManifests | list | `[]` | Extra manifests, rendered with tpl. |
 | git.email | string | `"devbox@users.noreply.github.com"` |  |
 | git.name | string | `"devbox"` | Commit identity for the agent's commits. `bun run k8s:install` sets the GitHub user's. |
+| github.ciReporters | list | `[]` | Logins whose check runs and commit statuses reach a task as CI results: `<app-slug>[bot]` for a CI App, or a service account's login. |
 | github.trustedOrgs | list | `[]` | GitHub orgs whose members may drive devbox. Required with trustedUsers (either) when the GitHub App is enabled. |
 | github.trustedUsers | list | `[]` | GitHub users who may drive devbox. Required with trustedOrgs (either) when the GitHub App is enabled. |
 | images.controlPlane | string | `"rudderlabs/devbox-control-plane"` | Control-plane image repository. Required; the default is the published image. |

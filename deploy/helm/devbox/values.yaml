@@ -140,6 +140,8 @@ github:
   trustedOrgs: []
   # -- GitHub users who may drive devbox. Required with trustedOrgs (either) when the GitHub App is enabled.
   trustedUsers: []
+  # -- Logins whose check runs and commit statuses reach a task as CI results: `<app-slug>[bot]` for a CI App, or a service account's login.
+  ciReporters: []
 
 controlPlane:
   # -- More than one adds a PodDisruptionBudget.
