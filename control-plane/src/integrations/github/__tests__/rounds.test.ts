@@ -399,7 +399,7 @@ describe("GitHub rounds", () => {
       });
     });
 
-    it("enqueueCiCheckResult keys a status by commit and context", async () => {
+    it("enqueueCiCheckResult keys a status by repo, commit and context", async () => {
       await enqueueCiCheckResult(
         tasks,
         checkParams({ source: "status", statusId: 9001, context: "ci/jenkins" }),
@@ -410,7 +410,7 @@ describe("GitHub rounds", () => {
         payload: Record<string, unknown>;
         targets: Array<{ id: string }>;
       };
-      expect(arg.externalId).toBe("status:abc:ci/jenkins:7");
+      expect(arg.externalId).toBe("status:o/r:abc:ci/jenkins:7");
       expect(arg.payload).toMatchObject({ target_id: "9001", ci_source: "status" });
       expect(arg.targets[0]?.id).toBe("9001");
     });

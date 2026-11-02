@@ -1236,7 +1236,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(enqueueRound.mock.calls[0]?.[0]).toEqual({
       task: linearTask,
       kind: "ci_result",
-      externalId: "status:abc123:ci/jenkins:42",
+      externalId: "status:o/r:abc123:ci/jenkins:42",
       payload: {
         target_id: "9001",
         ci_source: "status",
