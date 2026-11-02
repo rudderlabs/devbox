@@ -137,6 +137,7 @@ const GITHUB_OFF = {
   GITHUB_CI_RESULT_ENABLED: "",
   GITHUB_TRUSTED_ORGS: "",
   GITHUB_TRUSTED_USERS: "",
+  GITHUB_CI_REPORTERS: "",
 };
 
 describe("linearComposeEnv", () => {
@@ -435,7 +436,11 @@ const twoRepos = [
   { url: "https://github.com/example-org/example-repo.git" },
   { url: "https://github.com/example-org/other-repo.git" },
 ];
-const trust = { trustedOrgs: ["example-org"], trustedUsers: ["alice", "bob"] };
+const trust = {
+  trustedOrgs: ["example-org"],
+  trustedUsers: ["alice", "bob"],
+  ciReporters: ["circleci-checks[bot]"],
+};
 const withApp = (githubApp: Record<string, unknown>) =>
   parseConfig({ ...raw, repos: twoRepos, github: trust, integrations: { githubApp } });
 
@@ -448,6 +453,7 @@ const WEBHOOKS = {
   GITHUB_CI_RESULT_ENABLED: "true",
   GITHUB_TRUSTED_ORGS: "example-org",
   GITHUB_TRUSTED_USERS: "alice,bob",
+  GITHUB_CI_REPORTERS: "circleci-checks[bot]",
 };
 
 describe("githubComposeEnv", () => {
@@ -463,6 +469,7 @@ describe("githubComposeEnv", () => {
       ...GITHUB_OFF,
       GITHUB_TRUSTED_ORGS: "example-org",
       GITHUB_TRUSTED_USERS: "alice,bob",
+      GITHUB_CI_REPORTERS: "circleci-checks[bot]",
     });
   });
 
@@ -753,6 +760,7 @@ describe("docker-compose.yml", () => {
       "GITHUB_CI_RESULT_MAX_PER_TASK",
       "GITHUB_TRUSTED_ORGS",
       "GITHUB_TRUSTED_USERS",
+      "GITHUB_CI_REPORTERS",
     ]) {
       expect(env[name]).toBe(empty(name));
     }

@@ -55,7 +55,7 @@ const config = (): DevboxConfig => ({
     },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "m" },
-  github: { trustedOrgs: [], trustedUsers: [] },
+  github: { trustedOrgs: [], trustedUsers: [], ciReporters: [] },
   integrations: {},
 });
 const target = (values: Values = {}): Target => ({ context: "kind-devbox", values });

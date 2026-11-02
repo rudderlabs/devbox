@@ -13,7 +13,7 @@ const cfg: DevboxConfig = {
     },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "gpt-test" },
-  github: { trustedOrgs: [], trustedUsers: [] },
+  github: { trustedOrgs: [], trustedUsers: [], ciReporters: [] },
   integrations: {},
 };
 const user: Values = {

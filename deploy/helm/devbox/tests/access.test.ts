@@ -225,7 +225,7 @@ describe("LLM env", () => {
 
 describe("integration env", () => {
   const INTEGRATION =
-    /^(LINEAR_|SLACK_|GITHUB_(WEBHOOKS_ENABLED|BOT_|TRUSTED_|CI_RESULT_ENABLED)|GITLAB_(WEBHOOKS_ENABLED|BOT_|TRUSTED_|CI_RESULT_ENABLED|TOKEN_FILE))/;
+    /^(LINEAR_|SLACK_|GITHUB_(WEBHOOKS_ENABLED|BOT_|TRUSTED_|CI_RESULT_ENABLED|CI_REPORTERS)|GITLAB_(WEBHOOKS_ENABLED|BOT_|TRUSTED_|CI_RESULT_ENABLED|TOKEN_FILE))/;
 
   // The integration env of the control plane container, as a name -> value map.
   async function envOf(files: string[], set: string[] = [], setJson: string[] = []): Promise<Record<string, string>> {
@@ -335,6 +335,12 @@ describe("integration env", () => {
       mountPath: "/var/run/devbox/gitlab",
       readOnly: true,
     });
+  });
+
+  it("CI reporters render comma-joined", async () => {
+    expect(
+      await envOf([], [], ['github.ciReporters=["circleci-checks[bot]","jenkins-ci"]']),
+    ).toEqual({ GITHUB_CI_REPORTERS: "circleci-checks[bot],jenkins-ci" });
   });
 
   it("defaults render none of these", async () => {

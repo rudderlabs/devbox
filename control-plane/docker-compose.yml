@@ -203,6 +203,7 @@ services:
       GITLAB_CI_RESULT_MAX_PER_TASK: ${GITLAB_CI_RESULT_MAX_PER_TASK:-}
       GITHUB_TRUSTED_ORGS: ${GITHUB_TRUSTED_ORGS:-}
       GITHUB_TRUSTED_USERS: ${GITHUB_TRUSTED_USERS:-}
+      GITHUB_CI_REPORTERS: ${GITHUB_CI_REPORTERS:-}
       # GitLab, on when devbox.config.json has `gitlab.baseUrl`: `bun run up`
       # sets the instance and token (the control plane's own calls: replies,
       # member lookups), and the webhook settings only with
