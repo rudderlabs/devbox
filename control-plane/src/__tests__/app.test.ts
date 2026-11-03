@@ -16,19 +16,15 @@ describe("createIntegrations", () => {
   it("enables each integration from its own setting", () => {
     const enabled = (cfg: Cfg) =>
       Object.fromEntries(Object.values(registry(cfg)).map((i) => [i.name, i.enabled]));
-    const off = { api: { enabled: false }, github: {} };
-    expect(enabled(off)).toEqual({ linear: false, api: false, github: false });
-    expect(enabled({ ...off, linear: {} })).toEqual({ linear: true, api: false, github: false });
-    expect(enabled({ ...off, api: { enabled: true } })).toEqual({
-      linear: false,
-      api: true,
-      github: false,
-    });
-    expect(enabled({ ...off, github: { webhooks: {} } })).toEqual({
-      linear: false,
-      api: false,
-      github: true,
-    });
+    const off = { api: { enabled: false }, github: {}, gitlab: { ciResultEnabled: true } };
+    const allOff = { linear: false, api: false, github: false, gitlab: false };
+    expect(enabled(off)).toEqual(allOff);
+    expect(enabled({ ...off, linear: {} })).toEqual({ ...allOff, linear: true });
+    expect(enabled({ ...off, api: { enabled: true } })).toEqual({ ...allOff, api: true });
+    expect(enabled({ ...off, github: { webhooks: {} } })).toEqual({ ...allOff, github: true });
+    expect(
+      enabled({ ...off, gitlab: { webhooks: { botUsername: "bot" }, ciResultEnabled: true } }),
+    ).toEqual({ ...allOff, gitlab: true });
   });
 });
 
@@ -49,7 +45,16 @@ describe("statusesWithHolds", () => {
     const github = { token: { ok: true }, webhooks: { enabled: true, lastWebhookAt: null } };
 
     const statuses = statusesWithHolds(
-      registry({ linear: {}, api: { enabled: true }, github: { webhooks: {} } }, linear, github),
+      registry(
+        {
+          linear: {},
+          api: { enabled: true },
+          github: { webhooks: {} },
+          gitlab: { ciResultEnabled: false },
+        },
+        linear,
+        github,
+      ),
       holds,
     );
 
@@ -60,5 +65,11 @@ describe("statusesWithHolds", () => {
       holds: { heldTasks: 2, oldestHoldAgeMs: 5_000 },
     });
     expect(await statuses.api.status()).toEqual({ enabled: true, holds: none });
+    // GitLab off: no token configured (config is mocked empty), webhooks off.
+    expect(await statuses.gitlab.status()).toEqual({
+      token: { configured: false, source: null, readAt: null, lastError: null },
+      webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
+      holds: none,
+    });
   });
 });

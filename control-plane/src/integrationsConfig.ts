@@ -1,4 +1,4 @@
-// Linear, Slack, and GitHub settings. Pure: takes the env, so it is
+// Linear, Slack, GitHub and GitLab settings. Pure: takes the env, so it is
 // testable without mocking ../config. config.ts calls these at startup; a bad
 // combination fails boot with an error that names what is missing.
 
@@ -32,6 +32,33 @@ export type GithubWebhooksConfig = {
   trustedUsers: string[];
 };
 
+export type GitlabWebhooksConfig = {
+  // The webhook's signing token (`whsec_…`, GitLab 19.0+): deliveries carry
+  // webhook-id, webhook-timestamp and webhook-signature (Standard Webhooks,
+  // HMAC-SHA256). Preferred.
+  signingToken: string | undefined;
+  // The legacy secret token, compared with X-Gitlab-Token. Accepted on a
+  // delivery without a signature only when it is configured.
+  secretToken: string | undefined;
+  // The user the GitLab token belongs to (a group or project access token's
+  // bot user). Its own notes are skipped; its pipelines are the ones wanted.
+  botUserId: number;
+  // Its username: `@<username>` is the trigger.
+  botUsername: string;
+  trustedGroups: string[];
+  trustedUsers: string[];
+};
+
+export type GitlabIntegrationConfig = {
+  // Defined only when GITLAB_WEBHOOKS_ENABLED=true.
+  webhooks: GitlabWebhooksConfig | undefined;
+  // Groups whose members, and usernames of users, whose notes the agent
+  // trusts. Parsed whether or not webhooks are on: forwarded to the sandbox
+  // for merge-request discussion trust.
+  trustedGroups: string[];
+  trustedUsers: string[];
+};
+
 export type GithubIntegrationConfig = {
   // Defined only when GITHUB_WEBHOOKS_ENABLED=true.
   webhooks: GithubWebhooksConfig | undefined;
@@ -54,7 +81,11 @@ export function parseTrustList(raw: string | undefined): string[] {
   return (raw ?? "").split(/[\s,]+/).filter(Boolean);
 }
 
-type SwitchName = "LINEAR_ENABLED" | "SLACK_ENABLED" | "GITHUB_WEBHOOKS_ENABLED";
+type SwitchName =
+  | "LINEAR_ENABLED"
+  | "SLACK_ENABLED"
+  | "GITHUB_WEBHOOKS_ENABLED"
+  | "GITLAB_WEBHOOKS_ENABLED";
 
 // Each integration has an explicit switch. Exactly "true" turns it
 // on; unset, empty or "false" is off; anything else fails startup. Switch
@@ -136,6 +167,51 @@ export function parseGithubConfig(env: Env): GithubIntegrationConfig {
       trustedUsers,
     },
     trustedOrgs,
+    trustedUsers,
+  };
+}
+
+// GitLab webhooks are on only with GITLAB_WEBHOOKS_ENABLED=true; then
+// GITLAB_BASE_URL (sandboxConfig.ts validates it), the bot identity, a trust
+// list and one of the two webhook tokens are required.
+export function parseGitlabConfig(env: Env): GitlabIntegrationConfig {
+  const trustedGroups = parseTrustList(env.GITLAB_TRUSTED_GROUPS);
+  const trustedUsers = parseTrustList(env.GITLAB_TRUSTED_USERS);
+  if (!parseSwitch(env, "GITLAB_WEBHOOKS_ENABLED")) {
+    return { webhooks: undefined, trustedGroups, trustedUsers };
+  }
+  const signingToken = present(env, "GITLAB_WEBHOOK_SIGNING_TOKEN");
+  const secretToken = present(env, "GITLAB_WEBHOOK_SECRET");
+  const botUsername = present(env, "GITLAB_BOT_USERNAME");
+  const rawBotUserId = present(env, "GITLAB_BOT_USER_ID");
+  const missing: string[] = [];
+  if (!present(env, "GITLAB_BASE_URL")) missing.push("GITLAB_BASE_URL");
+  if (!signingToken && !secretToken) {
+    missing.push("GITLAB_WEBHOOK_SIGNING_TOKEN or GITLAB_WEBHOOK_SECRET");
+  }
+  if (!botUsername) missing.push("GITLAB_BOT_USERNAME");
+  if (!rawBotUserId) missing.push("GITLAB_BOT_USER_ID");
+  if (trustedGroups.length === 0 && trustedUsers.length === 0) {
+    missing.push("GITLAB_TRUSTED_GROUPS or GITLAB_TRUSTED_USERS");
+  }
+  if (missing.length > 0) throw missingError("GITLAB_WEBHOOKS_ENABLED", missing);
+  if (signingToken && !signingToken.startsWith("whsec_")) {
+    throw new Error("GITLAB_WEBHOOK_SIGNING_TOKEN must start with whsec_");
+  }
+  const botUserId = Number(rawBotUserId);
+  if (!Number.isFinite(botUserId) || botUserId <= 0) {
+    throw new Error("GITLAB_BOT_USER_ID must be a positive number");
+  }
+  return {
+    webhooks: {
+      signingToken,
+      secretToken,
+      botUserId,
+      botUsername: botUsername as string,
+      trustedGroups,
+      trustedUsers,
+    },
+    trustedGroups,
     trustedUsers,
   };
 }

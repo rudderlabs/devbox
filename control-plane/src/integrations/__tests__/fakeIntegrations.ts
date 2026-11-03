@@ -18,6 +18,7 @@ export function fakeIntegrations<
     linear: noop("linear"),
     api: noop("api"),
     github: noop("github"),
+    gitlab: noop("gitlab"),
   };
   return { ...defaults, ...overrides };
 }

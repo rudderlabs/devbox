@@ -226,6 +226,92 @@ export class InboxService {
     });
   }
 
+  // GitLab Note Hook on a merge request the agent opened — one row, one
+  // reply target (the note's thread). Idempotent on the note id.
+  async enqueueGitlabComment(params: {
+    task: Pick<Task, "id" | "key">;
+    noteId: number;
+    body: string;
+    spec: Extract<ReplyTargetSpec, { kind: "mr_note" | "mr_diff_note" }>;
+    // path_with_namespace; its last segment is the checkout directory name.
+    project: string;
+    prUrl: string;
+    // ISO-8601 creation time of the note; "" when unknown.
+    createdAt: string;
+  }): Promise<void> {
+    const externalId = String(params.noteId);
+    await this.intake.followUp({
+      task: params.task,
+      message: {
+        source: "gitlab",
+        kind: "comment",
+        external_id: externalId,
+        payload: {
+          target_id: externalId, // matches reply_targets[0].id
+          body: params.body,
+          pr: { repo: repoName(params.project), pr_url: params.prUrl },
+          created_at: params.createdAt,
+        },
+      },
+      targets: [{ id: externalId, spec: params.spec }],
+      prUrl: params.prUrl,
+    });
+  }
+
+  // GitLab Pipeline Hook, status failed — one row per task whose merge request
+  // URL matches. external_id includes the merge request iid (a branch pipeline
+  // can belong to several); a retried pipeline is a new pipeline id. followUp
+  // applies the per-task loop breaker.
+  async enqueueGitlabCiResult(params: {
+    task: Pick<Task, "id" | "key">;
+    pipelineId: number;
+    name: string;
+    status: string;
+    url: string;
+    sha: string;
+    ref: string;
+    projectId: number;
+    project: string;
+    mrIid: number;
+    prUrl: string;
+  }): Promise<void> {
+    const pipelineIdStr = String(params.pipelineId);
+    const externalId = `pipeline:${params.pipelineId}:${params.mrIid}`;
+    await this.intake.followUp({
+      task: params.task,
+      message: {
+        source: "gitlab",
+        kind: "ci_result",
+        external_id: externalId,
+        payload: {
+          target_id: pipelineIdStr,
+          workflow_name: params.name,
+          workflow_path: ".gitlab-ci.yml",
+          // GitLab says "failed"; the harness contract says "failure".
+          conclusion: params.status === "failed" ? "failure" : params.status,
+          run_url: params.url,
+          head_sha: params.sha,
+          head_branch: params.ref,
+          pr: { repo: repoName(params.project), pr_url: params.prUrl },
+        },
+      },
+      targets: [
+        {
+          id: pipelineIdStr,
+          spec: {
+            kind: "mr_note",
+            projectId: params.projectId,
+            project: params.project,
+            mrIid: params.mrIid,
+            // noteId 0 is the sentinel for "post a new note".
+            noteId: 0,
+          },
+        },
+      ],
+      prUrl: params.prUrl,
+    });
+  }
+
   // ──── Sweep ────
 
   // Delivers the task's pending inbox rows to its LIVE sandbox, then marks each
@@ -338,4 +424,10 @@ function toInboxMessage(row: InboxRow): InboxMessage {
     external_id: row.external_id,
     payload: row.payload,
   } as InboxMessage;
+}
+
+// The checkout directory of a GitLab project: the last segment of its
+// path_with_namespace (repos clone to /workspace/<name>).
+function repoName(projectPath: string): string {
+  return projectPath.split("/").filter(Boolean).at(-1) ?? projectPath;
 }

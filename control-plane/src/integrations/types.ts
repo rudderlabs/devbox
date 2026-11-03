@@ -12,7 +12,7 @@ type Logger = typeof logger;
 // The sources a task can have (the task_source enum).
 export type TaskSource = (typeof taskSource.enumValues)[number];
 // One per task/round source (InboxSource).
-export type IntegrationName = "linear" | "api" | "github";
+export type IntegrationName = "linear" | "api" | "github" | "gitlab";
 
 // Compile-time checks: the literal unions kept where db/schema can't be
 // imported (types/api.ts is bundled into the CLI) match what they mirror, so a

@@ -65,6 +65,8 @@ const TARGET_OWNER: Record<ReplyTargetSpec["kind"], IntegrationName> = {
   issue_comment: "github",
   review_comment: "github",
   review_body: "github",
+  mr_note: "gitlab",
+  mr_diff_note: "gitlab",
 };
 
 export class Intake implements TaskIntake {

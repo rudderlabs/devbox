@@ -7,7 +7,7 @@
 // layer), which extends InboxMessage with status/lease/timestamps.
 
 export type InboxKind = "assignment" | "comment" | "review" | "ci_result";
-export type InboxSource = "linear" | "github" | "api";
+export type InboxSource = "linear" | "github" | "api" | "gitlab";
 
 // Identity CP stamps on every work payload. Both values are tasks columns
 // (tasks.id, tasks.key); nothing is parsed from URLs.
@@ -16,9 +16,10 @@ export type TaskIdentity = {
   task_key: string;
 };
 
-// PR scope for GitHub-sourced rounds. The daemon's prompt uses repo to pick
-// the right checkout for multi-repo tasks. null for Linear comments, which
-// live on the agent session rather than any PR.
+// PR scope for code-host rounds (GitHub, and GitLab, where the "PR" is a merge
+// request and pr_url its web URL). The daemon's prompt uses repo to pick the
+// right checkout for multi-repo tasks. null for Linear comments, which live on
+// the agent session rather than any PR.
 export type PrScope = {
   repo: string;
   pr_url: string;
@@ -40,8 +41,8 @@ export type AssignmentPayload = TaskIdentity & {
 };
 
 export type CommentPayload = TaskIdentity & {
-  // GH comment id stringified, or Linear activity UUID. Matches the row's
-  // single reply_targets[0].id.
+  // GH comment id or GitLab note id stringified, or Linear activity UUID.
+  // Matches the row's single reply_targets[0].id.
   target_id: string;
   body: string;
   // null for linear-sourced (agent-session) comments; PrScope for github.
@@ -77,8 +78,9 @@ export type ReviewPayload = TaskIdentity & {
 };
 
 export type CiResultPayload = TaskIdentity & {
-  // run id stringified — matches reply_targets[0].id
+  // run id (GitHub) or pipeline id (GitLab) stringified — matches reply_targets[0].id
   target_id: string;
+  // GitLab: the pipeline's name, else "Pipeline #<iid>"; workflow_path is ".gitlab-ci.yml".
   workflow_name: string;
   workflow_path: string;
   // "success" | "failure" | "cancelled" | "skipped" | "timed_out" | ...
@@ -156,6 +158,22 @@ export type InboxMessage =
   | {
       id: string;
       source: "github";
+      kind: "ci_result";
+      external_id: string;
+      payload: CiResultPayload;
+    }
+  // GitLab has no batched "review submitted" event: each merge request note
+  // arrives on its own, so GitLab rounds are comments and CI results only.
+  | {
+      id: string;
+      source: "gitlab";
+      kind: "comment";
+      external_id: string;
+      payload: CommentPayload;
+    }
+  | {
+      id: string;
+      source: "gitlab";
       kind: "ci_result";
       external_id: string;
       payload: CiResultPayload;

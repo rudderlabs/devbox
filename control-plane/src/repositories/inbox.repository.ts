@@ -57,6 +57,28 @@ export type ReplyTargetSpec =
       startLine?: number;
     }
   | { kind: "review_body"; owner: string; repo: string; prNumber: number; reviewId: number }
+  // GitLab: a note on a merge request. The reply threads under the note's
+  // discussion (resolved at send time when discussionId is unknown). noteId 0
+  // is the sentinel for "post a new note": a CI result answers no note.
+  | {
+      kind: "mr_note";
+      projectId: number;
+      project: string; // path_with_namespace, for logs and URLs
+      mrIid: number;
+      noteId: number;
+      discussionId?: string;
+    }
+  // GitLab: an inline (diff) note; the reply goes into its discussion thread.
+  | {
+      kind: "mr_diff_note";
+      projectId: number;
+      project: string;
+      mrIid: number;
+      noteId: number;
+      discussionId: string;
+      path: string;
+      line: number;
+    }
   | { kind: "linear_session" }
   // API tasks: replies are delivered nowhere — the task_events log is the channel.
   | { kind: "api_session" };

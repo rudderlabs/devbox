@@ -554,6 +554,104 @@ describe("InboxService", () => {
     });
   });
 
+  describe("enqueueGitlabComment", () => {
+    it("appends a source='gitlab' comment row routed to the note's thread", async () => {
+      await service.enqueueGitlabComment({
+        task: makeTask(),
+        noteId: 901,
+        body: "@devbox-bot fix this",
+        spec: {
+          kind: "mr_diff_note",
+          projectId: 55,
+          project: "platform/backend/api",
+          mrIid: 3,
+          noteId: 901,
+          discussionId: "abc",
+          path: "app.py",
+          line: 12,
+        },
+        project: "platform/backend/api",
+        prUrl: "https://gitlab.example.com/platform/backend/api/-/merge_requests/3",
+        createdAt: "2026-11-03T10:00:00Z",
+      });
+
+      const arg = followUp.mock.calls[0]?.[0] as {
+        message: {
+          source: string;
+          kind: string;
+          external_id: string;
+          payload: Record<string, unknown>;
+        };
+        targets: Array<{ id: string; spec: { kind: string } }>;
+        prUrl: string;
+      };
+      expect(arg.message.source).toBe("gitlab");
+      expect(arg.message.kind).toBe("comment");
+      expect(arg.message.external_id).toBe("901");
+      expect(arg.message.payload).toEqual({
+        target_id: "901",
+        body: "@devbox-bot fix this",
+        // The checkout directory is the project name, not its namespace path.
+        pr: {
+          repo: "api",
+          pr_url: "https://gitlab.example.com/platform/backend/api/-/merge_requests/3",
+        },
+        created_at: "2026-11-03T10:00:00Z",
+      });
+      expect(arg.targets).toEqual([
+        { id: "901", spec: expect.objectContaining({ kind: "mr_diff_note" }) },
+      ]);
+      expect(arg.prUrl).toBe("https://gitlab.example.com/platform/backend/api/-/merge_requests/3");
+    });
+  });
+
+  describe("enqueueGitlabCiResult", () => {
+    it("appends a source='gitlab' ci_result row whose target posts a new note", async () => {
+      await service.enqueueGitlabCiResult({
+        task: makeTask(),
+        pipelineId: 7001,
+        name: "Pipeline #12",
+        status: "failed",
+        url: "https://gitlab.example.com/platform/api/-/pipelines/7001",
+        sha: "abc123",
+        ref: "devbox/XYZ-1-fix",
+        projectId: 55,
+        project: "platform/api",
+        mrIid: 3,
+        prUrl: "https://gitlab.example.com/platform/api/-/merge_requests/3",
+      });
+
+      const arg = followUp.mock.calls[0]?.[0] as {
+        message: {
+          source: string;
+          kind: string;
+          external_id: string;
+          payload: Record<string, unknown>;
+        };
+        targets: Array<{ id: string; spec: Record<string, unknown> }>;
+      };
+      expect(arg.message.source).toBe("gitlab");
+      expect(arg.message.kind).toBe("ci_result");
+      expect(arg.message.external_id).toBe("pipeline:7001:3");
+      expect(arg.message.payload).toEqual({
+        target_id: "7001",
+        workflow_name: "Pipeline #12",
+        workflow_path: ".gitlab-ci.yml",
+        conclusion: "failure",
+        run_url: "https://gitlab.example.com/platform/api/-/pipelines/7001",
+        head_sha: "abc123",
+        head_branch: "devbox/XYZ-1-fix",
+        pr: { repo: "api", pr_url: "https://gitlab.example.com/platform/api/-/merge_requests/3" },
+      });
+      expect(arg.targets).toEqual([
+        {
+          id: "7001",
+          spec: { kind: "mr_note", projectId: 55, project: "platform/api", mrIid: 3, noteId: 0 },
+        },
+      ]);
+    });
+  });
+
   describe("enqueueReview", () => {
     it("appends a kind='review' row with N+1 reply targets", async () => {
       await service.enqueueReview({

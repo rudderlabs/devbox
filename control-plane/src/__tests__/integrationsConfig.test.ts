@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   parseGithubConfig,
+  parseGitlabConfig,
   parseLinearConfig,
   parseSlackConfig,
   parseSwitch,
@@ -242,5 +243,82 @@ describe("parseGithubConfig", () => {
         GITHUB_BOT_USER_ID: "abc",
       }),
     ).toThrow(new Error("GITHUB_BOT_USER_ID must be a number"));
+  });
+});
+
+const GITLAB_ENV = {
+  GITLAB_BASE_URL: "https://gitlab.example.com",
+  GITLAB_WEBHOOK_SIGNING_TOKEN: "whsec_c2VjcmV0",
+  GITLAB_BOT_USERNAME: "devbox-bot",
+  GITLAB_BOT_USER_ID: "42",
+  GITLAB_TRUSTED_USERS: "alice",
+};
+
+describe("parseGitlabConfig", () => {
+  it("has no webhooks and empty trust lists when nothing is set", () => {
+    expect(parseGitlabConfig({})).toEqual({
+      webhooks: undefined,
+      trustedGroups: [],
+      trustedUsers: [],
+    });
+  });
+
+  it("GITLAB: on with every setting", () => {
+    expect(
+      parseGitlabConfig({
+        ...GITLAB_ENV,
+        GITLAB_WEBHOOKS_ENABLED: "true",
+        GITLAB_WEBHOOK_SECRET: "legacy",
+        GITLAB_TRUSTED_GROUPS: "platform/backend",
+      }),
+    ).toEqual({
+      webhooks: {
+        signingToken: "whsec_c2VjcmV0",
+        secretToken: "legacy",
+        botUserId: 42,
+        botUsername: "devbox-bot",
+        trustedGroups: ["platform/backend"],
+        trustedUsers: ["alice"],
+      },
+      trustedGroups: ["platform/backend"],
+      trustedUsers: ["alice"],
+    });
+  });
+
+  it("GITLAB: either webhook token is enough", () => {
+    const { GITLAB_WEBHOOK_SIGNING_TOKEN: _s, ...noSigning } = GITLAB_ENV;
+    const on = { GITLAB_WEBHOOKS_ENABLED: "true" };
+    expect(
+      parseGitlabConfig({ ...on, ...noSigning, GITLAB_WEBHOOK_SECRET: "legacy" }).webhooks,
+    ).toMatchObject({ signingToken: undefined, secretToken: "legacy" });
+    expect(parseGitlabConfig({ ...on, ...GITLAB_ENV }).webhooks).toMatchObject({
+      signingToken: "whsec_c2VjcmV0",
+      secretToken: undefined,
+    });
+  });
+
+  it("GITLAB: on with a setting missing", () => {
+    expect(() => parseGitlabConfig({ GITLAB_WEBHOOKS_ENABLED: "true" })).toThrow(
+      new Error(
+        "GITLAB_WEBHOOKS_ENABLED is true but these are missing: GITLAB_BASE_URL, GITLAB_WEBHOOK_SIGNING_TOKEN or GITLAB_WEBHOOK_SECRET, GITLAB_BOT_USERNAME, GITLAB_BOT_USER_ID, GITLAB_TRUSTED_GROUPS or GITLAB_TRUSTED_USERS",
+      ),
+    );
+  });
+
+  it("GITLAB: off ignores its settings but reads the trust lists", () => {
+    const all = { ...GITLAB_ENV, GITLAB_TRUSTED_GROUPS: "platform" };
+    const expected = { webhooks: undefined, trustedGroups: ["platform"], trustedUsers: ["alice"] };
+    expect(parseGitlabConfig(all)).toEqual(expected);
+    expect(parseGitlabConfig({ ...all, GITLAB_WEBHOOKS_ENABLED: "false" })).toEqual(expected);
+  });
+
+  it("GITLAB: rejects a signing token without the whsec_ prefix and a bad bot id", () => {
+    const on = { ...GITLAB_ENV, GITLAB_WEBHOOKS_ENABLED: "true" };
+    expect(() => parseGitlabConfig({ ...on, GITLAB_WEBHOOK_SIGNING_TOKEN: "c2VjcmV0" })).toThrow(
+      new Error("GITLAB_WEBHOOK_SIGNING_TOKEN must start with whsec_"),
+    );
+    expect(() => parseGitlabConfig({ ...on, GITLAB_BOT_USER_ID: "abc" })).toThrow(
+      new Error("GITLAB_BOT_USER_ID must be a positive number"),
+    );
   });
 });

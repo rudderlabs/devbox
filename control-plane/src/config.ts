@@ -1,7 +1,13 @@
 import { parseApiConfig } from "./apiConfig";
 import { parseGithubTokenSettings } from "./clients/githubToken";
+import { parseGitlabTokenSettings } from "./clients/gitlabToken";
 import { pickForwardedEnv } from "./forwardedEnv";
-import { parseGithubConfig, parseLinearConfig, parseSlackConfig } from "./integrationsConfig";
+import {
+  parseGithubConfig,
+  parseGitlabConfig,
+  parseLinearConfig,
+  parseSlackConfig,
+} from "./integrationsConfig";
 import {
   parseGitlabBaseUrl,
   parseSandboxGitIdentity,
@@ -129,10 +135,18 @@ export const config = {
     ciResultMaxPerTask: optionalNumber("GITHUB_CI_RESULT_MAX_PER_TASK", 20),
   },
   gitlab: {
-    // The self-managed GitLab instance repos may live on (GITLAB_BASE_URL),
-    // forwarded to sandboxes so the harness opens merge requests there. The
-    // control plane itself makes no GitLab calls yet. See sandboxConfig.ts.
+    // The GitLab instance repos may live on (GITLAB_BASE_URL), forwarded to
+    // sandboxes so the harness opens merge requests there. See sandboxConfig.ts.
     baseUrl: parseGitlabBaseUrl(process.env),
+    // The control plane's own GitLab token, for replies on merge requests and
+    // the trust lookups: GITLAB_TOKEN_FILE (the mounted Secret, re-read on a
+    // TTL) or GITLAB_TOKEN. See clients/gitlabToken.ts.
+    tokenSettings: parseGitlabTokenSettings(process.env),
+    // Webhook settings (tokens, bot identity, trust lists). Undefined unless
+    // GITLAB_WEBHOOKS_ENABLED=true. Parsed by integrationsConfig.ts.
+    ...parseGitlabConfig(process.env),
+    // Feature flag: enqueue failed pipelines as ci_result rows.
+    ciResultEnabled: process.env.GITLAB_CI_RESULT_ENABLED === "true",
   },
   opensandbox: {
     domain: process.env.OPENSANDBOX_DOMAIN ?? "localhost:8080",

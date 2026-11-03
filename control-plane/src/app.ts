@@ -4,12 +4,14 @@ import { realClock } from "./clock";
 import { config } from "./config";
 import { ApiController } from "./controllers/api.controller";
 import { GitHubWebhookController } from "./controllers/githubWebhook.controller";
+import { GitlabWebhookController } from "./controllers/gitlabWebhook.controller";
 import { HealthController } from "./controllers/health.controller";
 import { LinearWebhookController } from "./controllers/linearWebhook.controller";
 import { db } from "./db";
 import { taskSource } from "./db/schema";
 import { ApiIntegration } from "./integrations/api";
 import { GithubIntegration } from "./integrations/github";
+import { GitlabIntegration } from "./integrations/gitlab";
 import { Intake } from "./integrations/intake";
 import { LinearIntegration } from "./integrations/linear";
 import type { Integration, IntegrationName } from "./integrations/types";
@@ -80,6 +82,8 @@ export function createApp(): AppBundle {
     trustedOrgs: joinIfAny(config.github.trustedOrgs),
     trustedUsers: joinIfAny(config.github.trustedUsers),
     gitlabBaseUrl: config.gitlab.baseUrl,
+    gitlabTrustedGroups: joinIfAny(config.gitlab.trustedGroups),
+    gitlabTrustedUsers: joinIfAny(config.gitlab.trustedUsers),
   });
 
   const linearStatus = new LinearStatusService(
@@ -130,6 +134,14 @@ export function createApp(): AppBundle {
       inboxService,
       intake,
       config.github.webhooks,
+    );
+  }
+  if (config.gitlab.webhooks) {
+    integrations.gitlab.controller = new GitlabWebhookController(
+      inboxService,
+      intake,
+      config.gitlab.webhooks,
+      { ciResultEnabled: config.gitlab.ciResultEnabled },
     );
   }
 
@@ -202,7 +214,12 @@ export function createApp(): AppBundle {
 // integrations[round.source].deliver, and core skips a disabled
 // integration's webhook, sends and hooks.
 export function createIntegrations(
-  cfg: { linear?: unknown; api: { enabled: boolean }; github: { webhooks?: unknown } },
+  cfg: {
+    linear?: unknown;
+    api: { enabled: boolean };
+    github: { webhooks?: unknown };
+    gitlab: { webhooks?: { botUsername: string }; ciResultEnabled: boolean };
+  },
   linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
   linearStatus: Pick<LinearStatusService, "status">,
   githubStatus: Pick<GithubStatusService, "status">,
@@ -212,6 +229,11 @@ export function createIntegrations(
     api: new ApiIntegration(cfg.api.enabled),
     // GitHub rounds come only from its webhooks.
     github: new GithubIntegration(cfg.github.webhooks !== undefined, githubStatus),
+    // GitLab rounds come only from its webhooks too.
+    gitlab: new GitlabIntegration(cfg.gitlab.webhooks !== undefined, {
+      ciResults: cfg.gitlab.webhooks !== undefined && cfg.gitlab.ciResultEnabled,
+      botUsername: cfg.gitlab.webhooks?.botUsername,
+    }),
   } satisfies Record<IntegrationName, Integration>;
 }
 
