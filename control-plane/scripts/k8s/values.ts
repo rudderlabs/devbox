@@ -91,6 +91,7 @@ export function chartValues(
   const ours: Values = {
     repos: cfg.repos.map(({ url, branch }) => ({ url, branch })),
     llm: llmValues(cfg.llm),
+    ...(cfg.gitlab ? { gitlab: { baseUrl: cfg.gitlab.baseUrl } } : {}),
     ...(extra.clusterIP ? { ironProxy: { clusterIP: extra.clusterIP } } : {}),
     ...(extra.publicBaseUrl ? { controlPlane: { publicBaseUrl: extra.publicBaseUrl } } : {}),
     ...(extra.identity

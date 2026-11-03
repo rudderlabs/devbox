@@ -36,6 +36,25 @@ if [ "$IRON_PROXY_EGRESS" = "true" ]; then
   git config --global http.https://github.com/.extraHeader "Authorization: Basic $GITHUB_BASIC"
 fi
 
+# ── GitLab HTTPS auth via iron-proxy ────────────────────────────────────────
+# The same scheme for the configured GitLab instance (GITLAB_BASE_URL, set by
+# the control plane from the chart's gitlab.baseUrl): git sends a dummy Basic
+# credential for that host and iron-proxy swaps in the real group token at
+# egress. GitLab accepts any user name with a token as the password; oauth2
+# is the documented one. SSH remotes are rewritten to HTTPS so they go
+# through the proxy too, as for GitHub. Nothing is set when GitLab is off.
+if [ "$IRON_PROXY_EGRESS" = "true" ] && [ -n "${GITLAB_BASE_URL:-}" ]; then
+  GITLAB_URL="${GITLAB_BASE_URL%/}/"
+  GITLAB_HOST="$(printf '%s' "$GITLAB_URL" | sed -E 's#^[a-z]+://([^/]+)/.*#\1#')"
+  GITLAB_GIT_TOKEN="${GITLAB_TOKEN:-${GITLAB_PROXY_TOKEN:-proxy-gitlab-dummy-token}}"
+  GITLAB_BASIC="$(printf 'oauth2:%s' "$GITLAB_GIT_TOKEN" | base64 | tr -d '\n')"
+  git config --global --unset-all url."$GITLAB_URL".insteadOf >/dev/null 2>&1 || true
+  git config --global --add url."$GITLAB_URL".insteadOf "git@$GITLAB_HOST:"
+  git config --global --add url."$GITLAB_URL".insteadOf "ssh://git@$GITLAB_HOST/"
+  git config --global --unset-all http."$GITLAB_URL".extraHeader >/dev/null 2>&1 || true
+  git config --global http."$GITLAB_URL".extraHeader "Authorization: Basic $GITLAB_BASIC"
+fi
+
 # ── Repo ownership ──────────────────────────────────────────────────────────
 # On Kubernetes the workspace is restored from a snapshot the builder cloned as
 # uid 1000, but the harness runs as root, so git refuses the repos as "dubious

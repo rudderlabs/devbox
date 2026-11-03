@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.cmd_runner import run_cmd, run_cmd_with_display_argv
+from harness.codehost import CodeHost, parse_remote_url, remote_origin_url
 from harness.env_flags import bool_env, knowledge_dir_relative_path
 from harness.paths import WORKSPACE
 from harness.plan_utils import (
@@ -367,18 +368,6 @@ class GitHubClient:
 # ── Git helpers ──────────────────────────────────────────────────────────────
 
 
-_GITHUB_REMOTE_RE = re.compile(
-    r"""^
-    (?:https?://(?:[^@/]+@)?github\.com/
-       |ssh://git@github\.com/
-       |git@github\.com:
-    )
-    (?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?
-    $""",
-    re.VERBOSE,
-)
-
-
 _PR_URL_RE = re.compile(
     r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)(?:/|$)"
 )
@@ -394,17 +383,11 @@ def parse_pr_url(url: str) -> tuple[str, str, int] | None:
 
 
 def parse_owner_repo_from_git_remote(repo_path: Path) -> tuple[str, str]:
-    r = run_cmd(
-        ["git", "-C", str(repo_path), "config", "--get", "remote.origin.url"],
-        check=False,
-    )
-    if r.returncode != 0 or not r.stdout.strip():
-        raise RuntimeError(f"No git remote.origin.url in {repo_path}")
-    url = r.stdout.strip()
-    m = _GITHUB_REMOTE_RE.match(url)
-    if not m:
-        raise RuntimeError(f"Unsupported GitHub remote URL: {url}")
-    return m.group("owner"), m.group("repo")
+    """(owner, repo) of the checkout's origin. For a GitLab remote (one under
+    GITLAB_BASE_URL) `owner` is the namespace path and may contain "/"; see
+    harness.codehost."""
+    _kind, owner, repo = parse_remote_url(remote_origin_url(repo_path))
+    return owner, repo
 
 
 def _git_head_sha(repo_path: Path) -> str:
@@ -483,7 +466,7 @@ def sync_current_branch_from_origin(repo_path: Path) -> str:
 def commit_one_repo(
     repo: Path,
     *,
-    client: GitHubClient,
+    client: CodeHost,
     branch_name: str,
     commit_message: str,
 ) -> dict[str, str]:

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { parseSandboxGitIdentity, parseSandboxRuntimeConfig } from "../sandboxConfig";
+import {
+  parseGitlabBaseUrl,
+  parseSandboxGitIdentity,
+  parseSandboxRuntimeConfig,
+} from "../sandboxConfig";
 
 describe("parseSandboxRuntimeConfig", () => {
   it("defaults to the docker runtime and the local harness image", () => {
@@ -66,5 +70,31 @@ describe("parseSandboxGitIdentity", () => {
     expect(() => parseSandboxGitIdentity({ SANDBOX_GIT_NAME: "Ada" })).toThrow(
       new Error("SANDBOX_GIT_NAME and SANDBOX_GIT_EMAIL must be set together"),
     );
+  });
+});
+
+describe("parseGitlabBaseUrl", () => {
+  it("is undefined when unset or blank", () => {
+    expect(parseGitlabBaseUrl({})).toBeUndefined();
+    expect(parseGitlabBaseUrl({ GITLAB_BASE_URL: "  " })).toBeUndefined();
+  });
+
+  it("normalises the URL to its origin and path, without a trailing slash", () => {
+    expect(parseGitlabBaseUrl({ GITLAB_BASE_URL: "https://gitlab.example.com/" })).toBe(
+      "https://gitlab.example.com",
+    );
+    expect(parseGitlabBaseUrl({ GITLAB_BASE_URL: "https://example.com/gitlab/" })).toBe(
+      "https://example.com/gitlab",
+    );
+  });
+
+  it.each([
+    ["gitlab.example.com", "must be an http(s) URL"],
+    ["ftp://gitlab.example.com", "must be an http(s) URL"],
+    ["https://gitlab.example.com:8443", "must use the default port"],
+    ["https://user:pw@gitlab.example.com", "must not have a query, fragment or credentials"],
+    ["https://gitlab.example.com/?x=1", "must not have a query, fragment or credentials"],
+  ])("rejects %s", (raw, message) => {
+    expect(() => parseGitlabBaseUrl({ GITLAB_BASE_URL: raw })).toThrow(message);
   });
 });

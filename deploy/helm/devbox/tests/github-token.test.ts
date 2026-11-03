@@ -168,6 +168,21 @@ describe("GitHub App token minter", () => {
     }
   });
 
+  it("leaves GitLab repos out of the App's token", async () => {
+    const r = await renderWith(["base.yaml", "github-app.yaml"], [
+      "gitlab.baseUrl=https://gitlab.example.com",
+      "secrets.gitlab.existingSecret=my-gitlab-token",
+    ], [
+      `repos=${JSON.stringify([
+        { url: "https://github.com/example-org/example-repo.git", branch: "main" },
+        { url: "https://gitlab.example.com/platform/backend/api.git", branch: "main" },
+      ])}`,
+    ]);
+    for (const key of ["Deployment/devbox/devbox-github-token", "Job/devbox/devbox-github-token-seed"]) {
+      expect((r[key] as Doc).spec.template.spec.containers[0].env).toEqual(ENV("example-repo"));
+    }
+  });
+
   it("leaves GITHUB_APP_REPOSITORIES empty with tokenScope installation", async () => {
     const r = await renderWith(["base.yaml", "github-app.yaml"], ["integrations.githubApp.tokenScope=installation"]);
     for (const key of ["Deployment/devbox/devbox-github-token", "Job/devbox/devbox-github-token-seed"]) {

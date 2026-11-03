@@ -28,10 +28,17 @@ describe("parseConfig", () => {
   it("fills in the defaults", () => {
     expect(parseConfig(valid())).toEqual({
       repos: [
-        { url: "https://github.com/acme/app.git", branch: "main", owner: "acme", name: "app" },
+        {
+          url: "https://github.com/acme/app.git",
+          branch: "main",
+          host: "github",
+          owner: "acme",
+          name: "app",
+        },
         {
           url: "https://github.com/me/my_lib.js.git",
           branch: "release/1.x",
+          host: "github",
           owner: "me",
           name: "my_lib.js",
         },
@@ -499,5 +506,108 @@ describe("loadConfig", () => {
     const path = join(dir, "bad.json");
     writeFileSync(path, "{ repos: ");
     expect(() => loadConfig(path)).toThrow(new ConfigError("devbox.config.json: not valid JSON"));
+  });
+});
+
+describe("parseConfig with gitlab", () => {
+  const GITLAB = "https://gitlab.example.com";
+  // gitlab: null leaves the block out.
+  const withGitlab = (
+    repos: Array<Record<string, unknown>>,
+    gitlab: unknown = { baseUrl: GITLAB },
+  ) => ({
+    repos,
+    llm: { baseUrl: "https://api.openai.com/v1", model: "gpt-5.6-sol" },
+    ...(gitlab === null ? {} : { gitlab }),
+  });
+
+  it("accepts repos under gitlab.baseUrl next to GitHub ones, nested groups included", () => {
+    const cfg = parseConfig(
+      withGitlab([
+        { url: "https://github.com/acme/app.git" },
+        { url: `${GITLAB}/platform/backend/api.git`, branch: "develop" },
+        { url: `${GITLAB}/tools/cli.git` },
+      ]),
+    );
+    expect(cfg.gitlab).toEqual({ baseUrl: GITLAB });
+    expect(cfg.repos).toEqual([
+      {
+        url: "https://github.com/acme/app.git",
+        branch: "main",
+        host: "github",
+        owner: "acme",
+        name: "app",
+      },
+      {
+        url: `${GITLAB}/platform/backend/api.git`,
+        branch: "develop",
+        host: "gitlab",
+        owner: "platform/backend",
+        name: "api",
+      },
+      {
+        url: `${GITLAB}/tools/cli.git`,
+        branch: "main",
+        host: "gitlab",
+        owner: "tools",
+        name: "cli",
+      },
+    ]);
+  });
+
+  it("normalises the base URL and accepts a relative URL root", () => {
+    const cfg = parseConfig(
+      withGitlab([{ url: "https://example.com/gitlab/acme/app.git" }], {
+        baseUrl: "https://example.com/gitlab/",
+      }),
+    );
+    expect(cfg.gitlab).toEqual({ baseUrl: "https://example.com/gitlab" });
+    expect(cfg.repos[0]).toMatchObject({ host: "gitlab", owner: "acme", name: "app" });
+  });
+
+  it("leaves gitlab out when not configured", () => {
+    expect("gitlab" in parseConfig(valid())).toBe(false);
+  });
+
+  it.each([
+    [
+      "a GitLab repo without gitlab.baseUrl",
+      withGitlab([{ url: `${GITLAB}/acme/app.git` }], null),
+      `repos[0].url: must be https://github.com/<owner>/<repo>.git, got ${GITLAB}/acme/app.git`,
+    ],
+    [
+      "a repo on another host",
+      withGitlab([{ url: "https://bitbucket.org/acme/app.git" }]),
+      `repos[0].url: must be https://github.com/<owner>/<repo>.git or ${GITLAB}/<group>/<project>.git, got https://bitbucket.org/acme/app.git`,
+    ],
+    [
+      "a GitLab repo without a group",
+      withGitlab([{ url: `${GITLAB}/app.git` }]),
+      `repos[0].url: a GitLab repo is ${GITLAB}/<group>[/<subgroup>]/<project>.git, got ${GITLAB}/app.git`,
+    ],
+    [
+      "a GitLab repo without .git",
+      withGitlab([{ url: `${GITLAB}/acme/app` }]),
+      `repos[0].url: a GitLab repo is ${GITLAB}/<group>[/<subgroup>]/<project>.git, got ${GITLAB}/acme/app`,
+    ],
+    [
+      "a non-URL base",
+      withGitlab([{ url: "https://github.com/acme/app.git" }], { baseUrl: "gitlab.example.com" }),
+      "gitlab.baseUrl: must be an http(s) URL, got gitlab.example.com",
+    ],
+    [
+      "a base with a port",
+      withGitlab([{ url: "https://github.com/acme/app.git" }], {
+        baseUrl: "https://gitlab.example.com:8443",
+      }),
+      "gitlab.baseUrl: must use the default port (80 or 443), got 8443",
+    ],
+    [
+      "an unknown gitlab key",
+      withGitlab([{ url: "https://github.com/acme/app.git" }], { baseUrl: GITLAB, token: "x" }),
+      'gitlab: unknown key "token" (allowed: baseUrl)',
+    ],
+  ])("refuses %s", (_name, raw, message) => {
+    expect(() => parseConfig(raw)).toThrow(new ConfigError(`devbox.config.json: ${message}`));
   });
 });

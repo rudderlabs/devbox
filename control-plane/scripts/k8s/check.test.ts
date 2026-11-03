@@ -39,7 +39,13 @@ const GITHUB_APP = {
 } as const;
 const config = (): DevboxConfig => ({
   repos: [
-    { url: "https://github.com/acme/widgets.git", branch: "main", owner: "acme", name: "widgets" },
+    {
+      url: "https://github.com/acme/widgets.git",
+      branch: "main",
+      host: "github",
+      owner: "acme",
+      name: "widgets",
+    },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "m" },
   github: { trustedOrgs: [], trustedUsers: [] },

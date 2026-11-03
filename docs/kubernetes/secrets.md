@@ -11,6 +11,8 @@ would stay in Helm's release history.
 | `devbox-github`, or `secrets.github.existingSecret` | `token` (the minter also writes `expires-at`) | iron-proxy (sandboxes' GitHub requests), the control plane (its own GitHub calls), the snapshot builder (clones) | the installer, or you; with the GitHub App's devbox tokens, the minter keeps it fresh |
 | `devbox-github-app`, or `secrets.githubApp.existingSecret` | `private-key` | the GitHub App's token minter only. Used only with `integrations.githubApp.tokens: devbox`. | the installer, or you |
 | `devbox-llm`, or `secrets.llm.existingSecret` | `api-key` | iron-proxy | the installer, or you |
+| `secrets.gitlab.existingSecret` (no default name) | `token` (a GitLab group or project access token) | iron-proxy (sandboxes' GitLab requests), the snapshot builder (clones). Used only with `gitlab.baseUrl` ([GitLab](../gitlab.md)). | you |
+| `ironProxy.caBundle` (no default name) | `ca.crt` (a PEM bundle) | iron-proxy, for its own upstream connections: a GitLab instance with a private CA | you |
 | `devbox-integrations`, or `secrets.integrations.existingSecret` | env names: `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET` | the control plane, as env. Used only with an integration enabled. | the installer when an integration is enabled, or you |
 | `database.existingSecret` (no default name) | `DATABASE_URL` | the control plane, with `postgresql.enabled: false` | you |
 | `devbox-opensandbox` | `api-key` | the OpenSandbox server and the control plane | the chart |

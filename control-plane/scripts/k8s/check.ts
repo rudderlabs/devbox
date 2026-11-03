@@ -12,7 +12,7 @@ import { GithubAppSetupError, mintAppToken } from "../lib/githubApp";
 import { isPem, PrivateKeyError } from "../lib/githubAppKey";
 import { enabledGithubApp, enabledLinear } from "../lib/integrations";
 import { checkLinear } from "../linear/check";
-import type { DevboxConfig } from "../up/config";
+import { type DevboxConfig, githubRepos } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, PreflightError } from "../up/preflight";
 import { KubeError, kube, NAMESPACE, type Runner } from "./run";
 import { existingSecret, GITHUB_APP_SECRET, GITHUB_SECRET, INTEGRATIONS_SECRET } from "./secrets";
@@ -205,7 +205,7 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
         skip("GitHub App token", `no usable key "private-key" in Secret ${appKey.name}`);
       } else {
         await serviceItem("GitHub App token", async () => {
-          ({ token } = await mintAppToken(minting, pem, cfg.repos, {
+          ({ token } = await mintAppToken(minting, pem, githubRepos(cfg.repos), {
             fetch: deps.fetch,
             checkCoverage: true,
             target: deps.targetPath,
@@ -224,7 +224,7 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
     if (token !== undefined) {
       const checked = token;
       await serviceItem("GitHub token", async () => {
-        await checkGithub(checked, cfg.repos, deps.fetch, {
+        await checkGithub(checked, githubRepos(cfg.repos), deps.fetch, {
           requirePush: !opts.skipPushCheck,
           ...(tokenName ? { tokenName } : {}),
         });

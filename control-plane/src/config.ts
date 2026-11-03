@@ -2,7 +2,11 @@ import { parseApiConfig } from "./apiConfig";
 import { parseGithubTokenSettings } from "./clients/githubToken";
 import { pickForwardedEnv } from "./forwardedEnv";
 import { parseGithubConfig, parseLinearConfig, parseSlackConfig } from "./integrationsConfig";
-import { parseSandboxGitIdentity, parseSandboxRuntimeConfig } from "./sandboxConfig";
+import {
+  parseGitlabBaseUrl,
+  parseSandboxGitIdentity,
+  parseSandboxRuntimeConfig,
+} from "./sandboxConfig";
 
 // Optional numeric env with a default. Unset or empty/whitespace-only → `def`.
 // A PRESENT but non-finite value (typo, "Infinity", a Helm-rendered garbage
@@ -123,6 +127,12 @@ export const config = {
     // in ~max/N pushes. Size it with your workflow fan-out in mind. Configurable;
     // an explicit 0 (or negative) disables the breaker.
     ciResultMaxPerTask: optionalNumber("GITHUB_CI_RESULT_MAX_PER_TASK", 20),
+  },
+  gitlab: {
+    // The self-managed GitLab instance repos may live on (GITLAB_BASE_URL),
+    // forwarded to sandboxes so the harness opens merge requests there. The
+    // control plane itself makes no GitLab calls yet. See sandboxConfig.ts.
+    baseUrl: parseGitlabBaseUrl(process.env),
   },
   opensandbox: {
     domain: process.env.OPENSANDBOX_DOMAIN ?? "localhost:8080",

@@ -79,6 +79,7 @@ export function createApp(): AppBundle {
     forwardedEnv: config.opensandbox.forwardedEnv,
     trustedOrgs: joinIfAny(config.github.trustedOrgs),
     trustedUsers: joinIfAny(config.github.trustedUsers),
+    gitlabBaseUrl: config.gitlab.baseUrl,
   });
 
   const linearStatus = new LinearStatusService(

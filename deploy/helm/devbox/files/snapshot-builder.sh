@@ -5,9 +5,10 @@
 # newest $KEEP. The control plane restores each task's workspace from the
 # newest ready snapshot.
 #
-# Trusted and clone-only: it reads the real GitHub token (from the release
-# namespace, through the API, so it is never stored in the sandbox namespace)
-# and its egress is open on 443. It must never run repo code.
+# Trusted and clone-only: it reads the real GitHub token, and the GitLab
+# token when gitlab.baseUrl is set (from the release namespace, through the
+# API, so they are never stored in the sandbox namespace), and its egress is
+# open on 443. It must never run repo code.
 set -eu
 
 KUBECTL="${KUBECTL:-kubectl}"
@@ -16,29 +17,55 @@ REPOS_DIR="${REPOS_DIR:-/repos}"
 : "${REPOS:?}" "${RELEASE_NAMESPACE:?}" "${SANDBOX_NAMESPACE:?}" "${GITHUB_SECRET:?}"
 : "${SCRATCH_PVC:?}" "${SNAPSHOT_CLASS:?}" "${KEEP:?}"
 
+GITLAB_BASE_URL="${GITLAB_BASE_URL:-}"
+GITLAB_BASE_URL="${GITLAB_BASE_URL%/}"
+
+# One http.<url>.extraheader per host, via GIT_CONFIG_* env: never argv or
+# .git/config. $1 is the URL prefix, $2 the Basic credential.
+GIT_CONFIG_COUNT=0
+add_auth_header() {
+  eval "export GIT_CONFIG_KEY_$GIT_CONFIG_COUNT=\"http.\$1.extraheader\""
+  eval "export GIT_CONFIG_VALUE_$GIT_CONFIG_COUNT=\"Authorization: Basic \$2\""
+  GIT_CONFIG_COUNT=$((GIT_CONFIG_COUNT + 1))
+}
 # On its own so that a failed read stops the run (set -e) instead of cloning
 # anonymously.
 encoded="$("$KUBECTL" get secret "$GITHUB_SECRET" -n "$RELEASE_NAMESPACE" -o 'jsonpath={.data.token}')"
 token="$(printf '%s' "$encoded" | base64 -d | tr -d '\r\n')"
 unset encoded
 if [ -n "$token" ]; then
-  # Via GIT_CONFIG_* env: never argv or .git/config.
-  export GIT_CONFIG_COUNT=1
-  export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-  GIT_CONFIG_VALUE_0="Authorization: Basic $(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
-  export GIT_CONFIG_VALUE_0
+  add_auth_header "https://github.com/" "$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
 else
   echo "the GitHub token is empty: cloning anonymously"
 fi
 unset token
+if [ -n "$GITLAB_BASE_URL" ]; then
+  : "${GITLAB_SECRET:?}"
+  encoded="$("$KUBECTL" get secret "$GITLAB_SECRET" -n "$RELEASE_NAMESPACE" -o 'jsonpath={.data.token}')"
+  token="$(printf '%s' "$encoded" | base64 -d | tr -d '\r\n')"
+  unset encoded
+  if [ -n "$token" ]; then
+    # GitLab takes any user name with an access token as the password.
+    add_auth_header "$GITLAB_BASE_URL/" "$(printf 'oauth2:%s' "$token" | base64 | tr -d '\n')"
+  else
+    echo "the GitLab token is empty: cloning anonymously"
+  fi
+  unset token
+fi
+export GIT_CONFIG_COUNT
 export GIT_TERMINAL_PROMPT=0
 
 echo "$REPOS" | while read -r url branch; do
   [ -n "$url" ] || continue
-  case "$url" in
-    https://github.com/*/*.git) ;;
-    *) echo "unsupported repo url: $url (expected https://github.com/<owner>/<repo>.git)" >&2; exit 1 ;;
-  esac
+  supported=
+  case "$url" in https://github.com/*/*.git) supported=1 ;; esac
+  if [ -n "$GITLAB_BASE_URL" ]; then
+    case "$url" in "$GITLAB_BASE_URL"/*/*.git) supported=1 ;; esac
+  fi
+  if [ -z "$supported" ]; then
+    echo "unsupported repo url: $url (expected https://github.com/<owner>/<repo>.git${GITLAB_BASE_URL:+ or $GITLAB_BASE_URL/<group>/<project>.git})" >&2
+    exit 1
+  fi
   name="$(basename "$url" .git)"
   case "$name" in "" | . | .. | -*) echo "bad repo name in $url" >&2; exit 1 ;; esac
   case "$branch" in "" | -* | *..*) echo "bad branch for $url: $branch" >&2; exit 1 ;; esac
@@ -55,7 +82,7 @@ echo "$REPOS" | while read -r url branch; do
   fi
 done
 
-if grep -lsE "x-access-token|github_pat_|gh[opsu]_" "$REPOS_DIR"/*/.git/config; then
+if grep -lsE "x-access-token|github_pat_|gh[opsu]_|oauth2:|glpat-" "$REPOS_DIR"/*/.git/config; then
   echo "token found in the git config files above; aborting" >&2
   exit 1
 fi

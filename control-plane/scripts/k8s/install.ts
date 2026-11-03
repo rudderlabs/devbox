@@ -31,7 +31,7 @@ import {
 } from "../lib/secrets";
 import { checkLinear, type LinearIdentity } from "../linear/check";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput, readCliProfile } from "../up/cliLogin";
-import type { DevboxConfig } from "../up/config";
+import { type DevboxConfig, githubRepos } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, type Identity } from "../up/preflight";
 import { pickClusterIP } from "./clusterIP";
 import { freePort, profileFor } from "./connect";
@@ -307,13 +307,13 @@ export async function install(
   let identity: Identity | undefined = appCommitIdentity;
   let minted: { token: string; expiresAt: string } | undefined;
   if (app && appKey) {
-    minted = await mintAppToken(app, appKey.pem, cfg.repos, {
+    minted = await mintAppToken(app, appKey.pem, githubRepos(cfg.repos), {
       fetch: deps.fetch,
       checkCoverage: true,
       target: deps.targetPath,
     });
     log(`GitHub App ${app.slug}: minted a token for installation ${app.installationId}`);
-    await checkGithub(minted.token, cfg.repos, deps.fetch, {
+    await checkGithub(minted.token, githubRepos(cfg.repos), deps.fetch, {
       requirePush: !opts.skipPushCheck,
       tokenName: "the GitHub App's token",
     });
@@ -324,7 +324,7 @@ export async function install(
   }
   if (githubR) {
     ({ resolved: githubR, result: identity } = await checkWithRetry(githubR, secretDeps, (token) =>
-      checkGithub(token, cfg.repos, deps.fetch, { requirePush: !opts.skipPushCheck }),
+      checkGithub(token, githubRepos(cfg.repos), deps.fetch, { requirePush: !opts.skipPushCheck }),
     ));
     await offerSave(githubR, secretDeps);
   }

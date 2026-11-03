@@ -14,6 +14,7 @@ workspace:
   size: 15Gi
 
 # -- Required. Repos the agent works on: [{url: "https://github.com/<owner>/<repo>.git", branch: main}].
+# With gitlab.baseUrl, a repo may also be "<gitlab.baseUrl>/<group>[/<subgroup>]/<project>.git".
 # `bun run k8s:install` fills this from devbox.config.json.
 repos: []
 
@@ -46,6 +47,10 @@ ironProxy:
   clusterIP: ""
   # -- Extra allowlist rules ({host, methods, paths}), appended as-is.
   extraAllowlist: []
+  # -- Name of a Secret (key `ca.crt`, a PEM bundle) whose CAs iron-proxy trusts for its own
+  # upstream connections, in addition to the system roots: for a GitLab instance with a private
+  # CA. Sandboxes need nothing: they see iron-proxy's own certificate. Changing it rolls the pods.
+  caBundle: ""
   # -- More than one adds a PodDisruptionBudget.
   replicas: 1
   image:
@@ -100,6 +105,10 @@ secrets:
   llm: { existingSecret: "" }
   # -- Optional Secret instead of `devbox-integrations`; its keys become control-plane env.
   integrations: { existingSecret: "" }
+  # -- Required with gitlab.baseUrl: a Secret (key `token`) holding a GitLab group or project
+  # access token with the api, read_repository and write_repository scopes. iron-proxy swaps it
+  # into sandboxes' requests and the snapshot builder clones with it. You keep it fresh.
+  gitlab: { existingSecret: "" }
 
 integrations:
   linear:
@@ -142,6 +151,13 @@ github:
   trustedOrgs: []
   # -- GitHub users who may drive devbox. Required with trustedOrgs (either) when the GitHub App is enabled.
   trustedUsers: []
+
+gitlab:
+  # -- A GitLab instance repos may live on, self-managed or https://gitlab.com, for example
+  # https://gitlab.example.com (a relative URL root such as https://example.com/gitlab is fine; the
+  # default port only). Repos under it clone, push and open merge requests there with the token
+  # in secrets.gitlab.existingSecret. Empty turns GitLab off. Outbound only so far: no webhooks.
+  baseUrl: ""
 
 controlPlane:
   # -- More than one adds a PodDisruptionBudget.

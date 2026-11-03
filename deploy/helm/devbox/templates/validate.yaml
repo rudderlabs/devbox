@@ -23,6 +23,40 @@ selectors all assume the release namespace devbox. */ -}}
 {{- end }}
 {{- fail "repos is required: at least one {url, branch}" }}
 {{- end }}
+{{- with include "devbox.gitlabBaseUrl" . }}
+{{- $u := urlParse . }}
+{{- if or (not (has $u.scheme (list "http" "https"))) (not $u.host) }}
+{{- fail "gitlab.baseUrl: must be an http(s) URL such as https://gitlab.example.com" }}
+{{- end }}
+{{- /* iron-proxy intercepts only ports 80 and 443. */ -}}
+{{- if regexMatch ":[0-9]+$" $u.host }}
+{{- fail "gitlab.baseUrl: must use the default port (80 or 443); iron-proxy intercepts only those" }}
+{{- end }}
+{{- if or $u.query $u.fragment $u.userinfo }}
+{{- fail "gitlab.baseUrl: must not have a query, fragment or credentials" }}
+{{- end }}
+{{- if not $.Values.secrets.gitlab.existingSecret }}
+{{- fail "gitlab.baseUrl is set: secrets.gitlab.existingSecret is required, a Secret with key token (a group or project access token)" }}
+{{- end }}
+{{- end }}
+{{- range $i, $repo := .Values.repos }}
+{{- if include "devbox.repoIsGitlab" (dict "ctx" $ "url" $repo.url) }}
+{{- /* group[/subgroup]/project.git: at least a group and a project. */ -}}
+{{- if not (regexMatch "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+\\.git$" (include "devbox.gitlabProjectPath" (dict "ctx" $ "url" $repo.url) | printf "%s.git")) }}
+{{- fail (printf "repos[%d].url: a GitLab repo is <gitlab.baseUrl>/<group>[/<subgroup>]/<project>.git, got %q" $i $repo.url) }}
+{{- end }}
+{{- else if not (regexMatch "^https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+\\.git$" $repo.url) }}
+{{- fail (printf "repos[%d].url: must be https://github.com/<owner>/<repo>.git%s, got %q" $i (ternary (printf " or %s/<group>/<project>.git" (include "devbox.gitlabBaseUrl" $)) " (or, with gitlab.baseUrl, a repo under it)" (ne (include "devbox.gitlabBaseUrl" $) "")) $repo.url) }}
+{{- end }}
+{{- end }}
+{{- /* The minter narrows its token to the GitHub repos; with none, it would ask for the whole installation. */ -}}
+{{- if and (include "devbox.githubMinter" .) (ne (.Values.integrations.githubApp.tokenScope | default "") "installation") }}
+{{- $githubRepos := 0 }}
+{{- range .Values.repos }}{{ if not (include "devbox.repoIsGitlab" (dict "ctx" $ "url" .url)) }}{{ $githubRepos = add $githubRepos 1 }}{{ end }}{{ end }}
+{{- if eq $githubRepos 0 }}
+{{- fail "integrations.githubApp.enabled is true: tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation)" }}
+{{- end }}
+{{- end }}
 {{- if or (not .Values.llm.baseUrl) (not .Values.llm.model) }}
 {{- fail "llm.baseUrl and llm.model are required" }}
 {{- end }}

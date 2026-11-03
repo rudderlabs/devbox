@@ -318,6 +318,21 @@ describe("SandboxManager", () => {
       expect(envOf().HARNESS_TRUSTED_USERS).toBe("frodo,samwise");
       expect("HARNESS_TRUSTED_ORGS" in envOf()).toBe(false);
     });
+
+    it("forwards the GitLab instance only from its own setting, never from forwardedEnv", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: { GITLAB_BASE_URL: "https://evil.example.com" },
+      }).createSandboxWithPvc(taskParams);
+      expect("GITLAB_BASE_URL" in envOf()).toBe(false);
+      sandboxCreate.mockClear();
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: { GITLAB_BASE_URL: "https://evil.example.com" },
+        gitlabBaseUrl: "https://gitlab.example.com",
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf().GITLAB_BASE_URL).toBe("https://gitlab.example.com");
+    });
   });
 
   describe("createSandboxWithPvc — runtime and identity env", () => {
@@ -579,8 +594,11 @@ describe("SandboxManager", () => {
   });
 
   describe("readEvents", () => {
-    const mgrWith = (raw: string | null) => {
-      const mgr = new SandboxManager(baseOpts);
+    const mgrWith = (
+      raw: string | null,
+      extra: Partial<ConstructorParameters<typeof SandboxManager>[0]> = {},
+    ) => {
+      const mgr = new SandboxManager({ ...baseOpts, ...extra });
       (mgr as unknown as { readHarnessFile: () => Promise<string | null> }).readHarnessFile = () =>
         Promise.resolve(raw);
       return mgr;
@@ -756,6 +774,34 @@ describe("SandboxManager", () => {
       ].join("\n");
       const events = await mgrWith(raw).readEvents("sbx", 0);
       expect(events.map((e) => e.seq)).toEqual([3]);
+    });
+
+    it("accepts a pr_opened on the configured GitLab instance, and only then", async () => {
+      const raw = [
+        JSON.stringify({
+          seq: 1,
+          ts: "t",
+          type: "pr_opened",
+          inbox_id: "i",
+          repo: "r",
+          pr_url: "https://gitlab.example.com/platform/backend/r/-/merge_requests/7",
+          branch: "b",
+          commit_sha: "sha",
+        }),
+        JSON.stringify({
+          seq: 2,
+          ts: "t",
+          type: "pr_opened",
+          inbox_id: "i",
+          repo: "r",
+          pr_url: "https://gitlab.other.example.com/o/r/-/merge_requests/1", // another host
+          branch: "b",
+          commit_sha: "sha",
+        }),
+      ].join("\n");
+      expect((await mgrWith(raw).readEvents("sbx", 0)).map((e) => e.seq)).toEqual([]);
+      const withGitlab = mgrWith(raw, { gitlabBaseUrl: "https://gitlab.example.com" });
+      expect((await withGitlab.readEvents("sbx", 0)).map((e) => e.seq)).toEqual([1]);
     });
 
     it("drops a pr_opened whose pr_url is not a github.com https URL", async () => {

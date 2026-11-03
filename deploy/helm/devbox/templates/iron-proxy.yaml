@@ -33,6 +33,10 @@ spec:
       annotations:
         # iron-proxy reads its config once; a changed allowlist rolls the pods.
         checksum/config: {{ include (print $.Template.BasePath "/iron-proxy-config.yaml") . | sha256sum }}
+        {{- with .Values.ironProxy.caBundle }}
+        # The bundle is read once too; a renamed Secret rolls the pods.
+        checksum/ca-bundle: {{ . | sha256sum }}
+        {{- end }}
     spec:
       automountServiceAccountToken: false
       # Non-root on unprivileged ports; the Service maps 53/80/443 to them.
@@ -41,6 +45,13 @@ spec:
         - name: iron-proxy
           image: {{ printf "%s:%s" .Values.ironProxy.image.repository .Values.ironProxy.image.tag }}
           args: [-config, /etc/iron-proxy/config.yaml]
+          {{- if .Values.ironProxy.caBundle }}
+          env:
+            # Go reads this file in addition to the system directory
+            # (/etc/ssl/certs), once, at the first TLS dial: a changed bundle
+            # needs a restart, which the checksum annotation below provides.
+            - { name: SSL_CERT_FILE, value: /etc/devbox/ca/ca.crt }
+          {{- end }}
           ports:
             - { name: dns-udp, containerPort: 5353, protocol: UDP }
             - { name: dns-tcp, containerPort: 5353, protocol: TCP }
@@ -59,6 +70,12 @@ spec:
             - { name: ca, mountPath: /certs, readOnly: true }
             - { name: github, mountPath: /var/run/devbox/github, readOnly: true }
             - { name: llm, mountPath: /var/run/devbox/llm, readOnly: true }
+            {{- if include "devbox.gitlabBaseUrl" . }}
+            - { name: gitlab, mountPath: /var/run/devbox/gitlab, readOnly: true }
+            {{- end }}
+            {{- if .Values.ironProxy.caBundle }}
+            - { name: ca-bundle, mountPath: /etc/devbox/ca, readOnly: true }
+            {{- end }}
       volumes:
         - name: config
           configMap: { name: devbox-iron-proxy-config }
@@ -74,6 +91,20 @@ spec:
             secretName: {{ include "devbox.llmSecret" . }}
             defaultMode: 0440
             items: [{ key: api-key, path: api-key }]
+        {{- if include "devbox.gitlabBaseUrl" . }}
+        - name: gitlab
+          secret:
+            secretName: {{ include "devbox.gitlabSecret" . }}
+            defaultMode: 0440
+            items: [{ key: token, path: token }]
+        {{- end }}
+        {{- with .Values.ironProxy.caBundle }}
+        - name: ca-bundle
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0440
+            items: [{ key: ca.crt, path: ca.crt }]
+        {{- end }}
 
 {{- if gt (int .Values.ironProxy.replicas) 1 }}
 ---

@@ -26,6 +26,7 @@ export const CASES: Record<string, string[]> = {
   "github-app": ["base.yaml", "github-app.yaml"],
   "github-app-external": ["base.yaml", "github-app-external.yaml"],
   "llm-stages": ["base.yaml", "llm-stages.yaml"],
+  gitlab: ["base.yaml", "gitlab.yaml"],
 };
 
 export async function helmTemplate(
