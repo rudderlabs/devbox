@@ -431,34 +431,18 @@ every 6 hours by default).
 ### Database migrations
 
 A new control plane pod migrates the database when it starts, while the old
-pods keep serving. The migrations hold short locks on the `tasks` and `inbox`
-tables and wait at most 5 seconds for each. If a lock times out, the new pod
-fails, restarts and tries again. Postgres may instead break a deadlock between
-the migration and a request: then either the pod restarts, or the request
-fails with a 500 and, for a webhook, the platform retries it.
+pods keep serving. For a while old pods run against the new schema, and each
+migration is written to keep them working. While they overlap, an old pod can
+answer a webhook that races its own redelivery with a 500, such as `duplicate
+key value violates unique constraint "inbox_source_kind_external_uniq"`: the
+other request stored the round, so nothing is lost.
 
-Task keys are unique regardless of case. The migration that enforces this
-fails with `could not create unique index "tasks_key_lower_uniq"` and
-`Key (lower(key))=(…) is duplicated` only if tasks were inserted by hand with
-keys that differ only in case: devbox upper-cases Linear keys, and
-`API_TASK_KEY_PREFIX` must match `^[A-Z][A-Z0-9-]*-$`. To list them:
-
-```sql
-SELECT lower(key) AS key, array_agg(id) AS task_ids
-  FROM tasks GROUP BY lower(key) HAVING count(*) > 1;
-```
-
-Rename all but one key in each group; the pod migrates on its next start.
-
-While old and new pods overlap, and after a rollback to a release without the
-`inbox_source_kind_external_uniq` index, an old pod can answer a webhook that
-races its own redelivery with a 500: `duplicate key value violates unique
-constraint "inbox_source_kind_external_uniq"`. The other request stored the
-round and the platform retries, so nothing is lost. Leave the index in place
-after a rollback: the database has recorded its migration, so a dropped index
-is not rebuilt on the next upgrade, and the new release then fails to store
-any follow-up (a comment, review, CI result or API message) with `there is no
-unique or exclusion constraint matching the ON CONFLICT specification`.
+If a migration can't get its locks within 5 seconds, the new pod fails,
+restarts and tries again, and the rollout waits. After a rollback the database
+keeps the newer schema; don't undo it by hand.
+[docs/database.md](../database.md) explains when migrations run, the lock
+timeout and rollbacks. Steps a particular release needs before or after
+upgrading are in that release's notes in the changelog.
 
 ## Uninstall
 

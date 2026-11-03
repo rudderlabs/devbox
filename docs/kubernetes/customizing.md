@@ -30,8 +30,9 @@ kubectl -n devbox create secret generic devbox-database \
   --from-literal=DATABASE_URL='postgres://<user>:<password>@<host>:5432/<db>'
 ```
 
-The control plane migrates the schema at start. The database must be reachable
-from the `devbox` namespace.
+The control plane migrates the schema at start
+([docs/database.md](../database.md)). The database must be reachable from the
+`devbox` namespace.
 
 ## Ingress
 

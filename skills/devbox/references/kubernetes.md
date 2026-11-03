@@ -51,6 +51,9 @@ A re-run of the installer applies config changes, rewrites the Secrets it
 created, and builds a fresh snapshot when the repos changed. It prints the
 `kubectl rollout restart` command when the integrations' Secret changed
 ([upgrade](../../../docs/kubernetes/README.md#upgrade)).
+A new control plane pod migrates the database when it starts. Migrations only
+go forward: after a rollback, leave the newer schema in place
+([database.md](../../../docs/database.md)).
 
 Chart values (Ingress, external database, sandbox pods, extra environment,
 Docker in sandboxes): [customizing.md](../../../docs/kubernetes/customizing.md).
