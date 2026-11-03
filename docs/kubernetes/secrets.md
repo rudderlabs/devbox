@@ -11,9 +11,9 @@ would stay in Helm's release history.
 | `devbox-github`, or `secrets.github.existingSecret` | `token` (the minter also writes `expires-at`) | iron-proxy (sandboxes' GitHub requests), the control plane (its own GitHub calls), the snapshot builder (clones) | the installer, or you; with the GitHub App's devbox tokens, the minter keeps it fresh |
 | `devbox-github-app`, or `secrets.githubApp.existingSecret` | `private-key` | the GitHub App's token minter only. Used only with `integrations.githubApp.tokens: devbox`. | the installer, or you |
 | `devbox-llm`, or `secrets.llm.existingSecret` | `api-key` | iron-proxy | the installer, or you |
-| `secrets.gitlab.existingSecret` (no default name) | `token` (a GitLab group or project access token) | iron-proxy (sandboxes' GitLab requests), the snapshot builder (clones). Used only with `gitlab.baseUrl` ([GitLab](../gitlab.md)). | you |
+| `secrets.gitlab.existingSecret` (no default name) | `token` (a GitLab group or project access token) | iron-proxy (sandboxes' GitLab requests), the snapshot builder (clones), the control plane (replies and member lookups, with `integrations.gitlab.enabled`). Used only with `gitlab.baseUrl` ([GitLab](../gitlab.md)). | you |
 | `ironProxy.caBundle` (no default name) | `ca.crt` (a PEM bundle) | iron-proxy, for its own upstream connections: a GitLab instance with a private CA | you |
-| `devbox-integrations`, or `secrets.integrations.existingSecret` | env names: `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET` | the control plane, as env. Used only with an integration enabled. | the installer when an integration is enabled, or you |
+| `devbox-integrations`, or `secrets.integrations.existingSecret` | env names: `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITLAB_WEBHOOK_SIGNING_TOKEN` (or `GITLAB_WEBHOOK_SECRET`) | the control plane, as env. Used only with an integration enabled. | the installer when an integration is enabled, or you (always you for the GitLab keys) |
 | `database.existingSecret` (no default name) | `DATABASE_URL` | the control plane, with `postgresql.enabled: false` | you |
 | `devbox-opensandbox` | `api-key` | the OpenSandbox server and the control plane | the chart |
 | `devbox-postgres` | `password` | the bundled Postgres and the control plane | the chart, with `postgresql.enabled: true` |
@@ -35,6 +35,8 @@ would stay in Helm's release history.
   | `LINEAR_WEBHOOK_SECRET` | Linear: the app's webhook signing secret |
   | `SLACK_BOT_TOKEN` | Slack: the bot token (`xoxb-…`) |
   | `GITHUB_WEBHOOK_SECRET` | The GitHub App: the webhook's secret |
+  | `GITLAB_WEBHOOK_SIGNING_TOKEN` | GitLab: the webhook's signing token (`whsec_…`, GitLab 19.1+) |
+  | `GITLAB_WEBHOOK_SECRET` | GitLab: the webhook's legacy secret token, for an older instance |
 
   The installer writes only the enabled integrations' keys, and deletes its
   `devbox-integrations` when none is enabled. A key of an integration that is

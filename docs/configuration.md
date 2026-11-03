@@ -796,13 +796,19 @@ trust. There are no defaults, and with nothing configured it reads none.
 | `GITHUB_TRUSTED_ORGS` | control plane | GitHub orgs whose members are trusted. Comma- or space-separated. |
 | `GITHUB_TRUSTED_USERS` | control plane | GitHub logins that are trusted. Comma- or space-separated. |
 | `HARNESS_TRUSTED_BOT_IDS` | sandbox | Numeric GitHub user IDs of bots, for example a review bot, whose comments are also trusted. Comma- or space-separated. |
+| `GITLAB_TRUSTED_GROUPS` | control plane | GitLab groups (`group` or `group/subgroup`) whose members, inherited ones included, are trusted on merge requests. Comma- or space-separated. |
+| `GITLAB_TRUSTED_USERS` | control plane | GitLab usernames trusted on merge requests. Comma- or space-separated. |
+| `HARNESS_GITLAB_TRUSTED_BOT_IDS` | sandbox | Numeric GitLab user IDs of bots whose merge request notes are also trusted. |
 
 - On Compose, `up` sets `GITHUB_TRUSTED_ORGS` and `GITHUB_TRUSTED_USERS` from
   the top-level `github` block of `devbox.config.json` (`trustedOrgs`,
   `trustedUsers`). `bun run github:setup` fills it when empty, with the account
   that owns the App's installation.
 - The control plane forwards `GITHUB_TRUSTED_ORGS` and `GITHUB_TRUSTED_USERS` to
-  the sandbox as `HARNESS_TRUSTED_ORGS` and `HARNESS_TRUSTED_USERS`.
+  the sandbox as `HARNESS_TRUSTED_ORGS` and `HARNESS_TRUSTED_USERS`, and the
+  GitLab lists as `HARNESS_GITLAB_TRUSTED_GROUPS` and
+  `HARNESS_GITLAB_TRUSTED_USERS`. A merge request is gated by the GitLab lists
+  only, a pull request by the GitHub lists only.
 - `HARNESS_TRUSTED_BOT_IDS` has no control-plane counterpart. On Kubernetes,
   set it with the chart's `extraEnv`; it is on the forwarding list. It adds to the trusted orgs and users. On its own, it
   trusts no one. There is no supported Compose configuration path.
@@ -812,7 +818,10 @@ trust. There are no defaults, and with nothing configured it reads none.
   ([customizing.md](kubernetes/customizing.md#integrations)).
 
 With the GitHub App, the trust lists also decide whose `@mentions` and
-reviews reach the agent ([docs/github.md](github.md#trust-lists)).
+reviews reach the agent ([docs/github.md](github.md#trust-lists)); with GitLab
+webhooks, the GitLab lists decide whose notes do
+([docs/gitlab.md](gitlab.md#webhooks-notes-and-pipelines)). On Kubernetes set
+them with `gitlab.trustedGroups` and `gitlab.trustedUsers`.
 
 In the quickstart, none of these is set. Follow-ups come from
 `bun run devbox send`, and the agent reads no pull request discussion.

@@ -224,7 +224,8 @@ describe("LLM env", () => {
 });
 
 describe("integration env", () => {
-  const INTEGRATION = /^(LINEAR_|SLACK_|GITHUB_(WEBHOOKS_ENABLED|BOT_|TRUSTED_|CI_RESULT_ENABLED))/;
+  const INTEGRATION =
+    /^(LINEAR_|SLACK_|GITHUB_(WEBHOOKS_ENABLED|BOT_|TRUSTED_|CI_RESULT_ENABLED)|GITLAB_(WEBHOOKS_ENABLED|BOT_|TRUSTED_|CI_RESULT_ENABLED|TOKEN_FILE))/;
 
   // The integration env of the control plane container, as a name -> value map.
   async function envOf(files: string[], set: string[] = [], setJson: string[] = []): Promise<Record<string, string>> {
@@ -306,6 +307,42 @@ describe("integration env", () => {
         ['github.trustedOrgs=["example-org","other-org"]', 'github.trustedUsers=["alice"]'],
       ),
     ).toEqual({ GITHUB_TRUSTED_ORGS: "example-org,other-org", GITHUB_TRUSTED_USERS: "alice" });
+  });
+
+  it("GitLab webhooks on render the switch, bot identity, token file, CI results and trust lists", async () => {
+    expect(await envOf(["gitlab.yaml"])).toEqual({
+      GITLAB_WEBHOOKS_ENABLED: "true",
+      GITLAB_BOT_USERNAME: "devbox-bot",
+      GITLAB_BOT_USER_ID: "4242",
+      GITLAB_TOKEN_FILE: "/var/run/devbox/gitlab/token",
+      GITLAB_CI_RESULT_ENABLED: "true",
+      GITLAB_TRUSTED_GROUPS: "platform,platform/backend",
+      GITLAB_TRUSTED_USERS: "carol",
+    });
+  });
+
+  it("GitLab webhooks off keep only the trust lists, and mount no token", async () => {
+    expect(await envOf(["gitlab.yaml"], ["integrations.gitlab.enabled=false"])).toEqual({
+      GITLAB_TRUSTED_GROUPS: "platform,platform/backend",
+      GITLAB_TRUSTED_USERS: "carol",
+    });
+    const r = await renderWith(["base.yaml", "gitlab.yaml"], ["integrations.gitlab.enabled=false"]);
+    const spec = (r["Deployment/devbox/devbox-control-plane"] as Doc).spec.template.spec;
+    expect(JSON.stringify(spec.volumes)).not.toContain("gitlab");
+  });
+
+  it("GitLab webhooks on mount the token Secret, token key only", async () => {
+    const r = await renderWith(["base.yaml", "gitlab.yaml"]);
+    const spec = (r["Deployment/devbox/devbox-control-plane"] as Doc).spec.template.spec;
+    expect(spec.volumes).toContainEqual({
+      name: "gitlab-token",
+      secret: { secretName: "my-gitlab-token", items: [{ key: "token", path: "token" }] },
+    });
+    expect(spec.containers[0].volumeMounts).toContainEqual({
+      name: "gitlab-token",
+      mountPath: "/var/run/devbox/gitlab",
+      readOnly: true,
+    });
   });
 
   it("defaults render none of these", async () => {

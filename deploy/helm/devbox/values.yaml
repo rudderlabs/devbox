@@ -145,6 +145,19 @@ integrations:
     tokenScope: repos
     # -- Posts CI failures on the agent's pull requests back to the agent (GITHUB_CI_RESULT_ENABLED).
     ciResults: true
+  gitlab:
+    # -- Turns GitLab webhooks on at /webhook/gitlab (GITLAB_WEBHOOKS_ENABLED): `@<botUsername>` notes
+    # and failed pipelines on the agent's merge requests reach the agent. Needs gitlab.baseUrl. The
+    # webhook's signing token goes in the integrations Secret as GITLAB_WEBHOOK_SIGNING_TOKEN (or the
+    # legacy secret token as GITLAB_WEBHOOK_SECRET). See docs/gitlab.md.
+    enabled: false
+    # -- Required when enabled: the username of the user the GitLab token belongs to (a group or
+    # project access token's bot user). Notes mention it; its own notes are ignored.
+    botUsername: ""
+    # -- Required when enabled: that user's numeric GitLab user ID (0 means unset).
+    botUserId: 0
+    # -- Posts failed pipelines on the agent's merge requests back to the agent (GITLAB_CI_RESULT_ENABLED).
+    ciResults: true
 
 github:
   # -- GitHub orgs whose members may drive devbox. Required with trustedUsers (either) when the GitHub App is enabled.
@@ -156,8 +169,14 @@ gitlab:
   # -- A GitLab instance repos may live on, self-managed or https://gitlab.com, for example
   # https://gitlab.example.com (a relative URL root such as https://example.com/gitlab is fine; the
   # default port only). Repos under it clone, push and open merge requests there with the token
-  # in secrets.gitlab.existingSecret. Empty turns GitLab off. Outbound only so far: no webhooks.
+  # in secrets.gitlab.existingSecret. Empty turns GitLab off.
   baseUrl: ""
+  # -- GitLab groups (`group` or `group/subgroup`) whose members may drive devbox. Required with
+  # trustedUsers (either) when integrations.gitlab is enabled.
+  trustedGroups: []
+  # -- GitLab usernames who may drive devbox. Required with trustedGroups (either) when
+  # integrations.gitlab is enabled.
+  trustedUsers: []
 
 controlPlane:
   # -- More than one adds a PodDisruptionBudget.
@@ -194,7 +213,7 @@ snapshotBuilder:
 
 ingress:
   webhooks:
-    # -- Public Ingress for /webhook/ only (GitHub, Linear).
+    # -- Public Ingress for /webhook/ only (GitHub, GitLab, Linear).
     enabled: false
     # -- The Ingress class.
     className: ""

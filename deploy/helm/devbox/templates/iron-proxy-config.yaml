@@ -82,6 +82,18 @@ data:
             - host: api.github.com
               methods: [GET, HEAD]
               paths: ["/users/*"]
+            {{- if include "devbox.gitlabBaseUrl" . }}
+            {{- $prefix := include "devbox.gitlabPrefix" . }}
+            # Trust lookups on GitLab: a trusted group's members (inherited
+            # ones included) and a username's id. Group paths decoded, as above.
+            - host: {{ include "devbox.gitlabHost" . | quote }}
+              methods: [GET, HEAD]
+              paths:
+                {{- range .Values.gitlab.trustedGroups }}
+                - {{ printf "%s/api/v4/groups/%s/members/all" $prefix . | quote }}
+                {{- end }}
+                - {{ printf "%s/api/v4/users" $prefix | quote }}
+            {{- end }}
             - host: "*.blob.core.windows.net"
               methods: [GET, HEAD]
               paths: ["/actions-results/*"]

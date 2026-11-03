@@ -137,7 +137,8 @@ describe("iron-proxy config with a GitLab instance", () => {
   it("allows the project's git and API paths under the instance's URL root, and nothing else there", async () => {
     const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
     const rules = config.transforms[0].config.rules as Doc[];
-    const gitlab = rules.filter((r) => r.host === "git.example.com");
+    // The project rules (any method); the read-only trust rules are tested below.
+    const gitlab = rules.filter((r) => r.host === "git.example.com" && !r.methods);
     expect(gitlab).toEqual([
       { host: "git.example.com", paths: ["/gitlab/platform/backend/api/*", "/gitlab/platform/backend/api.git/*"] },
       {
@@ -149,6 +150,31 @@ describe("iron-proxy config with a GitLab instance", () => {
     // The GitHub repo keeps its usual rules; the GitLab one gets none on github.com.
     expect(rules).toContainEqual({ host: "github.com", paths: ["/acme/widgets/*", "/acme/widgets.git/*"] });
     expect(JSON.stringify(rules.filter((r) => r.host !== "git.example.com"))).not.toContain("backend");
+  });
+
+  it("allows the trust lookups read-only: each trusted group's members, and usernames", async () => {
+    const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      'gitlab.trustedGroups={platform,platform/backend}',
+    ]);
+    const rules = config.transforms[0].config.rules as Doc[];
+    expect(rules.filter((r) => r.host === "git.example.com" && r.methods)).toEqual([
+      {
+        host: "git.example.com",
+        methods: ["GET", "HEAD"],
+        paths: [
+          "/gitlab/api/v4/groups/platform/members/all",
+          "/gitlab/api/v4/groups/platform/backend/members/all",
+          "/gitlab/api/v4/users",
+        ],
+      },
+    ]);
+    // Without groups, usernames can still be resolved.
+    const plain = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
+    const plainRules = plain.config.transforms[0].config.rules as Doc[];
+    expect(plainRules.filter((r) => r.host === "git.example.com" && r.methods)).toEqual([
+      { host: "git.example.com", methods: ["GET", "HEAD"], paths: ["/gitlab/api/v4/users"] },
+    ]);
   });
 
   it("swaps the GitLab token on the Authorization header for that host only", async () => {

@@ -135,6 +135,8 @@ spec:
             {{- $slack := .Values.integrations.slack | default dict }}
             {{- $app := .Values.integrations.githubApp | default dict }}
             {{- $github := .Values.github | default dict }}
+            {{- $gitlabApp := .Values.integrations.gitlab | default dict }}
+            {{- $gitlab := .Values.gitlab | default dict }}
             {{- if $linear.enabled }}
             - { name: LINEAR_ENABLED, value: "true" }
             {{- end }}
@@ -165,6 +167,22 @@ spec:
             {{- with $github.trustedUsers }}
             - { name: GITHUB_TRUSTED_USERS, value: {{ join "," . | quote }} }
             {{- end }}
+            {{- if $gitlabApp.enabled }}
+            - { name: GITLAB_WEBHOOKS_ENABLED, value: "true" }
+            - { name: GITLAB_BOT_USERNAME, value: {{ $gitlabApp.botUsername | quote }} }
+            - { name: GITLAB_BOT_USER_ID, value: {{ $gitlabApp.botUserId | int64 | toString | quote }} }
+            # The control plane's own GitLab token: replies and trust lookups.
+            - { name: GITLAB_TOKEN_FILE, value: /var/run/devbox/gitlab/token }
+            {{- if $gitlabApp.ciResults }}
+            - { name: GITLAB_CI_RESULT_ENABLED, value: "true" }
+            {{- end }}
+            {{- end }}
+            {{- with $gitlab.trustedGroups }}
+            - { name: GITLAB_TRUSTED_GROUPS, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- with $gitlab.trustedUsers }}
+            - { name: GITLAB_TRUSTED_USERS, value: {{ join "," . | quote }} }
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -189,11 +207,21 @@ spec:
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
           volumeMounts:
             - { name: github-token, mountPath: /var/run/devbox/github, readOnly: true }
+            {{- if .Values.integrations.gitlab.enabled }}
+            - { name: gitlab-token, mountPath: /var/run/devbox/gitlab, readOnly: true }
+            {{- end }}
       # The whole Secret: `token`, and `expires-at` when the minter writes it.
       volumes:
         - name: github-token
           secret:
             secretName: {{ include "devbox.githubSecret" . }}
+        {{- if .Values.integrations.gitlab.enabled }}
+        # Only `token`: the GitLab Secret is the user's own.
+        - name: gitlab-token
+          secret:
+            secretName: {{ include "devbox.gitlabSecret" . }}
+            items: [{ key: token, path: token }]
+        {{- end }}
 
 {{- if gt (int .Values.controlPlane.replicas) 1 }}
 ---

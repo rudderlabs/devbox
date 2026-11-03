@@ -2,23 +2,27 @@
 
 devbox can work on repos hosted on a GitLab instance: self-managed, or
 `https://gitlab.com`. The agent clones from it, pushes its branch and opens a
-**draft merge request**, the way it opens a draft pull request on GitHub. A
+**draft merge request**, the way it opens a draft pull request on GitHub. With
+the webhooks on, an `@<bot>` note on that merge request and a failed pipeline
+on it reach the running task, and the agent answers in the note's thread. A
 deployment may mix GitHub and GitLab repos; each repo's host is read from its
-URL.
+URL. Kubernetes only: the local Compose stack takes GitHub repos.
 
-This is the outbound half. Nothing comes back from GitLab yet: no merge
-request comments, reviews or pipeline results reach the running task, and
-there is no `@mention` trigger. Those are tracked in
+Not there yet: a batched review (GitLab sends each note on its own, so each
+mentioning note is one round), approvals as a signal, and an installer step
+(`gitlab:setup`). Tracked in
 [rudderlabs/devbox#8](https://github.com/rudderlabs/devbox/issues/8).
-Kubernetes only: the local Compose stack takes GitHub repos.
 
 ## What you need
 
 - **A group or project access token** for the group that holds the repos,
   with the `api`, `read_repository` and `write_repository` scopes and at least
-  the Developer role. Merge requests and commits are attributed to the token's
-  bot user. The token does not rotate itself: set an expiry you can live with
-  and replace it in the Secret before then.
+  the Developer role. Merge requests, commits and replies are attributed to the
+  token's bot user, whose username and numeric id the webhooks need (see
+  below). The token does not rotate itself: set an expiry you can live with
+  and replace it in the Secret before then. A personal access token works for
+  a trial, but then the bot is you: your own notes are ignored as the bot's,
+  so mention it from another account.
 - **The instance's URL** as `gitlab.baseUrl`: `https://gitlab.example.com`,
   or with a relative URL root `https://example.com/gitlab`. The default port
   only, like `llm.baseUrl`, because the egress proxy intercepts only 80 and
@@ -70,6 +74,65 @@ The GitHub checks the installer runs (token, push access) cover the GitHub
 repos only; there is no GitLab preflight yet. A wrong token shows on the first
 task, as a failed push or merge request.
 
+## Webhooks: notes and pipelines
+
+With `integrations.gitlab.enabled`, the control plane serves
+`POST /webhook/gitlab` and the agent hears back from its merge requests:
+
+- **A note that mentions `@<botUsername>`** on a merge request the agent
+  opened starts a comment round. An inline (diff) note keeps its file and
+  line. The agent reacts with 👀, works, and replies in the note's thread.
+- **A failed pipeline** on such a merge request starts a CI round: the agent
+  downloads the failed jobs' traces, fixes the cause, pushes, and posts a note.
+  A branch pipeline (no `merge_request` in the event) is matched to the open
+  merge requests of its branch. Off with `integrations.gitlab.ciResults:
+  false`.
+
+Only notes from trusted users count: members of `gitlab.trustedGroups`
+(inherited members included) and `gitlab.trustedUsers`, by immutable numeric
+id. The bot's own notes are ignored, and so is everything on merge requests it
+did not open. Approvals, `Merge Request Hook` events and notes without the
+mention are ignored.
+
+1. Put the bot's identity and the trust lists in the values:
+
+   ```yaml
+   integrations:
+     gitlab: { enabled: true, botUsername: group_123_bot_abc, botUserId: 4242 }
+   gitlab:
+     baseUrl: https://gitlab.example.com
+     trustedGroups: [platform]        # or trustedUsers: [alice, bob]
+   ```
+
+   `GET <baseUrl>/api/v4/user` with the token prints its user's `username`
+   and `id`.
+
+2. Create the webhook on each project (or once on the group, GitLab Premium):
+   URL `<public URL>/webhook/gitlab`; triggers **Comments** and **Pipeline
+   events**; a **signing token** (GitLab 19.1+; the chart reads it as
+   `GITLAB_WEBHOOK_SIGNING_TOKEN`). On an older instance use the **secret
+   token** instead (`GITLAB_WEBHOOK_SECRET`). Put it in the integrations Secret:
+
+   ```bash
+   kubectl -n devbox create secret generic devbox-integrations \
+     --from-literal=GITLAB_WEBHOOK_SIGNING_TOKEN="whsec_…"
+   ```
+
+   The public URL is the one GitHub and Linear use: the `ingress.webhooks`
+   host, else `ingress.api`, else a tunnel ([GitHub: The public
+   URL](github.md#the-public-url)). Deliveries are verified (Standard Webhooks
+   `webhook-signature` over `webhook-id.webhook-timestamp.body`, five minutes
+   of clock skew allowed), then gated on the actor before anything is looked
+   up. A rejected delivery is one `gitlab_webhook.rejected` log line with the
+   reason.
+
+3. The control plane now needs the GitLab token too, for replies and the
+   member lookups: the chart mounts `secrets.gitlab.existingSecret` into it
+   when the webhooks are on. Nothing else to do.
+
+`GET /api/integrations/gitlab` reports the token, the webhooks and the last
+verified delivery.
+
 ## How it works
 
 - **Clones** come from the snapshot builder, which reads the token from the
@@ -83,10 +146,24 @@ task, as a failed push or merge request.
 - **The harness** picks a client per repo from its remote: GitHub for
   github.com, GitLab for a remote under `gitlab.baseUrl`
   (`harness/src/harness/codehost.py`). The merge request's `web_url` is what
-  the task records as its PR URL.
+  the task records as its PR URL, and what a webhook's merge request is
+  matched against. In a follow-up round the same adapter reads the merge
+  request's notes as discussion history (trusted authors only, the same lists
+  as the webhook gate), updates its title or description, fetches job traces
+  and retries a pipeline's failed jobs. The sandbox reaches only the configured
+  projects, the trusted groups' member lists and `/api/v4/users`.
+- **The control plane** verifies and gates the webhooks, matches the merge
+  request to its task, and posts the agent's replies: in the note's discussion
+  thread (looked up when the event did not name it), or as a new note for a CI
+  result. A crashed round posts a retry hint naming the bot; a CI round that
+  crashes stays silent.
 
 ## Versions and editions
 
-Any GitLab that serves REST API v4 and smart-HTTP git works for this half:
-every call used (project, branch, merge request create and list) predates
-GitLab 10. Drafts are the `Draft:` title prefix. The Free tier is enough.
+Any GitLab that serves REST API v4 and smart-HTTP git works for the outbound
+half: every call used (project, branch, merge request create and list) predates
+GitLab 10. The webhooks need the signing token, GitLab 19.1 (19.0 behind a
+flag), or the secret token on anything older; the events, notes, discussions,
+award emoji, pipelines and job trace calls are all years old. Drafts are the
+`Draft:` title prefix. The Free tier is enough; a group webhook needs Premium,
+project webhooks do not.
