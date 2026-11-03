@@ -11,6 +11,7 @@ import {
   setIssueStarted,
   uploadIssueAttachment,
 } from "../../clients/linear";
+import { LinearTokenError } from "../../clients/linearOauth";
 import type { LinearWebhookController } from "../../controllers/linearWebhook.controller";
 import type { Task } from "../../db/schema";
 import type { InboxRow, ReplyTarget } from "../../repositories/inbox.repository";
@@ -158,14 +159,13 @@ export class LinearIntegration implements Integration<LinearStatus> {
     return { ...person, codeHost: { githubLogin } };
   }
 
-  // Nothing has been sent when the token fetch fails, so the caller may retry.
-  // A per-call client: the signal bounds this send's requests only.
+  // A per-call client: the signal bounds this send's requests only. Nothing
+  // has been sent when the token request fails; see linearRetryable.
   private async client(signal: AbortSignal): Promise<LinearClient> {
     try {
       return await this.linearTokenProvider.getAuthorizedLinearClient(signal);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new RetryableError(`Linear token fetch failed: ${msg}`);
+      throw linearRetryable(err) ?? err;
     }
   }
 }
@@ -175,6 +175,9 @@ export class LinearIntegration implements Integration<LinearStatus> {
 // RatelimitedLinearError: an HTTP 429 or a "ratelimited" GraphQL error, with
 // Retry-After in seconds. Without it, the wait runs to the later of Linear's
 // request and complexity reset times (epoch ms), and at least a minute.
+// A failed token request is retried only when it is transient. A rejected
+// client, secret or grant won't fix itself, so it is thrown as is: the caller
+// logs it as an error and drops the send instead of holding every reply.
 function linearRetryable(err: unknown): RetryableError | undefined {
   if (err instanceof RatelimitedLinearError) {
     const s = err.retryAfter;
@@ -184,5 +187,11 @@ function linearRetryable(err: unknown): RetryableError | undefined {
         : rateLimitWaitMs(Math.max(err.requestsResetAt ?? 0, err.complexityResetAt ?? 0));
     return new RetryableError(err.message, wait);
   }
-  return retryable(err instanceof LinearError ? err.raw : err);
+  const cause = err instanceof LinearError ? err.raw : err;
+  if (cause instanceof LinearTokenError) {
+    return cause.transient
+      ? new RetryableError(`Linear token fetch failed: ${cause.message}`)
+      : undefined;
+  }
+  return retryable(cause);
 }

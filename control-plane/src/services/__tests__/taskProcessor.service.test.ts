@@ -107,6 +107,7 @@ const { config: mockedConfig } = (await import("../../config")) as unknown as {
 };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const { RetryableError } = await import("../../integrations/outbound");
+const { LinearTokenError } = await import("../../clients/linearOauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -981,7 +982,9 @@ describe("TaskProcessorService", () => {
     });
 
     it("a Linear token failure skips only the Linear post; GitHub and Slack posts, dead-letter and release go on", async () => {
-      getAuthorizedLinearClient.mockRejectedValue(new Error("token refresh failed"));
+      getAuthorizedLinearClient.mockRejectedValue(
+        new LinearTokenError("Linear token request failed: Unable to connect"),
+      );
       failTaskInbox.mockResolvedValue([
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),

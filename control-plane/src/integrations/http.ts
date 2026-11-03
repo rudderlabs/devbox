@@ -33,9 +33,6 @@ export function rateLimitWaitMs(resetAtMs?: number): number {
   return Math.max(untilReset, 60_000);
 }
 
-// The client had no credential to send with, so nothing was sent.
-export class TokenFetchError extends Error {}
-
 // What bun 1.4.4's fetch throws when the request never reached the server: a
 // TypeError whose `code` names the cause (shapes pinned in http.test.ts). A
 // reset (ECONNRESET) can come after the request went out, so it is not here.
@@ -55,11 +52,11 @@ const NOTHING_SENT = new Set([
 
 // The failure as a RetryableError when it is one of the exact retryable
 // cases, where nothing was sent yet: a rate limit (429), connection refused,
-// DNS, TLS handshake, token fetch. Anything else (timeouts, 5xx, other 4xx)
-// is undefined: the caller logs and drops it.
+// DNS, TLS handshake. Anything else (timeouts, 5xx, other 4xx, a missing
+// token) is undefined: the caller logs and drops it. Linear's token failures
+// are classified by the Linear integration.
 export function retryable(err: unknown): RetryableError | undefined {
   if (err instanceof RetryableError) return err;
-  if (err instanceof TokenFetchError) return new RetryableError(err.message);
   if (err instanceof HttpError) {
     return err.rateLimited ? new RetryableError(err.message, err.retryAfterMs) : undefined;
   }

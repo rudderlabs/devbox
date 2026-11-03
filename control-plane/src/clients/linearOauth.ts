@@ -1,5 +1,3 @@
-import { TokenFetchError } from "../integrations/http";
-
 // ── Client-credentials token ─────────────────────────────────────────────────
 // The exports in this section are pure: they never read `config`.
 
@@ -13,10 +11,10 @@ export type LinearCredentials = { clientId: string; clientSecret: string };
 
 export type ClientCredentialsToken = { accessToken: string; expiresAt: Date; scope: string };
 
-// A failed token request. `code` and `description` are the OAuth `error` and
-// `error_description` fields; the response body is never kept otherwise. A
-// TokenFetchError: nothing was sent with the missing token, so a send may retry.
-export class LinearTokenError extends TokenFetchError {
+// A failed token request. `status` is set only when Linear answered; `code`
+// and `description` are the OAuth `error` and `error_description` fields; the
+// response body is never kept otherwise.
+export class LinearTokenError extends Error {
   status?: number;
   code?: string;
   description?: string;
@@ -30,6 +28,13 @@ export class LinearTokenError extends TokenFetchError {
     this.status = details.status;
     this.code = details.code;
     this.description = details.description;
+  }
+
+  // No answer (network, TLS, the request timeout), a rate limit or a server
+  // error: a later request may succeed. Any other answer (a rejected client,
+  // secret or grant; a token response without a token) needs an operator.
+  get transient(): boolean {
+    return this.status === undefined || this.status === 429 || this.status >= 500;
   }
 }
 

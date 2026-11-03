@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { config } from "../config";
 import { githubApiBaseUrl } from "../githubToken/mint";
-import { HttpError, parseRetryAfter, rateLimitWaitMs, TokenFetchError } from "../integrations/http";
+import { HttpError, parseRetryAfter, rateLimitWaitMs } from "../integrations/http";
 import { logger } from "../logger";
 import {
   type GithubTokenProvider,
@@ -43,23 +43,17 @@ function tokenProvider(): GithubTokenProvider {
   return githubToken;
 }
 
-// No token means nothing was sent, so a send may be retried (TokenFetchError).
-function token(): string {
-  try {
-    return tokenProvider()();
-  } catch (err) {
-    throw new TokenFetchError(err instanceof Error ? err.message : String(err));
-  }
-}
-
 // The token provider's state, for GET /api/integrations/github.
 export function githubTokenState(): GithubTokenState {
   return tokenProvider().state();
 }
 
+// Throws, sending nothing, while there is no token: the token file has never
+// been readable (say, the minter can't use the App's key). Only an operator
+// can fix that, so callers drop the send instead of holding it.
 function githubHeaders(): Record<string, string> {
   return {
-    Authorization: `Bearer ${token()}`,
+    Authorization: `Bearer ${tokenProvider()()}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
     "Content-Type": "application/json",

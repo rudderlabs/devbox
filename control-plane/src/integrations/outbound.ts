@@ -17,8 +17,8 @@ export type Outbound =
     };
 export type SendCtx = { signal: AbortSignal; log: Logger };
 
-// Throw only before the first request is sent (token fetch failed, 429,
-// connection refused, DNS, TLS handshake).
+// Throw only before the first request is sent (a transient token failure,
+// 429, connection refused, DNS, TLS handshake).
 export class RetryableError extends Error {
   constructor(
     msg: string,

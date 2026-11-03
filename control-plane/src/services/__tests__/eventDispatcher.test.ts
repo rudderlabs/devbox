@@ -85,11 +85,23 @@ const { ApiIntegration } = await import("../../integrations/api");
 const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
+const { LinearTokenError } = await import("../../clients/linearOauth");
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
   config: {
     github: { webhooks: { botLogin: string } | undefined };
   };
 };
+
+// What the token provider throws when Linear's token endpoint can't be reached
+// (no answer, so no status): a later request may succeed.
+const linearUnreachable = () =>
+  new LinearTokenError("Linear token request failed: Unable to connect");
+// Linear rejected the app's credentials: only an operator can fix that.
+const linearRejected = () =>
+  new LinearTokenError("Linear token request failed with status 400: invalid_client", {
+    status: 400,
+    code: "invalid_client",
+  });
 
 // The assignee mirror is detached (void'd) from the pr_opened case — settle its
 // promise chain before asserting on its mocks.
@@ -469,7 +481,7 @@ describe("EventDispatcher", () => {
 
     it("Linear task: a token fetch failure posts nothing and holds the event", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
-        new Error("token refresh failed"),
+        linearUnreachable(),
       );
       expect(
         await dispatcher.handle(
@@ -487,6 +499,29 @@ describe("EventDispatcher", () => {
       for (const m of [emitThought, emitAction, emitResponse, emitError, postIssueComment]) {
         expect(m).not.toHaveBeenCalled();
       }
+    });
+
+    it("Linear task: invalid_client is dropped, so the cursor advances", async () => {
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        linearRejected(),
+      );
+      const thought: HarnessEvent = {
+        seq: 1,
+        ts: "t",
+        type: "agent_thought",
+        inbox_id: "inbox-1",
+        target_id: "sess-1",
+        body: "x",
+      };
+      // reconcileOne advances past a dropped event; a held one is retried.
+      expect(await dispatcher.handle(thought, makeTask())).toBe("dropped");
+      expect(holds.of("linear").heldTasks).toBe(0);
+      expect(emitThought).not.toHaveBeenCalled();
+      // pr_opened records the PR and goes on without the Linear attach.
+      expect(await dispatcher.handle(prEvent(), makeTask())).toBe("ok");
+      expect(holds.of("linear").heldTasks).toBe(0);
+      expect(appendPrUrl).toHaveBeenCalledTimes(1);
+      expect(attachUrlToIssue).not.toHaveBeenCalled();
     });
 
     it("foreign / unknown inbox_id → cross-task leak: aborts, no emit", async () => {
@@ -703,7 +738,7 @@ describe("EventDispatcher", () => {
 
     it("Linear task: a token fetch failure holds the event at onPrOpened, after appendPrUrl", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
-        new Error("token refresh failed"),
+        linearUnreachable(),
       );
       expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
       expect(appendPrUrl).toHaveBeenCalledTimes(1);
@@ -1017,7 +1052,7 @@ describe("EventDispatcher", () => {
 
     it("a Linear token failure does not hold a GitHub round's reply or completion on a Linear task", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
-        new Error("token refresh failed"),
+        linearUnreachable(),
       );
       getByIdForTask.mockResolvedValue(ghCommentRow());
       expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("ok");
@@ -1058,7 +1093,7 @@ describe("EventDispatcher", () => {
       expect(holds.of("linear").heldTasks).toBe(0);
       // pr_opened's Linear client fetch is the task's (Linear's) hold.
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
-        new Error("token refresh failed"),
+        linearUnreachable(),
       );
       expect(await dispatcher.handle(prEvent(), makeTask({ id: "task-2" }))).toBe("hold");
       expect(holds.of("linear").heldTasks).toBe(1);
@@ -1395,7 +1430,7 @@ describe("EventDispatcher", () => {
       // Slack's mention comes from assignee(), which fails (logged) and the
       // post goes out without it; completed needs no Linear client.
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
-        new Error("token refresh failed"),
+        linearUnreachable(),
       );
       expect(await dispatcher.handle(completedEvent(), makeTask())).toBe("ok");
       expect(markResponded).toHaveBeenCalled();

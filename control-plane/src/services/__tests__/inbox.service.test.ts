@@ -72,6 +72,7 @@ const { LinearIntegration } = await import("../../integrations/linear");
 const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
 const { IntegrationHooks } = await import("../integrationHooks");
+const { LinearTokenError } = await import("../../clients/linearOauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -499,7 +500,7 @@ describe("InboxService", () => {
     it("a Linear token failure drops only that row's notice: every row is marked failed, later rows still post", async () => {
       stageRows([linearRow("a", "sess-1"), ghCommentRow("b")]);
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
-        new Error("token refresh failed"),
+        new LinearTokenError("Linear token request failed: Unable to connect"),
       );
 
       await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
