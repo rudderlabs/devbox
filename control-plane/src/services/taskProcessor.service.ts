@@ -45,7 +45,7 @@ export class TaskProcessorService {
   private readonly sandboxManager: SandboxManager;
   private readonly eventDispatcher: EventDispatcher;
   private readonly inboxService: InboxService;
-  private readonly slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">;
+  private readonly slackNotifier: Pick<SlackNotifierService, "notifyTerminal">;
   private readonly integrations: Record<IntegrationName, Integration>;
   private readonly holds: ReplyHolds;
   // Sources this build has an integration for; claimNext and
@@ -59,7 +59,7 @@ export class TaskProcessorService {
     sandboxManager: SandboxManager,
     eventDispatcher: EventDispatcher,
     inboxService: InboxService,
-    slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">,
+    slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
     integrations: Record<IntegrationName, Integration>,
     holds: ReplyHolds,
     taskSources: Task["source"][],
@@ -854,17 +854,17 @@ export class TaskProcessorService {
       const current = await this.taskRepo.getByIdOwnedBy(task.id, config.podId);
       if (current?.sandboxId) await this.killSandboxQuietly(current.sandboxId);
     }
-    // Slack failure update to the configured channel, for a task whose source
-    // is opted in (SLACK_NOTIFY_SOURCES). Gated on the ASSIGNMENT (top-level)
-    // round being among the rows just dead-lettered, mirroring the completion
-    // path's kind === "assignment" gate in eventDispatcher. Without this, a
-    // failing follow-up comment/review/ci_result round (a new inbox row on the
-    // SAME task, appended after the assignment already completed and posted
-    // "✅ devbox completed") would post a contradictory "❌ devbox failed" into
-    // that same thread — only the top-level delegated task should ever notify
-    // Slack. Tying it to this failTaskInbox transition also keeps it
-    // at-most-once. Detached: a Slack outage must not affect teardown.
-    if (assignment && this.slackNotifier.notifies(task.source)) {
+    // Slack failure update to the configured channel. Gated on the ASSIGNMENT
+    // (top-level) round being among the rows just dead-lettered, mirroring the
+    // completion path's kind === "assignment" gate in eventDispatcher. Without
+    // this, a failing follow-up comment/review/ci_result round (a new inbox row
+    // on the SAME task, appended after the assignment already completed and
+    // posted "✅ devbox completed") would post a contradictory "❌ devbox
+    // failed" into that same thread — only the top-level delegated task should
+    // ever notify Slack. Tying it to this failTaskInbox transition also keeps
+    // it at-most-once. Detached: a Slack outage must not affect teardown; the
+    // notifier no-ops when Slack is disabled.
+    if (assignment) {
       this.hooks.detach(
         task.id,
         "slack",

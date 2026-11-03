@@ -288,11 +288,7 @@ describe("TaskProcessorService", () => {
     inboxService = { sweepUndelivered, deadLetterWorkspaceMissing } as unknown as InboxService;
 
     notifyTerminal = mock(() => Promise.resolve());
-    // Slack on with the default SLACK_NOTIFY_SOURCES (linear).
-    slackNotifier = {
-      notifyTerminal,
-      notifies: (source: string) => source === "linear",
-    } as unknown as SlackNotifierService;
+    slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
     integrations = fakeIntegrations({
@@ -366,7 +362,12 @@ describe("TaskProcessorService", () => {
         ownerId: "pod-test",
         reason: "Task failed — check control-plane logs for details.",
       });
-      expect(notifyTerminal).not.toHaveBeenCalled();
+      // The notifier skips non-Linear tasks itself (slackNotifier.service.test.ts).
+      expect(notifyTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "api" }),
+        "failed",
+        expect.any(String),
+      );
     });
   });
 

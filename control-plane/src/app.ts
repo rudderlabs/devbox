@@ -136,7 +136,6 @@ export function createApp(): AppBundle {
     taskRepository,
     config.slack?.botToken ?? "",
     config.slack?.channel ?? "",
-    config.slack?.notifySources ?? [],
     hooks,
   );
 

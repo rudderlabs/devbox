@@ -60,7 +60,7 @@ export class EventDispatcher {
     private taskRepo: TaskRepository,
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">,
+    private slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
     private integrations: Record<IntegrationName, Integration>,
     private holds: ReplyHolds,
     private hooks: IntegrationHooks,
@@ -184,13 +184,13 @@ export class EventDispatcher {
         this.hooks.roundFinished(task, inboxRow, outcome, marked, async () =>
           sandboxId ? this.sandboxManager.extractArchive(sandboxId) : null,
         );
-        // Slack completion update to the configured channel, for a task
-        // whose source is opted in (SLACK_NOTIFY_SOURCES). Assignment-only
-        // (the top-level task, not comment/review rounds) and gated on the
-        // first inbox transition so a cursor-replay can't double-post.
-        // Detached: a Slack outage (or the assignee lookup for its mention)
-        // must not stall the dispatch loop.
-        if (marked && inboxRow.kind === "assignment" && this.slackNotifier.notifies(task.source)) {
+        // Slack completion update to the configured channel.
+        // Assignment-only (the top-level task, not comment/review rounds) and
+        // gated on the first inbox transition so a cursor-replay can't double-
+        // post. Detached: a Slack outage (or the assignee lookup for its
+        // mention) must not stall the dispatch loop. The notifier no-ops when
+        // Slack is disabled.
+        if (marked && inboxRow.kind === "assignment") {
           this.hooks.detach(
             task.id,
             "slack",

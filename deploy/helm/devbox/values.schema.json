@@ -117,11 +117,7 @@
         "slack": {
           "type": "object",
           "additionalProperties": false,
-          "properties": {
-            "enabled": { "type": "boolean" },
-            "channelId": { "type": "string" },
-            "notifySources": { "type": "array", "items": { "enum": ["linear", "api"] } }
-          }
+          "properties": { "enabled": { "type": "boolean" }, "channelId": { "type": "string" } }
         },
         "githubApp": {
           "type": "object",

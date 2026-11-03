@@ -216,11 +216,7 @@ describe("EventDispatcher", () => {
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
     notifyTerminal = mock(() => Promise.resolve());
-    // Slack on with the default SLACK_NOTIFY_SOURCES (linear).
-    slackNotifier = {
-      notifyTerminal,
-      notifies: (source: string) => source === "linear",
-    } as unknown as SlackNotifierService;
+    slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
     const integrations = makeIntegrations(true);
@@ -301,14 +297,19 @@ describe("EventDispatcher", () => {
       );
     });
 
-    it("completed assignment: no run archive, no Slack", async () => {
+    // The notifier skips non-Linear tasks itself (slackNotifier.service.test.ts).
+    it("completed assignment: no run archive; Slack is left to the notifier", async () => {
       getByIdForTask.mockResolvedValue(apiRow());
       await dispatcher.handle(
         { seq: 3, ts: "t", type: "completed", inbox_id: "inbox-1", status: "completed" },
         apiTask(),
       );
       await flushMicrotasks();
-      expect(notifyTerminal).not.toHaveBeenCalled();
+      expect(extractArchive).not.toHaveBeenCalled();
+      expect(notifyTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "api" }),
+        "completed",
+      );
     });
   });
 

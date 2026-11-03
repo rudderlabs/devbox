@@ -45,15 +45,14 @@ describe("SlackNotifierService", () => {
   let getById: ReturnType<typeof mock>;
   let taskRepo: TaskRepository;
 
-  const make = (botToken = "xoxb-test", channel = "C1", sources: Ctor[3] = ["linear"]) =>
+  const make = (botToken = "xoxb-test", channel = "C1") =>
     new SlackNotifierService(
       taskRepo,
       botToken,
       channel,
-      sources,
-      { assignee } as unknown as Ctor[4],
-      post as unknown as Ctor[5],
-      lookupSlackUser as unknown as Ctor[6],
+      { assignee } as unknown as Ctor[3],
+      post as unknown as Ctor[4],
+      lookupSlackUser as unknown as Ctor[5],
     );
 
   // The text posted by the single post() call.
@@ -168,23 +167,9 @@ describe("SlackNotifierService", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("skips an API task unless SLACK_NOTIFY_SOURCES has api", async () => {
-    const notifier = make();
-    expect(notifier.notifies("api")).toBe(false);
-    await notifier.notifyTerminal(makeTask({ source: "api" }), "completed");
+  it("skips an API task", async () => {
+    await make().notifyTerminal(makeTask({ source: "api" }), "completed");
     expect(post).not.toHaveBeenCalled();
-  });
-
-  it("posts for an opted-in API task: labelled by its key when untitled, never nudged", async () => {
-    const task = makeTask({
-      source: "api",
-      key: "DBX-API-7",
-      title: "",
-      externalUrl: "https://devbox.example.com/api/tasks/DBX-API-7",
-    });
-    getById.mockResolvedValue({ ...task, prUrls: [PR] });
-    await make("xoxb-test", "C1", ["linear", "api"]).notifyTerminal(task, "completed");
-    expect(postedText()).toContain("<https://devbox.example.com/api/tasks/DBX-API-7|DBX-API-7>");
     expect(assignee).not.toHaveBeenCalled();
   });
 
