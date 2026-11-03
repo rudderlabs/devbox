@@ -15,6 +15,7 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
+from harness.codehost import FollowUpHost
 from harness.deepagents.middleware.ci_rerun import CiRerunMiddleware, WorkflowRunRef
 from harness.deepagents.middleware.memory_writing import (
     MemoryWritingMiddleware,
@@ -28,7 +29,6 @@ from harness.deepagents.middleware.reply import ReplyMiddleware, ReplyTarget
 from harness.deepagents.middleware.tool_exclusion import ToolExclusionMiddleware
 from harness.deepagents.session import DeepAgentSession
 from harness.events import RoundEvents
-from harness.git import GitHubClient
 from harness.memory import MemoryStore
 from harness.paths import WORKSPACE
 from harness.util import _prompt_text
@@ -76,6 +76,8 @@ not already planned and implemented.
 
 - **GitHub**: pull request comments and reviews. The reviewer sees your reply on
   the comment or review it answers.
+- **GitLab**: merge request comments. The reviewer sees your reply in the
+  comment's thread.
 - **Linear**: comments on the agent session. The user may be watching live.
 - **Any other channel**: comments or messages on the task, where it was filed.
   The user sees your reply there.
@@ -263,7 +265,7 @@ def _round_middleware(
     prs: Sequence[PullRequestRef],
     memory_repos: Sequence[RepoScope],
     memory: MemoryStore,
-    github: GitHubClient,
+    github: FollowUpHost,
     memory_stage: str,
 ) -> list[Any]:
     # create_deep_agent always offers the `task` subagent tool. A subagent would
@@ -297,7 +299,7 @@ class FollowUpAgent(DeepAgentSession[Any]):
         prs: Sequence[PullRequestRef],
         memory_repos: Sequence[RepoScope],
         memory: MemoryStore,
-        github: GitHubClient,
+        github: FollowUpHost,
     ) -> None:
         super().__init__(
             events=events,
@@ -333,7 +335,7 @@ class CiAgent(DeepAgentSession[Any]):
         prs: Sequence[PullRequestRef],
         memory_repos: Sequence[RepoScope],
         memory: MemoryStore,
-        github: GitHubClient,
+        github: FollowUpHost,
         run: WorkflowRunRef,
     ) -> None:
         middleware = _round_middleware(
@@ -354,6 +356,6 @@ class CiAgent(DeepAgentSession[Any]):
             system_prompt=CI_SYSTEM_PROMPT,
             middleware=middleware,
             durable=True,
-            # CI rounds are always on GitHub, where progress is not shown.
+            # CI rounds are always on a code host, where progress is not shown.
             emit_progress=False,
         )

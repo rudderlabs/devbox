@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-from harness.ci_logs import parse_run_url
+from harness.codehost import parse_change_request_url, parse_run_url
 from harness.deepagents.agents.followup import CiAgent, FollowUpAgent
 from harness.deepagents.checkpointer import latest_round_tag
 from harness.deepagents.middleware.ci_rerun import WorkflowRunRef
@@ -28,7 +28,7 @@ from harness.deepagents.retry import AttemptState, run_with_retry_policy
 from harness.discussion_context import fetch_discussion_context_for_pr
 from harness.distillation import post_code_round_distillation
 from harness.events import iter_events
-from harness.git import GitHubClient, parse_pr_url
+from harness.git import GitHubClient
 from harness.handlers._common import (
     _covered_target_ids,
     _read_json_or_none,
@@ -47,6 +47,11 @@ from harness.util import defang, fenced, new_run_id
 if TYPE_CHECKING:
     from harness.daemon import DaemonState
     from harness.deepagents.session import DeepAgentSession
+
+
+# Sources whose rounds are about a pull or merge request: their discussion
+# is injected into the brief.
+CODE_HOST_CHANNELS: tuple[str, ...] = ("github", "gitlab")
 
 
 def followup_thread_id(task_key: str) -> str:
@@ -257,13 +262,18 @@ def with_discussion(
 
 
 def task_pull_requests(events_file: Path) -> tuple[PullRequestRef, ...]:
-    """The task's pull requests: the latest valid ``pr_opened`` URL per repo."""
+    """The task's pull requests (merge requests included): the latest valid
+    ``pr_opened`` URL per repo."""
     by_repo: dict[str, str] = {}
     for event in iter_events(events_file):
         if event.get("type") != "pr_opened":
             continue
         repo, url = event.get("repo"), event.get("pr_url")
-        if isinstance(repo, str) and isinstance(url, str) and parse_pr_url(url):
+        if (
+            isinstance(repo, str)
+            and isinstance(url, str)
+            and parse_change_request_url(url)
+        ):
             by_repo[repo] = url
     return tuple(PullRequestRef(repo, url) for repo, url in by_repo.items())
 
@@ -550,7 +560,7 @@ def run_followup_comment(entry: dict[str, Any], state: DaemonState) -> None:
 
     def brief() -> str:
         text = comment_brief(body=body, channel=channel, pr=pr)
-        if channel == "github" and pr:
+        if channel in CODE_HOST_CHANNELS and pr:
             text = with_discussion(
                 text,
                 pr=pr,
@@ -601,7 +611,7 @@ def run_followup_review(entry: dict[str, Any], state: DaemonState) -> None:
         text = review_brief(
             review_body=review_body, inlines=inlines, channel=channel, pr=pr
         )
-        if channel == "github" and pr:
+        if channel in CODE_HOST_CHANNELS and pr:
             text = with_discussion(
                 text,
                 pr=pr,
@@ -652,7 +662,8 @@ def run_followup_ci(
     parsed = parse_run_url(payload.get("run_url", ""))
     if parsed is None:
         raise ValueError(f"ci_result: unparseable run_url {payload.get('run_url')!r}")
-    run = WorkflowRunRef(*parsed)
+    kind, owner, repo, run_id = parsed
+    run = WorkflowRunRef(owner, repo, run_id, kind=kind)
 
     def brief() -> str:
         return ci_brief(payload=payload, failed_jobs=failed_jobs, errors=errors)

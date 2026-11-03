@@ -20,7 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from harness.cmd_runner import run_cmd, run_cmd_with_display_argv
-from harness.codehost import CodeHost, parse_remote_url, remote_origin_url
+from harness.codehost import (
+    CodeHost,
+    CodeHostApiError,
+    parse_remote_url,
+    remote_origin_url,
+)
 from harness.env_flags import bool_env, knowledge_dir_relative_path
 from harness.paths import WORKSPACE
 from harness.plan_utils import (
@@ -35,13 +40,10 @@ from harness.schemas import PlanRepo
 # In-sandbox: the token is a placeholder that iron-proxy swaps at egress.
 
 
-class GitHubApiError(RuntimeError):
+class GitHubApiError(CodeHostApiError):
     def __init__(self, method: str, path: str, status: int, response_body: str) -> None:
-        super().__init__(f"GitHub {method} {path} -> {status}: {response_body[:400]}")
-        self.method = method
-        self.path = path
-        self.status = status
-        self.response_body = response_body
+        super().__init__(method, path, status, response_body)
+        self.args = (f"GitHub {method} {path} -> {status}: {response_body[:400]}",)
 
 
 class CommitPublishError(RuntimeError):

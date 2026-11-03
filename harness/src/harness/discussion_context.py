@@ -1,8 +1,9 @@
-"""Fetch and format new GitHub PR discussion context per agent session.
+"""Fetch and format new pull request discussion context per agent session.
 
-The three GitHub list endpoints (issue comments, inline review comments, and
-submitted-review summary bodies) each return their full set on every call, so
-each fetch is authoritative. The agent runs as a long-lived, resumed session, so it
+The three list calls (issue comments, inline review comments, and
+submitted-review summary bodies; on GitLab the adapter maps merge request notes
+onto the first two and the third is empty) each return their full set on every
+call, so each fetch is authoritative. The agent runs as a long-lived, resumed session, so it
 only needs the comments it has not seen yet; this helper tracks, per (PR, session)
 key, which comments have already been injected and returns only the delta (the
 whole discussion on a key's first round, then just what is new). Only comments
@@ -22,7 +23,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from harness.git import GitHubClient, parse_pr_url
+from harness.codehost import (
+    FollowUpHost,
+    GitLabClient,
+    client_for_change_request_url,
+    parse_change_request_url,
+)
+from harness.git import GitHubClient
 from harness.paths import DISCUSSION_CONTEXT_JSON, TRUSTED_MEMBERS_JSON
 from harness.util import load_json_file, write_json
 
@@ -38,6 +45,12 @@ _TRUSTED_USERS_ENV = "HARNESS_TRUSTED_USERS"
 # comments are trusted as discussion context in addition to org members — so a
 # human can point at a bot's review comment and just say "@harness fix this".
 _TRUSTED_BOT_IDS_ENV = "HARNESS_TRUSTED_BOT_IDS"
+# The same three for a merge request on the configured GitLab instance: groups
+# (``group`` or ``group/subgroup``), usernames and numeric user ids. The control
+# plane forwards the first two from its own GITLAB_TRUSTED_* settings.
+_GITLAB_TRUSTED_GROUPS_ENV = "HARNESS_GITLAB_TRUSTED_GROUPS"
+_GITLAB_TRUSTED_USERS_ENV = "HARNESS_GITLAB_TRUSTED_USERS"
+_GITLAB_TRUSTED_BOT_IDS_ENV = "HARNESS_GITLAB_TRUSTED_BOT_IDS"
 # How long a fetched member list is trusted before a refetch (seconds).
 _MEMBERS_TTL_SECONDS = 6 * 60 * 60
 # File name of the resolved trusted-user cache, beside the member cache.
@@ -56,9 +69,10 @@ def pr_coordinates_from_payload(
 ) -> tuple[str, str, int] | None:
     """Extract ``(owner, repo, pr_number)`` from an inbox PR payload.
 
-    Current GitHub-sourced rows usually carry only ``repo`` and ``pr_url``. If a
+    Current code-host rows usually carry only ``repo`` and ``pr_url``. If a
     future payload adds explicit coordinates, prefer them; otherwise parse the
-    GitHub PR URL. Malformed or incomplete payloads return ``None`` so callers can
+    pull request or merge request URL (``owner`` is a GitLab namespace path for
+    the latter). Malformed or incomplete payloads return ``None`` so callers can
     keep the round prompt unchanged instead of failing the inbox row.
     """
     if not isinstance(pr, Mapping):
@@ -70,7 +84,10 @@ def pr_coordinates_from_payload(
 
     pr_url = pr.get("pr_url")
     if isinstance(pr_url, str):
-        return parse_pr_url(pr_url)
+        parsed = parse_change_request_url(pr_url)
+        if parsed is not None:
+            _kind, owner, repo, number = parsed
+            return owner, repo, number
     return None
 
 
@@ -84,7 +101,7 @@ def fetch_and_store_discussion(
     own_items: list[Comment] | None = None,
     trusted_orgs: Sequence[str] | None = None,
     trusted_users: Sequence[str] | None = None,
-    client: GitHubClient | None = None,
+    client: FollowUpHost | None = None,
     cache_path: Path = DISCUSSION_CONTEXT_JSON,
     members_cache_path: Path | None = None,
 ) -> str:
@@ -135,12 +152,23 @@ def fetch_and_store_discussion(
     a later round. When ``before`` is ``None`` there is no temporal bound. Returns an
     empty string when nothing is new, so the caller leaves the prompt unchanged.
     """
-    orgs = list(trusted_orgs) if trusted_orgs is not None else _trusted_orgs()
-    users = list(trusted_users) if trusted_users is not None else _trusted_users()
-    if not orgs and not users:
-        # Nothing is trusted, so nothing can be injected: skip every GitHub call.
-        return ""
     github = client or GitHubClient()
+    # On GitLab the trust lists are groups and usernames of that instance; a
+    # GitHub list must never widen trust on a merge request, or the reverse.
+    gitlab = isinstance(github, GitLabClient)
+    orgs = (
+        list(trusted_orgs)
+        if trusted_orgs is not None
+        else (_env_list(_GITLAB_TRUSTED_GROUPS_ENV) if gitlab else _trusted_orgs())
+    )
+    users = (
+        list(trusted_users)
+        if trusted_users is not None
+        else (_env_list(_GITLAB_TRUSTED_USERS_ENV) if gitlab else _trusted_users())
+    )
+    if not orgs and not users:
+        # Nothing is trusted, so nothing can be injected: skip every API call.
+        return ""
     cache = _load_cache(cache_path)
     sessions = cache.get("sessions")
     if not isinstance(sessions, dict):
@@ -213,7 +241,9 @@ def fetch_and_store_discussion(
         return ""
     # Bots supplement a resolved member set: static/immutable operator-set ids added
     # on top so a bot reviewer's comment is trusted alongside org members.
-    trusted = members | _trusted_bot_ids()
+    trusted = members | _trusted_bot_ids(
+        _GITLAB_TRUSTED_BOT_IDS_ENV if gitlab else _TRUSTED_BOT_IDS_ENV
+    )
     comments = [c for c in all_comments if c.get("author_id") in trusted]
 
     eligible = [
@@ -261,13 +291,20 @@ def fetch_discussion_context_for_pr(
     before: str | None = None,
     own_items: list[Comment] | None = None,
 ) -> str:
-    """Best-effort wrapper for handlers that have a raw inbox PR payload."""
+    """Best-effort wrapper for handlers that have a raw inbox PR payload. The
+    client is the URL's host: GitHub, or the GitLab adapter for a merge request."""
     coordinates = pr_coordinates_from_payload(pr)
     if coordinates is None:
         return ""
+    pr_url = pr.get("pr_url") if isinstance(pr, Mapping) else None
     try:
+        client = (
+            client_for_change_request_url(pr_url)
+            if isinstance(pr_url, str) and parse_change_request_url(pr_url)
+            else None
+        )
         return fetch_and_store_discussion(
-            *coordinates, session_key, before=before, own_items=own_items
+            *coordinates, session_key, before=before, own_items=own_items, client=client
         )
     except Exception as exc:
         print(
@@ -280,9 +317,9 @@ def fetch_discussion_context_for_pr(
 
 
 def format_discussion_context(comments: list[Comment]) -> str:
-    lines = ["<discussion_context>", "### GitHub PR discussion history"]
+    lines = ["<discussion_context>", "### Pull request discussion history"]
     if not comments:
-        lines.append("_(No GitHub PR discussion comments fetched yet.)_")
+        lines.append("_(No pull request discussion comments fetched yet.)_")
     for comment in sorted(comments, key=_sort_key):
         label = str(comment.get("type") or "comment")
         location = _comment_location(comment)
@@ -335,16 +372,17 @@ def _load_cache(path: Path) -> dict[str, Any]:
     return data
 
 
-def _trusted_bot_ids() -> set[int]:
-    """Operator-configured numeric GitHub user ids trusted as discussion authors.
+def _trusted_bot_ids(env_name: str = _TRUSTED_BOT_IDS_ENV) -> set[int]:
+    """Operator-configured numeric user ids trusted as discussion authors.
 
-    Parsed from ``HARNESS_TRUSTED_BOT_IDS`` (comma/space-separated). These are for
-    non-org bot accounts (AI PR-review bots) whose comments should reach the
-    agent as context. They are static/immutable (no TTL), and supplement — never
-    replace — the fetched org-member set: they are only consulted once org membership
-    has been resolved (the round fails closed if it has not).
+    Parsed from ``HARNESS_TRUSTED_BOT_IDS`` (comma/space-separated; the GitLab
+    variable for a merge request). These are for non-org bot accounts (AI
+    PR-review bots) whose comments should reach the agent as context. They are
+    static/immutable (no TTL), and supplement — never replace — the fetched
+    org-member set: they are only consulted once org membership has been
+    resolved (the round fails closed if it has not).
     """
-    raw = os.environ.get(_TRUSTED_BOT_IDS_ENV, "")
+    raw = os.environ.get(env_name, "")
     ids: set[int] = set()
     for tok in raw.replace(",", " ").split():
         member_id = _int_or_none(tok)
@@ -372,7 +410,7 @@ def _trusted_principal_ids(
     orgs: Sequence[str],
     users: Sequence[str],
     *,
-    client: GitHubClient,
+    client: FollowUpHost,
     members_cache_path: Path,
 ) -> set[int] | None:
     """Numeric ids of every member of ``orgs`` plus every resolvable ``users`` login.
@@ -416,7 +454,7 @@ def _org_cache_path(base: Path, org: str) -> Path:
 def _trusted_user_id(
     login: str,
     *,
-    client: GitHubClient,
+    client: FollowUpHost,
     cache_path: Path,
     now: datetime | None = None,
 ) -> int | None:
@@ -472,7 +510,7 @@ def _trusted_user_id(
 def _trusted_member_ids(
     org: str,
     *,
-    client: GitHubClient,
+    client: FollowUpHost,
     cache_path: Path,
     now: datetime | None = None,
 ) -> set[int] | None:

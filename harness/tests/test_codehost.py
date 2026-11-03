@@ -310,5 +310,234 @@ class TestGitLabClient(unittest.TestCase):
                 codehost.GitLabClient(token="t")
 
 
+class TestChangeRequestAndRunUrls(unittest.TestCase):
+    def test_github_pull_request_url(self) -> None:
+        self.assertEqual(
+            codehost.parse_change_request_url(
+                "https://github.com/acme/foo/pull/42/files"
+            ),
+            ("github", "acme", "foo", 42),
+        )
+
+    def test_gitlab_merge_request_url_keeps_the_namespace_path(self) -> None:
+        self.assertEqual(
+            codehost.parse_change_request_url(
+                f"{BASE}/platform/backend/foo/-/merge_requests/3", gitlab_base=BASE
+            ),
+            ("gitlab", "platform/backend", "foo", 3),
+        )
+        self.assertEqual(
+            codehost.parse_change_request_url(
+                "https://example.com/gitlab/acme/foo/-/merge_requests/9/diffs",
+                gitlab_base="https://example.com/gitlab",
+            ),
+            ("gitlab", "acme", "foo", 9),
+        )
+
+    def test_other_urls_are_none(self) -> None:
+        for url in (
+            "https://github.com/acme/foo/issues/1",
+            f"{BASE}/platform/foo/-/issues/3",
+            f"{BASE}/foo/-/merge_requests/3",
+            "https://bitbucket.org/acme/foo/pull-requests/1",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(
+                    codehost.parse_change_request_url(url, gitlab_base=BASE)
+                )
+
+    def test_run_urls(self) -> None:
+        self.assertEqual(
+            codehost.parse_run_url("https://github.com/acme/foo/actions/runs/123"),
+            ("github", "acme", "foo", 123),
+        )
+        self.assertEqual(
+            codehost.parse_run_url(
+                f"{BASE}/platform/foo/-/pipelines/7001", gitlab_base=BASE
+            ),
+            ("gitlab", "platform", "foo", 7001),
+        )
+        self.assertIsNone(
+            codehost.parse_run_url(f"{BASE}/platform/foo/-/jobs/1", gitlab_base=BASE)
+        )
+
+    def test_clients_for_urls(self) -> None:
+        with mock.patch.dict(os.environ, {"GITLAB_BASE_URL": BASE}):
+            self.assertIsInstance(
+                codehost.client_for_change_request_url(
+                    f"{BASE}/platform/foo/-/merge_requests/3"
+                ),
+                codehost.GitLabClient,
+            )
+            self.assertIsInstance(
+                codehost.client_for_run_url("https://github.com/a/b/actions/runs/1"),
+                git.GitHubClient,
+            )
+            with self.assertRaises(RuntimeError):
+                codehost.client_for_run_url("https://example.com/x")
+
+
+class _RawResponse(io.BytesIO):
+    status = 200
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class TestGitLabFollowUpHost(TestGitLabClient):
+    """The follow-up calls, translated into GitHub's shapes."""
+
+    def test_get_pull_request_mirrors_description_as_body(self) -> None:
+        with self._urlopen((200, {"iid": 3, "title": "Draft: t", "description": "d"})):
+            r = self.client.get_pull_request("acme", "foo", 3)
+        self.assertEqual(r["body"], "d")
+        self.assertEqual(
+            self.requests[0][1], f"{BASE}/api/v4/projects/acme%2Ffoo/merge_requests/3"
+        )
+
+    def test_update_pull_request_sends_description_and_keeps_a_draft(self) -> None:
+        with self._urlopen((200, {"draft": True}), (200, {"iid": 3})):
+            self.client.update_pull_request("acme", "foo", 3, title="New", body="b")
+        method, path, _h, body = self.requests[1]
+        self.assertEqual(
+            (method, path),
+            ("PUT", f"{BASE}/api/v4/projects/acme%2Ffoo/merge_requests/3"),
+        )
+        self.assertEqual(body, {"title": "Draft: New", "description": "b"})
+
+    def test_update_pull_request_body_only_needs_no_lookup(self) -> None:
+        with self._urlopen((200, {"iid": 3})):
+            self.client.update_pull_request("acme", "foo", 3, body="b")
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0][3], {"description": "b"})
+
+    def test_notes_split_into_issue_and_review_comments(self) -> None:
+        notes = [
+            {
+                "id": 1,
+                "body": "plain",
+                "author": {"id": 10, "username": "alice"},
+                "created_at": "t1",
+            },
+            {
+                "id": 2,
+                "body": "",
+                "system": True,
+                "author": {"id": 10, "username": "alice"},
+            },
+            {
+                "id": 3,
+                "body": "inline",
+                "type": "DiffNote",
+                "author": {"id": 11, "username": "bob"},
+                "created_at": "t3",
+                "position": {
+                    "new_path": "app.py",
+                    "old_path": "app.py",
+                    "new_line": 12,
+                },
+            },
+        ]
+        with self._urlopen((200, notes)):
+            self.assertEqual(
+                self.client.list_issue_comments("acme", "foo", 3),
+                [
+                    {
+                        "id": 1,
+                        "user": {"id": 10, "login": "alice"},
+                        "body": "plain",
+                        "created_at": "t1",
+                    }
+                ],
+            )
+        self.assertEqual(
+            self.requests[0][1],
+            f"{BASE}/api/v4/projects/acme%2Ffoo/merge_requests/3/notes?per_page=100&page=1",
+        )
+        with self._urlopen((200, notes)):
+            self.assertEqual(
+                self.client.list_pull_request_review_comments("acme", "foo", 3),
+                [
+                    {
+                        "id": 3,
+                        "user": {"id": 11, "login": "bob"},
+                        "body": "inline",
+                        "created_at": "t3",
+                        "path": "app.py",
+                        "line": 12,
+                    }
+                ],
+            )
+        self.assertEqual(self.client.list_pull_request_reviews("acme", "foo", 3), [])
+
+    def test_group_members_and_users(self) -> None:
+        with self._urlopen((200, [{"id": 5, "username": "alice", "access_level": 30}])):
+            self.assertEqual(
+                self.client.list_org_members("platform/backend"),
+                [{"id": 5, "login": "alice"}],
+            )
+        self.assertEqual(
+            self.requests[0][1],
+            f"{BASE}/api/v4/groups/platform%2Fbackend/members/all?per_page=100&page=1",
+        )
+        with self._urlopen((200, [{"id": 7, "username": "carol"}])):
+            self.assertEqual(self.client.get_user("carol"), {"id": 7, "login": "carol"})
+        with self._urlopen((200, [])):
+            self.assertEqual(self.client.get_user("nobody"), {})
+
+    def test_pipeline_jobs_use_github_conclusions(self) -> None:
+        with self._urlopen((
+            200,
+            [
+                {"id": 1, "name": "lint", "status": "success", "stage": "test"},
+                {"id": 2, "name": "test", "status": "failed", "stage": "test"},
+            ],
+        )):
+            jobs = self.client.get_workflow_run_jobs("acme", "foo", 7001)
+        self.assertEqual(
+            [(j["id"], j["conclusion"]) for j in jobs], [(1, "success"), (2, "failure")]
+        )
+        self.assertEqual(
+            self.requests[0][1],
+            f"{BASE}/api/v4/projects/acme%2Ffoo/pipelines/7001/jobs?per_page=100&page=1",
+        )
+
+    def test_job_logs_are_the_raw_trace(self) -> None:
+        seen: list[str] = []
+
+        def fake(req, context=None, timeout=None):
+            seen.append(req.full_url)
+            self.assertEqual(req.get_header("Authorization"), "Bearer t")
+            return _RawResponse(b"line 1\nFAIL line 2\n")
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake):
+            self.assertEqual(
+                self.client.get_job_logs("acme", "foo", 2), "line 1\nFAIL line 2\n"
+            )
+        self.assertEqual(seen, [f"{BASE}/api/v4/projects/acme%2Ffoo/jobs/2/trace"])
+
+    def test_rerun_failed_jobs_retries_the_pipeline(self) -> None:
+        with self._urlopen((201, {"id": 7001, "status": "pending"})):
+            self.client.rerun_failed_jobs("acme", "foo", 7001)
+        self.assertEqual(
+            self.requests[0][:2],
+            ("POST", f"{BASE}/api/v4/projects/acme%2Ffoo/pipelines/7001/retry"),
+        )
+
+    def test_api_errors_share_the_code_host_base(self) -> None:
+        with (
+            self._urlopen((500, {"message": "boom"})),
+            self.assertRaises(codehost.CodeHostApiError) as cm,
+        ):
+            self.client.get_pull_request("acme", "foo", 3)
+        self.assertEqual(cm.exception.status, 500)
+        self.assertIsInstance(
+            git.GitHubApiError("GET", "/x", 404, "nope"), codehost.CodeHostApiError
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

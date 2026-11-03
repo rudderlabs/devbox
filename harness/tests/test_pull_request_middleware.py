@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import sys
 import unittest
 import urllib.error
@@ -169,3 +170,58 @@ class TestPullRequestMiddleware(unittest.TestCase):
             "New PR description, used exactly as given. An empty string clears "
             "it; null leaves it unchanged.",
         )
+
+
+class TestPullRequestMiddlewareGitLab(unittest.TestCase):
+    """A merge request URL is addressed through the GitLab adapter, a pull
+    request URL through the given GitHub client, inside one middleware."""
+
+    MR = PullRequestRef(
+        "api", "https://gitlab.example.com/platform/api/-/merge_requests/3"
+    )
+
+    def setUp(self) -> None:
+        self.github = mock.Mock()
+        self.gitlab = mock.Mock()
+        self.gitlab.get_pull_request.return_value = {"title": "old", "body": "old body"}
+        self.env = mock.patch.dict(
+            os.environ, {"GITLAB_BASE_URL": "https://gitlab.example.com"}
+        )
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.kinds = mock.patch(
+            "harness.deepagents.middleware.pull_request.client_for_kind",
+            return_value=self.gitlab,
+        )
+        self.kinds.start()
+        self.addCleanup(self.kinds.stop)
+
+    def test_merge_request_goes_to_the_gitlab_adapter(self) -> None:
+        mw = PullRequestMiddleware(github=self.github, prs=[WEB, self.MR])
+        result = mw.tools[0].invoke({"pr": "api", "title": "New"})
+        self.gitlab.get_pull_request.assert_called_once_with("platform", "api", 3)
+        self.gitlab.update_pull_request.assert_called_once_with(
+            "platform", "api", 3, title="New", body=None
+        )
+        self.github.get_pull_request.assert_not_called()
+        self.assertEqual(result, "updated: title='New'")
+
+    def test_pull_request_still_goes_to_github(self) -> None:
+        self.github.get_pull_request.return_value = {"title": "old", "body": ""}
+        mw = PullRequestMiddleware(github=self.github, prs=[WEB, self.MR])
+        mw.tools[0].invoke({"pr": "acme-webapp", "body": "b"})
+        self.github.update_pull_request.assert_called_once_with(
+            "acme", "acme-webapp", 42, title=None, body="b"
+        )
+        self.gitlab.update_pull_request.assert_not_called()
+
+    def test_gitlab_api_error_is_a_tool_error(self) -> None:
+        from harness.codehost import GitLabApiError
+
+        self.gitlab.get_pull_request.side_effect = GitLabApiError(
+            "GET", "/mr", 403, "no"
+        )
+        mw = PullRequestMiddleware(github=self.github, prs=[self.MR])
+        message = mw.tools[0].run({"title": "x"}, tool_call_id="g")
+        self.assertEqual(message.status, "error")
+        self.assertIn("403", str(message.content))

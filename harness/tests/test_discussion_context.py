@@ -1379,3 +1379,67 @@ class TestTrustedMemberCache(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeGitLabClient(FakeGitHubClient, discussion_context.GitLabClient):
+    """A GitLab-typed fake: ``fetch_and_store_discussion`` picks the GitLab trust
+    lists by the client's type. GitLabClient.__init__ is skipped on purpose."""
+
+
+class TestGitLabTrust(unittest.TestCase):
+    def _run(self, client: FakeGitHubClient, env: dict[str, str], *, td: str) -> str:
+        with mock.patch.dict(os.environ, env, clear=True):
+            return discussion_context.fetch_and_store_discussion(
+                "platform/backend",
+                "api",
+                3,
+                "sess-a",
+                client=client,  # type: ignore[arg-type]
+                cache_path=Path(td) / "discussion-context.json",
+            )
+
+    def test_github_lists_do_not_apply_to_a_merge_request(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            client = FakeGitLabClient(
+                issue_comments=[_issue(1, "alice", "2026-04-23T10:00:00Z", "hi", 1)]
+            )
+            self.assertEqual(
+                self._run(client, {"HARNESS_TRUSTED_ORGS": "acme"}, td=td), ""
+            )
+            self.assertEqual(client.calls, [])
+            self.assertEqual(client.member_calls, 0)
+
+    def test_gitlab_groups_and_users_gate_a_merge_request(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            client = FakeGitLabClient(
+                issue_comments=[
+                    _issue(1, "alice", "2026-04-23T10:00:00Z", "hi", 1),
+                    _issue(2, "mallory", "2026-04-23T10:01:00Z", "boo", 99),
+                ],
+                users={"carol": 42},
+            )
+            block = self._run(
+                client,
+                {
+                    "HARNESS_GITLAB_TRUSTED_GROUPS": "platform/backend",
+                    "HARNESS_GITLAB_TRUSTED_USERS": "carol",
+                },
+                td=td,
+            )
+            self.assertEqual(client.orgs_requested, ["platform/backend"])
+            self.assertEqual(client.user_calls, ["carol"])
+            self.assertIn("@alice", block)
+            self.assertNotIn("@mallory", block)
+            self.assertIn("### Pull request discussion history", block)
+
+    def test_merge_request_url_coordinates(self) -> None:
+        with mock.patch.dict(
+            os.environ, {"GITLAB_BASE_URL": "https://gitlab.example.com"}
+        ):
+            self.assertEqual(
+                discussion_context.pr_coordinates_from_payload({
+                    "repo": "api",
+                    "pr_url": "https://gitlab.example.com/platform/backend/api/-/merge_requests/3",
+                }),
+                ("platform/backend", "api", 3),
+            )

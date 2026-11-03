@@ -42,6 +42,26 @@ class TestParseRunUrl(unittest.TestCase):
         )
 
 
+class TestParseGitLabRunUrl(unittest.TestCase):
+    def test_pipeline_url_under_the_instance(self) -> None:
+        with mock.patch.dict(
+            __import__("os").environ, {"GITLAB_BASE_URL": "https://gitlab.example.com"}
+        ):
+            self.assertEqual(
+                ci_logs.parse_run_url(
+                    "https://gitlab.example.com/platform/backend/api/-/pipelines/7001"
+                ),
+                ("platform/backend", "api", 7001),
+            )
+
+    def test_pipeline_url_without_a_configured_instance_is_none(self) -> None:
+        with mock.patch.dict(__import__("os").environ, {}, clear=False):
+            __import__("os").environ.pop("GITLAB_BASE_URL", None)
+            self.assertIsNone(
+                ci_logs.parse_run_url("https://gitlab.example.com/p/api/-/pipelines/1")
+            )
+
+
 class TestFetchFailedJobLogs(unittest.TestCase):
     """ci_logs.fetch_failed_job_logs — download failed job logs to disk."""
 
@@ -150,3 +170,18 @@ class TestFetchFailedJobLogs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_uses_the_given_client(self) -> None:
+        client = mock.Mock()
+        client.get_workflow_run_jobs.return_value = [
+            {"id": 9, "name": "test", "conclusion": "failure"}
+        ]
+        client.get_job_logs.return_value = "trace"
+        with mock.patch("harness.ci_logs.GitHubClient") as github:
+            results, errors = ci_logs.fetch_failed_job_logs(
+                "platform", "api", 7001, self.output_dir, client=client
+            )
+        github.assert_not_called()
+        client.get_job_logs.assert_called_once_with("platform", "api", 9)
+        self.assertEqual(errors, [])
+        self.assertEqual(Path(results[0]["log_path"]).read_text(), "trace")

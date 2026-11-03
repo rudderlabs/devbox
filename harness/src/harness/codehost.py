@@ -4,10 +4,12 @@ The assignment round talks to the code host through four calls: the default
 branch, a branch's sha, "is there already an open change request for this
 head", and "open a draft change request". `CodeHost` names that contract;
 `git.GitHubClient` (the original client, unchanged) and `GitLabClient` (here)
-implement it. Everything upstream of the commit stage keeps the GitHub-shaped
-vocabulary (`pr_url`, `create_pr`, `owner`/`repo`): the adapters translate at
-this edge instead of renaming what the dispatcher, the handlers and the stored
-rows already use.
+implement it. The follow-up rounds need more (`FollowUpHost`: read and update
+the change request, list its discussion, resolve trust, fetch CI job logs,
+re-run failed jobs); both clients implement that too. Everything upstream keeps
+the GitHub-shaped vocabulary (`pr_url`, `create_pr`, `owner`/`repo`, GitHub's
+comment and job dict shapes): the adapters translate at this edge instead of
+renaming what the dispatcher, the handlers and the stored rows already use.
 
 GitLab terms map as: project == repository, `owner` == the project's namespace
 path (a group or nested groups, so it may contain "/"), `repo` == the project
@@ -42,6 +44,19 @@ GITLAB_PROXY_TOKEN_PLACEHOLDER = "proxy-gitlab-dummy-token"
 GITLAB_DRAFT_PREFIX = "Draft: "
 
 
+class CodeHostApiError(RuntimeError):
+    """A non-2xx answer from a code host's API. `git.GitHubApiError` and
+    `GitLabApiError` derive from it, so the tool middlewares can catch one
+    type whichever host a round is on."""
+
+    def __init__(self, method: str, path: str, status: int, response_body: str) -> None:
+        self.method = method
+        self.path = path
+        self.status = status
+        self.response_body = response_body
+        super().__init__(f"{method} {path} -> {status}: {response_body}")
+
+
 class CodeHost(Protocol):
     """What the commit stage needs from a code host (see git.commit_one_repo
     and handlers._common._commit_and_open_pr). `ref` keeps GitHub's
@@ -66,6 +81,55 @@ class CodeHost(Protocol):
     def find_open_pr_by_head(
         self, owner: str, repo: str, branch: str
     ) -> str | None: ...
+
+
+class FollowUpHost(CodeHost, Protocol):
+    """What the follow-up rounds need (see followup.py, discussion_context.py,
+    ci_logs.py and the pull_request / ci_rerun middlewares). The dict shapes
+    are GitHub's: a comment carries `id`, `user: {id, login}`, `body`,
+    `created_at` (an inline one also `path`, `line`); a job carries `id`,
+    `name`, `conclusion`; a user `id`, `login`. The GitLab adapter translates
+    notes, jobs and users into them."""
+
+    def get_pull_request(
+        self, owner: str, repo: str, pr_number: int
+    ) -> dict[str, Any]: ...
+
+    def update_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def list_issue_comments(
+        self, owner: str, repo: str, issue_number: int
+    ) -> list[dict[str, Any]]: ...
+
+    def list_pull_request_review_comments(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]: ...
+
+    def list_pull_request_reviews(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]: ...
+
+    def list_org_members(self, org: str) -> list[dict[str, Any]]: ...
+
+    def get_user(self, login: str) -> dict[str, Any]: ...
+
+    def get_workflow_run_jobs(
+        self, owner: str, repo: str, run_id: int
+    ) -> list[dict[str, Any]]: ...
+
+    def get_job_logs(self, owner: str, repo: str, job_id: int) -> str: ...
+
+    def rerun_failed_jobs(
+        self, owner: str, repo: str, run_id: int
+    ) -> dict[str, Any]: ...
 
 
 # ──── Remote URL parsing ───────────────────────────────────────────────────
@@ -143,6 +207,86 @@ def parse_remote_url(
     raise RuntimeError(f"Unsupported code-host remote URL: {url}{hint}")
 
 
+_GITHUB_PR_URL_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)(?:[/?#]|$)"
+)
+_GITHUB_RUN_URL_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/actions/runs/(?P<run_id>\d+)"
+)
+
+
+def _gitlab_object_url(
+    url: str, object_segment: str, *, gitlab_base: str | None
+) -> tuple[str, str, int] | None:
+    """(owner, repo, number) of `<base>/<group…>/<project>/-/<object>/<n>`."""
+    base = gitlab_base if gitlab_base is not None else gitlab_base_url()
+    if not base or not url.startswith(f"{base}/"):
+        return None
+    rest = url[len(base) :]
+    m = re.match(
+        rf"^/(?P<path>.+?)/-/{object_segment}/(?P<number>\d+)(?:[/?#]|$)", rest
+    )
+    if not m:
+        return None
+    segments = [s for s in m.group("path").split("/") if s]
+    if len(segments) < 2 or any(s in (".", "..") for s in segments):
+        return None
+    return "/".join(segments[:-1]), segments[-1], int(m.group("number"))
+
+
+def parse_change_request_url(
+    url: str, *, gitlab_base: str | None = None
+) -> tuple[str, str, str, int] | None:
+    """(host kind, owner, repo, number) of a pull request or merge request URL.
+
+    GitHub: `https://github.com/<owner>/<repo>/pull/<n>`. GitLab: the merge
+    request's `web_url`, `<base>/<group>[/<subgroup>]/<project>/-/merge_requests/<n>`,
+    with `owner` the namespace path. None for anything else.
+    """
+    m = _GITHUB_PR_URL_RE.match(url)
+    if m:
+        return "github", m.group("owner"), m.group("repo"), int(m.group("number"))
+    found = _gitlab_object_url(url, "merge_requests", gitlab_base=gitlab_base)
+    return ("gitlab", *found) if found else None
+
+
+def parse_run_url(
+    url: str, *, gitlab_base: str | None = None
+) -> tuple[str, str, str, int] | None:
+    """(host kind, owner, repo, run id) of a CI run URL: a GitHub Actions run
+    (`…/actions/runs/<id>`) or a GitLab pipeline (`…/-/pipelines/<id>`)."""
+    m = _GITHUB_RUN_URL_RE.match(url)
+    if m:
+        return "github", m.group("owner"), m.group("repo"), int(m.group("run_id"))
+    found = _gitlab_object_url(url, "pipelines", gitlab_base=gitlab_base)
+    return ("gitlab", *found) if found else None
+
+
+def client_for_kind(kind: str) -> FollowUpHost:
+    if kind == "gitlab":
+        return GitLabClient()
+    # Imported here: git.py imports this module at load time.
+    from harness.git import GitHubClient
+
+    return GitHubClient()
+
+
+def client_for_change_request_url(url: str) -> FollowUpHost:
+    """The adapter for a pull request or merge request URL."""
+    parsed = parse_change_request_url(url)
+    if parsed is None:
+        raise RuntimeError(f"Unsupported change request URL: {url}")
+    return client_for_kind(parsed[0])
+
+
+def client_for_run_url(url: str) -> FollowUpHost:
+    """The adapter for a CI run URL."""
+    parsed = parse_run_url(url)
+    if parsed is None:
+        raise RuntimeError(f"Unsupported CI run URL: {url}")
+    return client_for_kind(parsed[0])
+
+
 def remote_origin_url(repo_path: Path) -> str:
     r = run_cmd(
         ["git", "-C", str(repo_path), "config", "--get", "remote.origin.url"],
@@ -153,41 +297,36 @@ def remote_origin_url(repo_path: Path) -> str:
     return r.stdout.strip()
 
 
-def client_for_remote_url(url: str) -> CodeHost:
+def client_for_remote_url(url: str) -> FollowUpHost:
     """The adapter for a remote: GitLab for the configured instance, else
     GitHub. Chosen per repo, so a workspace may mix hosts."""
     kind, _owner, _repo = parse_remote_url(url)
-    if kind == "gitlab":
-        return GitLabClient()
-    # Imported here: git.py imports this module at load time.
-    from harness.git import GitHubClient
-
-    return GitHubClient()
+    return client_for_kind(kind)
 
 
-def client_for_repo(repo_path: Path) -> CodeHost:
+def client_for_repo(repo_path: Path) -> FollowUpHost:
     return client_for_remote_url(remote_origin_url(repo_path))
 
 
 # ──── GitLab adapter ───────────────────────────────────────────────────────
 
 
-class GitLabApiError(RuntimeError):
+class GitLabApiError(CodeHostApiError):
     def __init__(self, method: str, path: str, status: int, response_body: str) -> None:
-        self.method = method
-        self.path = path
-        self.status = status
-        self.response_body = response_body
-        super().__init__(f"GitLab API {method} {path} -> {status}: {response_body}")
+        super().__init__(method, path, status, response_body)
+        self.args = (f"GitLab API {method} {path} -> {status}: {response_body[:400]}",)
 
 
 class GitLabClient:
-    """The GitLab REST v4 adapter behind `CodeHost`.
+    """The GitLab REST v4 adapter behind `CodeHost` and `FollowUpHost`.
 
     Numbers: the merge request `iid` (per project) is what URLs and every
     `/merge_requests/<n>` path use; the global `id` never leaves this class.
     The URL recorded as `pr_url` is GitLab's own `web_url` for the merge
-    request, which the control plane stores verbatim.
+    request, which the control plane stores verbatim. A "run" is a pipeline
+    and a "job" a job; "org members" are a group's members (inherited ones
+    included); a review summary stream does not exist on GitLab (approvals
+    carry no body), so `list_pull_request_reviews` is always empty.
     """
 
     def __init__(
@@ -250,6 +389,38 @@ class GitLabClient:
             raise GitLabApiError(method, path, status, raw)
         return json.loads(raw) if raw else {}
 
+    def _request_text(self, method: str, path: str) -> str:
+        """A plain-text answer (a job trace)."""
+        url = f"{self._api_url}{path}"
+        req = urllib.request.Request(url, method=method)
+        req.add_header("Authorization", f"Bearer {self._token}")
+        try:
+            with urllib.request.urlopen(
+                req, context=self._ssl_ctx, timeout=120
+            ) as resp:
+                status = resp.status
+                raw = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            raise GitLabApiError(method, path, e.code, raw) from e
+        if status != 200:
+            raise GitLabApiError(method, path, status, raw)
+        return raw
+
+    def _paginated(self, path: str) -> list[dict[str, Any]]:
+        """Every page of a list endpoint; a short page is terminal."""
+        items: list[dict[str, Any]] = []
+        separator = "&" if "?" in path else "?"
+        page = 1
+        while True:
+            data = self._request("GET", f"{path}{separator}per_page=100&page={page}")
+            if not isinstance(data, list):
+                raise TypeError(f"GitLab list endpoint returned non-list for {path}")
+            items.extend(d for d in data if isinstance(d, dict))
+            if len(data) < 100:
+                return items
+            page += 1
+
     # ── CodeHost ─────────────────────────────────────────────────────────
     def get_default_branch(self, owner: str, repo: str) -> str:
         r = self._request("GET", f"/projects/{self._project(owner, repo)}")
@@ -307,3 +478,144 @@ class GitLabClient:
             url = data[0].get("web_url")
             return str(url) if url else None
         return None
+
+    # ── FollowUpHost ─────────────────────────────────────────────────────
+    def get_pull_request(self, owner: str, repo: str, pr_number: int) -> dict[str, Any]:
+        """The merge request, with `body` mirroring GitLab's `description`."""
+        r = self._request("GET", f"{self._mr(owner, repo, pr_number)}")
+        if isinstance(r, dict):
+            r.setdefault("body", r.get("description") or "")
+        return r
+
+    def update_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+    ) -> dict[str, Any]:
+        """PUT the merge request's title and/or description. Only non-None
+        fields are sent. A draft keeps its `Draft:` prefix if the new title
+        lacks one, so an edit never un-drafts it by accident."""
+        fields: dict[str, Any] = {}
+        if title is not None:
+            fields["title"] = title
+        if body is not None:
+            fields["description"] = body
+        if not fields:
+            raise ValueError("update_pull_request requires at least one field to set")
+        if "title" in fields and not fields["title"].startswith(GITLAB_DRAFT_PREFIX):
+            current = self._request("GET", self._mr(owner, repo, pr_number))
+            if isinstance(current, dict) and current.get("draft") is True:
+                fields["title"] = f"{GITLAB_DRAFT_PREFIX}{fields['title']}"
+        return self._request("PUT", self._mr(owner, repo, pr_number), fields)
+
+    def list_issue_comments(
+        self, owner: str, repo: str, issue_number: int
+    ) -> list[dict[str, Any]]:
+        """The merge request's plain notes (not system notes, not diff notes),
+        in GitHub's issue-comment shape."""
+        return [
+            _github_comment_shape(n)
+            for n in self._notes(owner, repo, issue_number)
+            if n.get("type") != "DiffNote"
+        ]
+
+    def list_pull_request_review_comments(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]:
+        """The merge request's diff notes, in GitHub's review-comment shape
+        (`path` and `line` from the note's position)."""
+        out: list[dict[str, Any]] = []
+        for n in self._notes(owner, repo, pr_number):
+            if n.get("type") != "DiffNote":
+                continue
+            shaped = _github_comment_shape(n)
+            position = n.get("position") if isinstance(n.get("position"), dict) else {}
+            path = position.get("new_path") or position.get("old_path")
+            line = position.get("new_line") or position.get("old_line")
+            if isinstance(path, str) and path:
+                shaped["path"] = path
+            if isinstance(line, int):
+                shaped["line"] = line
+            out.append(shaped)
+        return out
+
+    def list_pull_request_reviews(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]:
+        """GitLab has no review summary bodies: approvals carry no text."""
+        return []
+
+    def list_org_members(self, org: str) -> list[dict[str, Any]]:
+        """Every member of a group (inherited and shared included), as
+        `{id, login}`: `/groups/<group>/members/all`."""
+        enc = urllib.parse.quote(org, safe="")
+        return [
+            {"id": m.get("id"), "login": m.get("username")}
+            for m in self._paginated(f"/groups/{enc}/members/all")
+        ]
+
+    def get_user(self, login: str) -> dict[str, Any]:
+        """`{id, login}` for a username; empty when no such user."""
+        enc = urllib.parse.quote(login, safe="")
+        data = self._request("GET", f"/users?username={enc}")
+        first = data[0] if isinstance(data, list) and data else None
+        if not isinstance(first, dict):
+            return {}
+        return {"id": first.get("id"), "login": first.get("username")}
+
+    def get_workflow_run_jobs(
+        self, owner: str, repo: str, run_id: int
+    ) -> list[dict[str, Any]]:
+        """A pipeline's jobs as `{id, name, conclusion}`, GitLab's `failed`
+        spelled GitHub's way (`failure`) so ci_logs picks the same ones."""
+        jobs = self._paginated(
+            f"/projects/{self._project(owner, repo)}/pipelines/{run_id}/jobs"
+        )
+        return [
+            {
+                "id": j.get("id"),
+                "name": j.get("name"),
+                "conclusion": "failure"
+                if j.get("status") == "failed"
+                else j.get("status"),
+                "stage": j.get("stage"),
+            }
+            for j in jobs
+        ]
+
+    def get_job_logs(self, owner: str, repo: str, job_id: int) -> str:
+        return self._request_text(
+            "GET", f"/projects/{self._project(owner, repo)}/jobs/{job_id}/trace"
+        )
+
+    def rerun_failed_jobs(self, owner: str, repo: str, run_id: int) -> dict[str, Any]:
+        """Retry the pipeline's failed jobs: `POST /pipelines/<id>/retry`."""
+        return self._request(
+            "POST", f"/projects/{self._project(owner, repo)}/pipelines/{run_id}/retry"
+        )
+
+    # ── helpers ──────────────────────────────────────────────────────────
+    def _mr(self, owner: str, repo: str, iid: int) -> str:
+        return f"/projects/{self._project(owner, repo)}/merge_requests/{iid}"
+
+    def _notes(self, owner: str, repo: str, iid: int) -> list[dict[str, Any]]:
+        return [
+            n
+            for n in self._paginated(f"{self._mr(owner, repo, iid)}/notes")
+            if n.get("system") is not True
+        ]
+
+
+def _github_comment_shape(note: Mapping[str, Any]) -> dict[str, Any]:
+    """A GitLab note as the GitHub comment dict discussion_context reads."""
+    author = note.get("author") if isinstance(note.get("author"), Mapping) else {}
+    return {
+        "id": note.get("id"),
+        "user": {"id": author.get("id"), "login": author.get("username")},
+        "body": note.get("body") or "",
+        "created_at": note.get("created_at") or "",
+    }

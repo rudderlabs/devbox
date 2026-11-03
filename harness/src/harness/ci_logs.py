@@ -1,29 +1,28 @@
-"""Fetch CI failure logs from GitHub Actions runs.
+"""Fetch CI failure logs from a GitHub Actions run or a GitLab pipeline.
 
-Deterministic log fetcher that uses GitHubClient to download logs for failed
-jobs in a workflow run, writing them to disk for the agent to analyze.
+Deterministic log fetcher that uses the run's code-host client to download the
+logs of its failed jobs, writing them to disk for the agent to analyze.
 """
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
+from harness import codehost
+from harness.codehost import FollowUpHost
 from harness.git import GitHubClient
-
-_RUN_URL_RE = re.compile(
-    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)"
-    r"/actions/runs/(?P<run_id>\d+)"
-)
 
 
 def parse_run_url(run_url: str) -> tuple[str, str, int] | None:
-    m = _RUN_URL_RE.match(run_url)
-    if not m:
+    """(owner, repo, run id) of a GitHub Actions run URL or a GitLab pipeline
+    URL under the configured instance; None for anything else."""
+    parsed = codehost.parse_run_url(run_url)
+    if parsed is None:
         return None
-    return m.group("owner"), m.group("repo"), int(m.group("run_id"))
+    _kind, owner, repo, run_id = parsed
+    return owner, repo, run_id
 
 
 def fetch_failed_job_logs(
@@ -31,13 +30,16 @@ def fetch_failed_job_logs(
     repo: str,
     run_id: int,
     output_dir: Path,
+    *,
+    client: FollowUpHost | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Fetch logs for all failed jobs in a GitHub Actions workflow run.
+    """Fetch logs for all failed jobs in a CI run.
 
-    Returns a list of {job_name, job_id, log_path} dicts for each failed job
-    whose logs were successfully written to output_dir.
+    `client` is the run's code host (`codehost.client_for_run_url`); the
+    default is GitHub. Returns a list of {job_name, job_id, log_path} dicts for
+    each failed job whose logs were successfully written to output_dir.
     """
-    client = GitHubClient()
+    client = client or GitHubClient()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     jobs = client.get_workflow_run_jobs(owner, repo, run_id)
