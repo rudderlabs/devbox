@@ -8,7 +8,7 @@ mock.module("../../config", () => ({ config: { databaseUrl: TEST_DATABASE_URL } 
 
 const { db } = await import("../../db");
 const { TaskRepository } = await import("../../repositories/task.repository");
-const { InboxRepository } = await import("../../repositories/inbox.repository");
+const { InboxRepository, isUniqueViolation } = await import("../../repositories/inbox.repository");
 const { Intake } = await import("../intake");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
@@ -20,6 +20,9 @@ const session = (id: string, order?: number): ReplyTarget => ({
   spec: { kind: "linear_session" },
   ...(order === undefined ? {} : { order }),
 });
+
+// The insert failed because another task holds the key, in any case.
+const keyTaken = (err: unknown): boolean => isUniqueViolation(err, "tasks_key_lower_uniq");
 
 const PR = "https://github.com/o/r/pull/7";
 const ghComment = (id: string): InboxMessageDraft => ({
@@ -143,9 +146,10 @@ describe("Intake", () => {
       expect(await db.execute(sql`SELECT 1 FROM task_events`)).toHaveLength(0);
     });
 
-    it("a hint another task holds, in any case, gets the source prefix", async () => {
+    it("a hint another task holds, in any case, fails the assign", async () => {
       await insertTask({ key: "iss-1" });
-      expect((await assignLinear(session("sess-1"))).key).toBe("LINEAR-ISS-1");
+      expect(keyTaken(await assignLinear(session("sess-1")).catch((e: unknown) => e))).toBe(true);
+      expect([...(await db.execute(sql`SELECT key FROM tasks`))]).toEqual([{ key: "iss-1" }]);
     });
 
     it("makes the hint branch-safe", async () => {
@@ -154,10 +158,10 @@ describe("Intake", () => {
       );
     });
 
-    it("retries once when a concurrent insert takes the key", async () => {
-      // Another transaction holds an uncommitted task with the key: the check
-      // doesn't see it, the insert waits on the index, then fails with 23505
-      // once it commits, and the retry picks the prefixed key.
+    // Another transaction holds an uncommitted task with `key` while `assign`
+    // runs: the insert waits on the key index, then fails with 23505 once the
+    // other transaction commits.
+    async function whileKeyHeld<T>(key: string, assign: () => Promise<T>): Promise<T> {
       const other = new SQL(TEST_DATABASE_URL);
       try {
         let release!: () => void;
@@ -170,19 +174,43 @@ describe("Intake", () => {
         });
         const holder = other.begin(async (tx) => {
           await tx`INSERT INTO tasks (source, external_id, key, title, external_url)
-                   VALUES ('api', 'other', 'ISS-1', 't', 'u')`;
+                   VALUES ('linear', 'other', ${key}, 't', 'u')`;
           inserted();
           await gate;
         });
         await ready;
-        const pending = assignLinear(session("sess-1"));
+        const pending = assign();
+        pending.catch(() => {});
         await new Promise((r) => setTimeout(r, 150));
         release();
         await holder;
-        expect((await pending).key).toBe("LINEAR-ISS-1");
+        return await pending;
       } finally {
         await other.close();
       }
+    }
+
+    it("a concurrent collision retries a sequence key once, with the next number", async () => {
+      await db.execute(sql`ALTER SEQUENCE api_task_key_seq RESTART`);
+      const res = await whileKeyHeld("DBX-API-1", () =>
+        intake.assign({
+          source: "api",
+          key: { sequence: "api" },
+          title: "t",
+          description: null,
+          flags: [],
+          url: (t) => `https://api.example/api/tasks/${t.key}`,
+          target: (t) => ({ id: t.id, spec: { kind: "api_session" } }),
+        }),
+      );
+      expect(res.key).toBe("DBX-API-2");
+    });
+
+    it("a concurrent hint collision rethrows", async () => {
+      const err = await whileKeyHeld("ISS-1", () => assignLinear(session("sess-1"))).catch(
+        (e: unknown) => e,
+      );
+      expect(keyTaken(err)).toBe(true);
     });
 
     it("compares delegation order when both targets carry one", async () => {

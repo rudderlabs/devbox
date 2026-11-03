@@ -51,12 +51,14 @@ export class TaskRepository {
     }
   > {
     return db.transaction(async (tx) => {
-      // In a savepoint so a key collision leaves the transaction usable: a
-      // concurrent insert can take the key between the check and the insert,
-      // and the retry then sees it.
+      // In a savepoint so a key collision leaves the transaction usable. A
+      // sequence key another task already holds (in any case) is retried once
+      // with the next number; a hint that collides fails the assign.
       const insert = () => tx.transaction((sp) => this.insertTask(sp, p));
       const inserted = await insert().catch((err) => {
-        if (!isUniqueViolation(err, "tasks_key_lower_uniq")) throw err;
+        if (!("sequencePrefix" in p.key) || !isUniqueViolation(err, "tasks_key_lower_uniq")) {
+          throw err;
+        }
         return insert();
       });
 
@@ -130,21 +132,15 @@ export class TaskRepository {
     });
   }
 
-  // assign's insert. Picks the key: a hint is used as is unless another task
-  // holds it (case-insensitively), then `${SOURCE}-${hint}`; a sequence key is
-  // the prefix plus api_task_key_seq. Returns null when (source, external_id)
-  // already exists.
+  // assign's insert. The key is the hint as is, or the prefix plus
+  // api_task_key_seq. Returns null when (source, external_id) already exists.
   private async insertTask(
     ex: SqlExecutor,
     p: Parameters<TaskRepository["assign"]>[0],
   ): Promise<(TaskRef & { externalId: string; url: string }) | null> {
     const picked =
       "hint" in p.key
-        ? sql`CASE WHEN EXISTS (
-                SELECT 1 FROM tasks
-                 WHERE lower(key) = lower(${p.key.hint})
-                   AND NOT (source = ${p.source} AND external_id = ${p.externalId ?? null})
-              ) THEN ${`${p.source.toUpperCase()}-${p.key.hint}`}::text ELSE ${p.key.hint}::text END`
+        ? sql`${p.key.hint}::text`
         : sql`${p.key.sequencePrefix}::text || nextval('api_task_key_seq')::text`;
     const [pick] = asRows<TaskRef>(
       await ex.execute(sql`SELECT uuidv7()::text AS id, ${picked} AS key`),
