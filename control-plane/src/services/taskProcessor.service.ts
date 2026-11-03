@@ -863,7 +863,7 @@ export class TaskProcessorService {
     // failed" into that same thread — only the top-level delegated task should
     // ever notify Slack. Tying it to this failTaskInbox transition also keeps
     // it at-most-once. Detached: a Slack outage must not affect teardown; the
-    // notifier no-ops when Slack is disabled.
+    // notifier no-ops when Slack is disabled or the task isn't from Linear.
     if (assignment) {
       this.hooks.detach(
         task.id,

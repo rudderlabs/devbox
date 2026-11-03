@@ -433,16 +433,12 @@ every 6 hours by default).
 A new control plane pod migrates the database when it starts, while the old
 pods keep serving. For a while old pods run against the new schema, and each
 migration is written to keep them working. While they overlap, an old pod can
-answer a webhook that races its own redelivery with a 500, such as `duplicate
-key value violates unique constraint "inbox_source_kind_external_uniq"`: the
-other request stored the round, so nothing is lost.
+answer a webhook that races its own redelivery with a 500, such as a
+duplicate-key error: the other request stored the round, so nothing is lost.
 
-If a migration can't get its locks within 5 seconds, the new pod fails,
-restarts and tries again, and the rollout waits. After a rollback the database
-keeps the newer schema; don't undo it by hand.
 [docs/database.md](../database.md) explains when migrations run, the lock
 timeout and rollbacks. Steps a particular release needs before or after
-upgrading are in that release's notes in the changelog.
+upgrading are in its release notes.
 
 ## Uninstall
 

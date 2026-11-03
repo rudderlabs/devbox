@@ -13,7 +13,7 @@ starts, before it listens for requests or claims tasks. Otherwise run
 
 | How devbox runs | What happens |
 |---|---|
-| Docker Compose (`bun run up`) | `docker-compose.yml` sets `AUTO_MIGRATE`. There is one control plane, and Compose stops the old container before it starts the new one. If the start fails, the process exits and Compose starts it again (`restart: unless-stopped`). |
+| Docker Compose (`bun run up`) | `control-plane/docker-compose.yml` sets `AUTO_MIGRATE`. There is one control plane, and Compose stops the old container before it starts the new one. If the start fails, the process exits and Compose starts it again (`restart: unless-stopped`). |
 | Kubernetes (installer or GitOps) | The chart sets `AUTO_MIGRATE`. Every new pod migrates when it starts, while the old pods keep serving ([Rolling deploys](#rolling-deploys)). A pod that fails exits, and Kubernetes restarts it with a growing delay. A pod has 5 minutes, its startup probe, to migrate and start listening; after that Kubernetes restarts it. |
 | `bun run dev` or `bun run start` | `.env` decides; `.env.example` sets `AUTO_MIGRATE=true`. |
 
@@ -41,8 +41,8 @@ process exits.
 
 Changing a table locks it: the migration waits for transactions already using
 the table, and until the run commits, other queries on that table wait for the
-migration. Migrations that change tables a running control plane uses,
-`tasks` and `inbox`, start with `SET LOCAL lock_timeout = '5s'`, so each of
+migration. The migrations that change `tasks` and `inbox` start with
+`SET LOCAL lock_timeout = '5s'`, so each of
 their statements waits at most 5 seconds for a lock. The setting lasts until
 the end of the run's transaction.
 

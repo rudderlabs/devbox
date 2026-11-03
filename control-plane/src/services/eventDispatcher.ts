@@ -189,7 +189,7 @@ export class EventDispatcher {
         // gated on the first inbox transition so a cursor-replay can't double-
         // post. Detached: a Slack outage (or the assignee lookup for its
         // mention) must not stall the dispatch loop. The notifier no-ops when
-        // Slack is disabled.
+        // Slack is disabled or the task isn't from Linear.
         if (marked && inboxRow.kind === "assignment") {
           this.hooks.detach(
             task.id,
