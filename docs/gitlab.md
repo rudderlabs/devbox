@@ -28,8 +28,10 @@ mentioning note is one round), approvals as a signal, and an installer step
   only, like `llm.baseUrl`, because the egress proxy intercepts only 80 and
   443.
 - **A private CA, if the instance has one.** Put the CA certificate (PEM, the
-  chain if there is one) in a Secret and name it in `ironProxy.caBundle`. Only
-  the egress proxy talks to GitLab directly; sandboxes see the proxy's own
+  chain if there is one) in a Secret and name it in `ironProxy.caBundle`. The
+  chart hands it to the three things that talk to GitLab directly: the egress
+  proxy, the snapshot builder (clones) and the control plane (replies and
+  trust lookups, with the webhooks on). Sandboxes see the proxy's own
   certificate and need nothing.
 
 ## Configure

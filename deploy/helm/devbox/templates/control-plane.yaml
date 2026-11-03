@@ -58,6 +58,11 @@ spec:
   template:
     metadata:
       labels: {{- include "devbox.selectorLabels" "control-plane" | nindent 8 }}
+      {{- with .Values.ironProxy.caBundle }}
+      # Bun reads the extra CAs once, at start: a renamed Secret rolls the pods.
+      annotations:
+        checksum/ca-bundle: {{ . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: devbox-control-plane
 {{ include "devbox.controlPlaneImagePullSecrets" . | indent 6 }}
@@ -74,6 +79,11 @@ spec:
           # forwarded name must never hold a real secret.
           env:
             - { name: PORT, value: "3000" }
+            {{- if .Values.ironProxy.caBundle }}
+            # The GitLab instance's private CA, for the control plane's own
+            # calls (replies, member lookups); added to the system roots.
+            - { name: NODE_EXTRA_CA_CERTS, value: /etc/devbox/ca/ca.crt }
+            {{- end }}
             - { name: AUTO_MIGRATE, value: "true" }
             - { name: API_ENABLED, value: "true" }
             - { name: API_PUBLIC_BASE_URL, value: {{ include "devbox.publicBaseUrl" . | quote }} }
@@ -210,6 +220,9 @@ spec:
             {{- if .Values.integrations.gitlab.enabled }}
             - { name: gitlab-token, mountPath: /var/run/devbox/gitlab, readOnly: true }
             {{- end }}
+            {{- if .Values.ironProxy.caBundle }}
+            - { name: ca-bundle, mountPath: /etc/devbox/ca, readOnly: true }
+            {{- end }}
       # The whole Secret: `token`, and `expires-at` when the minter writes it.
       volumes:
         - name: github-token
@@ -221,6 +234,14 @@ spec:
           secret:
             secretName: {{ include "devbox.gitlabSecret" . }}
             items: [{ key: token, path: token }]
+        {{- end }}
+        {{- with .Values.ironProxy.caBundle }}
+        # A public certificate, readable by the control plane's own user.
+        - name: ca-bundle
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0444
+            items: [{ key: ca.crt, path: ca.crt }]
         {{- end }}
 
 {{- if gt (int .Values.controlPlane.replicas) 1 }}

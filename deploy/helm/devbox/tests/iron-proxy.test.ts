@@ -221,12 +221,38 @@ describe("iron-proxy config with a GitLab instance", () => {
       secret: { secretName: "corp-ca", defaultMode: MODE_0440, items: [{ key: "ca.crt", path: "ca.crt" }] },
     });
     expect(deployment.spec.template.metadata.annotations["checksum/ca-bundle"]).toMatch(/^[0-9a-f]{64}$/);
+    // The control plane (its own GitLab calls) and the snapshot builder (clones)
+    // talk to the instance directly too, so they get the bundle as well.
+    const caVolume = {
+      name: "ca-bundle",
+      secret: { secretName: "corp-ca", defaultMode: MODE_0440, items: [{ key: "ca.crt", path: "ca.crt" }] },
+    };
+    const caMount = { name: "ca-bundle", mountPath: "/etc/devbox/ca", readOnly: true };
+    const cp = (rendered["Deployment/devbox/devbox-control-plane"] as Doc).spec.template;
+    expect(cp.spec.containers[0].env).toContainEqual({ name: "NODE_EXTRA_CA_CERTS", value: "/etc/devbox/ca/ca.crt" });
+    expect(cp.spec.containers[0].volumeMounts).toContainEqual(caMount);
+    // 0444: the control plane runs as uid 1000 without an fsGroup, and a CA
+    // certificate is public.
+    expect(cp.spec.volumes).toContainEqual({ ...caVolume, secret: { ...caVolume.secret, defaultMode: 444 } });
+    expect(cp.metadata.annotations["checksum/ca-bundle"]).toMatch(/^[0-9a-f]{64}$/);
+    // The builder runs in the sandbox namespace, so it reads the Secret
+    // through the API like the tokens, and its Role names it.
+    const builder = (rendered["CronJob/devbox-sandboxes/devbox-snapshot-builder"] as Doc).spec.jobTemplate.spec.template.spec;
+    expect(builder.containers[0].env).toContainEqual({ name: "GITLAB_CA_SECRET", value: "corp-ca" });
+    expect(JSON.stringify(builder.volumes)).not.toContain("ca-bundle");
+    expect((rendered["Role/devbox/devbox-snapshot-builder-token"] as Doc).rules[0].resourceNames).toEqual([
+      "devbox-github",
+      "my-gitlab-token",
+      "corp-ca",
+    ]);
     // Without it: no env, no mount, as before.
     const plain = (await chartConfig("https://llm.example.com/v1")).rendered;
     const plainSpec = (plain["Deployment/devbox/devbox-iron-proxy"] as Doc).spec.template.spec;
     expect(plainSpec.containers[0].env).toBeUndefined();
     expect(JSON.stringify(plainSpec.volumes)).not.toContain("ca-bundle");
     expect(JSON.stringify(plainSpec.volumes)).not.toContain("gitlab");
+    expect(JSON.stringify(plain["Deployment/devbox/devbox-control-plane"])).not.toContain("ca-bundle");
+    expect(JSON.stringify(plain["CronJob/devbox-sandboxes/devbox-snapshot-builder"])).not.toContain("ca-bundle");
   });
 
   it("lets the snapshot builder read the GitLab token Secret, and only with GitLab on", async () => {

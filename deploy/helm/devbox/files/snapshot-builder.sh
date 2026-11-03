@@ -55,6 +55,18 @@ fi
 export GIT_CONFIG_COUNT
 export GIT_TERMINAL_PROMPT=0
 
+# A private CA for the GitLab instance (ironProxy.caBundle, a Secret in the
+# release namespace, read like the tokens). git's CA file replaces the system
+# store rather than adding to it, so the two are concatenated: GitHub keeps
+# working. A failed read stops the run (set -e) rather than cloning unverified.
+if [ -n "${GITLAB_CA_SECRET:-}" ]; then
+  bundle="${TMPDIR:-/tmp}/devbox-ca-bundle.crt"
+  encoded="$("$KUBECTL" get secret "$GITLAB_CA_SECRET" -n "$RELEASE_NAMESPACE" -o 'jsonpath={.data.ca\.crt}')"
+  { cat "${SYSTEM_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"; printf '%s' "$encoded" | base64 -d; echo; } > "$bundle"
+  unset encoded
+  export GIT_SSL_CAINFO="$bundle"
+fi
+
 echo "$REPOS" | while read -r url branch; do
   [ -n "$url" ] || continue
   supported=
@@ -71,6 +83,12 @@ echo "$REPOS" | while read -r url branch; do
   case "$branch" in "" | -* | *..*) echo "bad branch for $url: $branch" >&2; exit 1 ;; esac
   dir="$REPOS_DIR/$name"
   if [ -d "$dir/.git" ]; then
+    # A checkout of the same name from another URL (an instance moved, or a
+    # project renamed) is re-pointed, never fetched from its old remote.
+    if [ "$("$GIT" -C "$dir" config --get remote.origin.url)" != "$url" ]; then
+      echo "origin of $name changed; pointing it at $url"
+      "$GIT" -C "$dir" remote set-url origin "$url"
+    fi
     echo "fetch $url ($branch)"
     "$GIT" -C "$dir" -c core.fsync=all fetch -q --depth 1 origin "+refs/heads/$branch:refs/remotes/origin/$branch"
     "$GIT" -C "$dir" checkout -q -f -B "$branch" "origin/$branch"
