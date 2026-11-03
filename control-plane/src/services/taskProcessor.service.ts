@@ -136,7 +136,13 @@ export class TaskProcessorService {
       // Shutting down: leave the rest to siblings (stop() backdates our
       // heartbeats), so shutdown waits for one task's reconcile at most.
       if (!this.running) break;
-      if (!(await this.leaseHeld(task.id))) {
+      // A failed renewal skips this task, not the rest of the tick.
+      const held = await this.leaseHeld(task.id).catch((err) => {
+        logErr(`lease renewal failed; skipping task ${task.id} this tick`, err);
+        return null;
+      });
+      if (held === null) continue;
+      if (!held) {
         logger.info("lease lost before reconcile; skipping", { taskId: task.id });
         continue;
       }

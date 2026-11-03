@@ -1534,6 +1534,39 @@ describe("TaskProcessorService", () => {
       expect(heartbeatOwnedBy).toHaveBeenCalledWith("pod-test");
     });
 
+    it("renewLeases rejects; the next task still reconciles", async () => {
+      const leaseMs = mockedConfig.leaseTimeoutMs;
+      mockedConfig.leaseTimeoutMs = 0; // renew before every task
+      try {
+        const t1 = makeTask({ id: "task-1", sandboxId: "sbx-1" });
+        const t2 = makeTask({ id: "task-2", sandboxId: "sbx-2" });
+        listInFlightOwnedBy.mockResolvedValueOnce([t1, t2]).mockResolvedValue([]);
+        // The tick-start renewal works; the one before task-1 fails.
+        let renewals = 0;
+        heartbeatOwnedBy.mockImplementation(() =>
+          renewals++ === 1
+            ? Promise.reject(new Error("connection reset"))
+            : Promise.resolve([{ id: "task-1" }, { id: "task-2" }]),
+        );
+        const reconciled: string[] = [];
+        getSandboxInfo.mockImplementation((id: string) => {
+          reconciled.push(id);
+          return Promise.resolve(makeSandboxInfo());
+        });
+
+        service.start();
+        await waitFor(() => reconciled.length >= 1);
+        await new Promise<void>((r) => setTimeout(r, 30));
+        await service.stop();
+
+        expect(reconciled[0]).toBe("sbx-2");
+        expect(reconciled).not.toContain("sbx-1");
+        expect(claimNext).toHaveBeenCalled();
+      } finally {
+        mockedConfig.leaseTimeoutMs = leaseMs;
+      }
+    });
+
     describe("a reconcile longer than a quarter of the lease", () => {
       const thought = (seq: number) =>
         ({
