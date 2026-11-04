@@ -36,7 +36,8 @@ without them, iron-proxy and the control plane start with empty secrets.
 runs it with `bun run dev`, which restarts the server when a file changes.
 
 The control plane's own settings are environment variables without a prefix,
-read in `src/config.ts`, `src/apiConfig.ts` and `src/integrationsConfig.ts`.
+read in `src/config.ts`, `src/apiConfig.ts`, `src/integrationsConfig.ts` (Slack)
+and each integration's `src/integrations/<name>/config.ts`.
 `.env.example` lists them. Compose sets them explicitly in `docker-compose.yml`
 and reads no `.env` file. `bun run dev` outside Compose reads `.env` from this
 directory.

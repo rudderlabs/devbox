@@ -111,7 +111,7 @@ export function createApp(): AppBundle {
 
   const githubStatus = new GithubStatusService(githubTokenState, {
     enabled: config.github.webhooks !== undefined,
-    ciResults: config.github.ciResultEnabled,
+    ciResults: config.github.webhooks?.ciResultEnabled ?? false,
     lastWebhookAt: (): string | null => githubController?.lastWebhookAt() ?? null,
   });
 

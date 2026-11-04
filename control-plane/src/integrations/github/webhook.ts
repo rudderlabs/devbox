@@ -7,11 +7,10 @@ import {
   getReviewComments,
   getUserIdByLogin,
 } from "../../clients/github";
-import { config } from "../../config";
-import type { GithubWebhooksConfig } from "../../integrationsConfig";
 import { logger } from "../../logger";
 import type { ReplyTargetSpec } from "../../repositories/inbox.repository";
 import type { TaskService } from "../../services/task.service";
+import type { GithubConfig } from "./config";
 import { enqueueCiResult, enqueueComment, enqueueReview } from "./rounds";
 
 // ──── Parsed event surface ────
@@ -341,7 +340,7 @@ export class GitHubWebhookController {
 
   constructor(
     private tasks: Pick<TaskService, "findTaskByPrUrl" | "enqueueRound">,
-    private readonly settings: GithubWebhooksConfig,
+    private readonly settings: GithubConfig,
     private readonly now: () => number = Date.now,
   ) {
     this.mention = mentionRegex(settings.botLogin);
@@ -500,7 +499,7 @@ export class GitHubWebhookController {
     }
 
     if (parsed.kind === "workflow_run") {
-      if (!config.github.ciResultEnabled) {
+      if (!this.settings.ciResultEnabled) {
         return c.json({ status: "ignored", reason: "ci_result disabled" }, 200);
       }
       try {
@@ -531,7 +530,7 @@ export class GitHubWebhookController {
             owner: parsed.owner,
             repo: parsed.repo,
             prNumber: pr.number,
-            limit: config.github.ciResultMaxPerTask,
+            limit: this.settings.ciResultMaxPerTask,
           });
         }
         return c.json({ status: "ok" }, 200);

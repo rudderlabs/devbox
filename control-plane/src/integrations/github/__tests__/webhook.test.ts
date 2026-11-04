@@ -7,19 +7,14 @@ import type { TaskService } from "../../../services/task.service";
 
 const WEBHOOK_SECRET = "gh-test-secret";
 
-mock.module("../../../config", () => ({
-  config: {
-    podId: "pod-test",
-    github: { ciResultEnabled: true, ciResultMaxPerTask: 20 },
-  },
-}));
-
 const SETTINGS = {
   secret: WEBHOOK_SECRET,
   botLogin: "acme-bot",
   botUserId: 7,
   trustedOrgs: ["acme"],
   trustedUsers: [] as string[],
+  ciResultEnabled: true,
+  ciResultMaxPerTask: 20,
 };
 
 const getReviewComments = mock(() => Promise.resolve([] as unknown[]));
@@ -1032,13 +1027,6 @@ describe("GitHubWebhookController.handleWebhook", () => {
 
   it("ignores workflow_run when ciResultEnabled flag is off", async () => {
     // Rebuild the app with the feature flag disabled.
-    const { GitHubWebhookController: Ctrl } = await import("../webhook");
-    mock.module("../../../config", () => ({
-      config: {
-        podId: "pod-test",
-        github: { ciResultEnabled: false },
-      },
-    }));
     const flagOffEnqueueRound = mock(() => Promise.resolve({ roundId: "round-1" }));
     const flagOffFindByPrUrl = mock(() => Promise.resolve(linearTask));
     const flagOffTasks = {
@@ -1047,7 +1035,12 @@ describe("GitHubWebhookController.handleWebhook", () => {
     } as unknown as TaskService;
     fetchOrgMembers.mockResolvedValue(new Set([1, 2, 3]) as ReadonlySet<number>);
     const flagOffApp = new Hono();
-    flagOffApp.post("/webhook/github", (c) => new Ctrl(flagOffTasks, SETTINGS).handleWebhook(c));
+    flagOffApp.post("/webhook/github", (c) =>
+      new GitHubWebhookController(flagOffTasks, {
+        ...SETTINGS,
+        ciResultEnabled: false,
+      }).handleWebhook(c),
+    );
 
     const body = workflowRunBody();
     const res = await flagOffApp.request("/webhook/github", {
@@ -1057,14 +1050,6 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     expect(res.status).toBe(200);
     expect(flagOffEnqueueRound).not.toHaveBeenCalled();
-
-    // Restore flag for remaining tests.
-    mock.module("../../../config", () => ({
-      config: {
-        podId: "pod-test",
-        github: { ciResultEnabled: true, ciResultMaxPerTask: 20 },
-      },
-    }));
   });
 
   it("loads the trusted-org member set once across many webhooks", async () => {
