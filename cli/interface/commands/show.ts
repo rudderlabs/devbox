@@ -2,7 +2,7 @@
 import type { ApiRound, ApiTask } from "../../../control-plane/src/types/api";
 import type { CoreOps } from "../../core/ops";
 import type { CommandModule, CommonArgs } from "../command";
-import { age, paint, STATE_TONE } from "../format";
+import { age, paint, printable, STATE_TONE } from "../format";
 import { colorEnabled, type Io } from "../io";
 import { common, commonArgs, type Opts } from "../options";
 
@@ -22,16 +22,17 @@ const field = (label: string, values: string[], color: boolean): string[] => {
 const round = (r: ApiRound, now: number): string =>
   [r.kind, r.status, r.outcome, `${age(r.created_at, now)} ago`, r.failure_reason]
     .filter((x): x is string => typeof x === "string" && x !== "")
+    .map(printable)
     .join(" · ");
 
 export function render(t: ApiTask, now: number, o: Color = { color: false }): string {
   const { color } = o;
-  const link = (url: string): string => paint(url, "cyan", color);
+  const link = (url: string): string => paint(printable(url), "cyan", color);
   return [
-    `${paint(t.key, "bold", color)}  ${paint(t.state, STATE_TONE[t.state], color)}  ${t.title}`,
+    `${paint(t.key, "bold", color)}  ${paint(t.state, STATE_TONE[t.state], color)}  ${printable(t.title)}`,
     ...field("id", [t.id], color),
     ...field("source", [t.source], color),
-    ...field("creator", t.created_by ? [t.created_by.name] : [], color),
+    ...field("creator", t.created_by ? [printable(t.created_by.name)] : [], color),
     ...field(
       "flags",
       t.experimental_flags.length > 0 ? [t.experimental_flags.join(", ")] : [],
@@ -42,7 +43,7 @@ export function render(t: ApiTask, now: number, o: Color = { color: false }): st
     ...field("created", [`${age(t.created_at, now)} ago`], color),
     ...field(
       "prs",
-      t.prs.map((p) => `${link(p.url)} (${p.branch})`),
+      t.prs.map((p) => `${link(p.url)} (${printable(p.branch)})`),
       color,
     ),
     ...field(

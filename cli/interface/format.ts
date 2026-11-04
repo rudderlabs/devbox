@@ -1,5 +1,5 @@
 // Formatting shared by several commands (ls, show, log lines): ages, PR
-// references, one-line truncation and ANSI colour.
+// references, control-character stripping, one-line truncation and ANSI colour.
 import type { ApiTaskState } from "../../control-plane/src/types/api";
 
 export function prRef(repo: string, url: string): string {
@@ -37,9 +37,14 @@ export const STATE_TONE: Record<ApiTaskState, Tone> = {
   failed: "red",
 };
 
-// One line of at most `max` characters: whitespace runs collapse to a space,
-// and longer text ends in "…".
+// Text from the server without its control characters, except newline and
+// tab, so a title, comment or agent output can't send escape sequences to the
+// terminal (clipboard writes, hidden links, erased lines).
+export const printable = (text: string): string => text.replace(/(?![\n\t])\p{Cc}/gu, "");
+
+// One line of at most `max` printable characters: whitespace runs collapse to
+// a space, and longer text ends in "…".
 export const oneLine = (text: string, max: number): string => {
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = printable(text).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };

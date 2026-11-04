@@ -5,6 +5,7 @@ import { type From, NoEventLog } from "../core/events";
 import type { CoreOps } from "../core/ops";
 import type { FollowFlags } from "./command";
 import { EXIT, exitCodeFor } from "./exit";
+import { printable } from "./format";
 import { colorEnabled, type Io } from "./io";
 import { renderEvent } from "./logLine";
 
@@ -44,9 +45,9 @@ export async function follow(ops: CoreOps, io: Io, plan: FollowPlan): Promise<nu
         if (plan.quiet) {
           const body = (result.response?.data as { body?: unknown } | undefined)?.body;
           if (result.response && plan.json) io.out(JSON.stringify(result.response));
-          else if (typeof body === "string") io.out(body);
+          else if (typeof body === "string") io.out(printable(body));
         }
-        if (result.failed) io.err(`devbox: ${plan.ref} failed: ${result.reason}`);
+        if (result.failed) io.err(`devbox: ${plan.ref} failed: ${printable(result.reason ?? "")}`);
         return exitCodeFor(result);
       }
     }

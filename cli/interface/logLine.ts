@@ -1,7 +1,7 @@
 // Log lines use `HH:MM:SS  <marker> <text>` and are shared by `logs` and the
 // follow loop behind `logs -f`, `wait`, `--follow` and `--wait`.
 import type { ApiEventEnvelope } from "../../control-plane/src/types/api";
-import { paint, prRef, type Tone } from "./format";
+import { paint, printable, prRef, type Tone } from "./format";
 
 export type RenderOptions = { color: boolean; timeZone?: string };
 
@@ -59,7 +59,7 @@ function describeEvent(e: ApiEventEnvelope): { marker: string; text: string; ton
 
 export function renderEvent(e: ApiEventEnvelope, o: RenderOptions): string {
   const { marker, text, tone } = describeEvent(e);
-  const [first = "", ...rest] = text.split("\n");
+  const [first = "", ...rest] = printable(text).split("\n");
   const head = `${clock(e.created_at, o.timeZone)}  ${paint(first ? `${marker} ${first}` : marker, tone, o.color)}`;
   return [head, ...rest.map((l) => (l === "" ? "" : INDENT + paint(l, tone, o.color)))].join("\n");
 }

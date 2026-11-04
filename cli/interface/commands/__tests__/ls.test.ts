@@ -79,6 +79,16 @@ describe("ls: render", () => {
     expect(row).not.toContain("more");
   });
 
+  it("strips control characters from titles and descriptions", () => {
+    const [, row = ""] = render(
+      [task({ title: "Fix\x1b]52;c;eA==\x07 it", description: "Erase\x1b[2K\r me" })],
+      NOW,
+    ).split("\n");
+    expect(row).toContain("Fix]52;c;eA== it");
+    expect(row).toContain("Erase[2K me");
+    expect(row).not.toMatch(/\p{Cc}/u);
+  });
+
   it("colours the header, key and state when asked", () => {
     const tasks = [task({ state: "running", created_at: "2026-10-12T12:25:00.000Z" })];
     expect(render(tasks, NOW, { color: true })).toBe(

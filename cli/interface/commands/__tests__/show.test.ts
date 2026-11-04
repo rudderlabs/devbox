@@ -87,6 +87,21 @@ describe("show: render", () => {
     );
   });
 
+  it("strips control characters from the server's text", () => {
+    const esc = "\x1b]8;;u\x07";
+    const out = render(
+      task({
+        title: `Fix${esc}`,
+        created_by: { id: "0192f000-0000-7000-8000-0000000000aa", name: `frodo${esc}` },
+        prs: [{ repo: "o/r", url: `https://x/pull/1${esc}`, branch: `b${esc}` }],
+        rounds: t.rounds.map((r) => ({ ...r, failure_reason: `boom${esc}` })),
+      }),
+      NOW,
+    );
+    expect(out).not.toMatch(/(?!\n)\p{Cc}/u);
+    expect(out).toContain("Fix]8;;u");
+  });
+
   it("renders empty fields as -", () => {
     expect(render(task({ created_by: null }), NOW)).toBe(
       [

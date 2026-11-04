@@ -50,6 +50,14 @@ describe("renderEvent", () => {
     );
   });
 
+  it("strips control characters from the text but keeps its lines and tabs", () => {
+    const line = renderEvent(
+      envelope(6, "agent_response", { body: "hi\x1b]52;c;eA==\x07\n\tnext\x1b[2K" }),
+      { color: true, timeZone: "UTC" },
+    );
+    expect(line).toBe("12:00:06  ✉ hi]52;c;eA==\n            \tnext[2K");
+  });
+
   it("renders a message_queued by its body, or by its kind and source without one", () => {
     const queued = (data: unknown) => renderEvent(envelope(8, "message_queued", data), plain);
     expect(queued({ source: "linear", kind: "comment", body: "and the tests" })).toBe(
