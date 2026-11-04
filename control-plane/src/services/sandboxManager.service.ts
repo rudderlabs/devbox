@@ -812,9 +812,17 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
+// Postgres rejects NUL and unpaired surrogates in text and jsonb, and every
+// event is stored in task_events: one such event would fail its cursor advance
+// on every tick, after its message was already sent. Strings are made storable.
+function storable(v: string): string {
+  return v.replaceAll("\u0000", "").toWellFormed();
+}
+
+// A cut can split a surrogate pair, so the capped text is made storable again.
 function capString(v: unknown, maxLen: number): string | undefined {
   if (typeof v !== "string") return undefined;
-  return v.length > maxLen ? `${v.slice(0, maxLen)}…` : v;
+  return v.length > maxLen ? storable(`${v.slice(0, maxLen)}…`) : v;
 }
 
 // A `pr_url` is rendered into a Linear comment and persisted to tasks.pr_urls
@@ -834,8 +842,11 @@ function isGithubPrUrl(v: unknown): v is string {
 // Runtime discriminated-union shape check for one parsed events.jsonl line.
 // Returns a typed HarnessEvent on success, or null when the object does not
 // match any known event shape — the caller quarantines a null result.
-export function validateHarnessEvent(parsed: unknown): HarnessEvent | null {
-  if (!isObject(parsed)) return null;
+export function validateHarnessEvent(raw: unknown): HarnessEvent | null {
+  if (!isObject(raw)) return null;
+  const parsed = Object.fromEntries(
+    Object.entries(raw).map(([k, v]) => [k, typeof v === "string" ? storable(v) : v]),
+  );
   // seq must be a non-negative safe integer — guards against floats, NaN,
   // Infinity, and values past 2^53-1.
   if (typeof parsed.seq !== "number" || !Number.isSafeInteger(parsed.seq) || parsed.seq < 0) {

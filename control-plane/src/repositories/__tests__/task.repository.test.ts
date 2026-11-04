@@ -11,6 +11,7 @@ mock.module("../../config", () => ({
 
 const { db, schema } = await import("../../db");
 const { TaskRepository } = await import("../task.repository");
+const { validateHarnessEvent } = await import("../../services/sandboxManager.service");
 const { TaskEventRepository, insertCpEvent } = await import("../taskEvent.repository");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
@@ -844,6 +845,43 @@ describe("TaskRepository", () => {
       await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(1) });
       const [row] = await db.select().from(schema.tasks);
       expect(row?.heartbeatAt?.getTime()).toBeGreaterThan(stale.getTime() + 90_000);
+    });
+
+    // Postgres rejects both in jsonb; a rejected insert would fail the cursor
+    // advance on every tick, after the message was already sent.
+    it("a Linear task's event with a NUL and a lone surrogate advances the cursor, cleaned", async () => {
+      const t = await insertTask({ ownerId: "pod-a" });
+      const line = JSON.stringify({
+        seq: 1,
+        ts: "2026-10-07T12:00:00Z",
+        type: "agent_response",
+        inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+        target_id: "t",
+        body: "do\u0000ne\ud800",
+      });
+      const event = validateHarnessEvent(JSON.parse(line));
+      if (!event) throw new Error("the event was dropped");
+      expect(await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event })).toEqual([
+        { id: t.id },
+      ]);
+      expect((await repo.getById(t.id))?.lastObservedEventSeq).toBe(1);
+      expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "daemon",
+          type: "agent_response",
+          inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+          seq: 1,
+          data: {
+            seq: 1,
+            ts: "2026-10-07T12:00:00Z",
+            type: "agent_response",
+            inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+            target_id: "t",
+            body: "done\ufffd",
+          },
+        },
+      ]);
     });
 
     it("API task: one log row per event, holding the full event", async () => {
