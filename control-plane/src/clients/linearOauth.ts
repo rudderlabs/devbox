@@ -30,11 +30,14 @@ export class LinearTokenError extends Error {
     this.description = details.description;
   }
 
-  // No answer (network, TLS, the request timeout), a rate limit or a server
-  // error: a later request may succeed. Any other answer (a rejected client,
-  // secret or grant; a token response without a token) needs an operator.
+  // No full answer (network, TLS, the request timeout, a body cut off), a
+  // request timeout, a rate limit or a server error: a later request may
+  // succeed. Any other answer (a rejected client, secret or grant; a token
+  // response without a token) needs an operator.
   get transient(): boolean {
-    return this.status === undefined || this.status === 429 || this.status >= 500;
+    return (
+      this.status === undefined || this.status === 408 || this.status === 429 || this.status >= 500
+    );
   }
 }
 
@@ -89,9 +92,12 @@ export async function requestClientCredentialsToken(
   const accessToken = stringField(body, "access_token");
   const expiresIn = (body as { expires_in?: unknown } | undefined)?.expires_in;
   if (!accessToken || typeof expiresIn !== "number" || !Number.isFinite(expiresIn)) {
-    throw new LinearTokenError("Linear token response is missing access_token or expires_in", {
-      status: res.status,
-    });
+    // A body that couldn't be read (reset or timed out mid-body, cut off) has
+    // no status, so it counts as a network failure and the send is held.
+    throw new LinearTokenError(
+      "Linear token response is missing access_token or expires_in",
+      body === undefined ? {} : { status: res.status },
+    );
   }
   return {
     accessToken,

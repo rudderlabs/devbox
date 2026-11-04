@@ -49,8 +49,11 @@ export function githubTokenState(): GithubTokenState {
 }
 
 // Throws, sending nothing, while there is no token: the token file has never
-// been readable (say, the minter can't use the App's key). Only an operator
-// can fix that, so callers drop the send instead of holding it.
+// been readable or is still empty. Usually the minter can't use the App's key,
+// which only an operator can fix, so callers drop the send instead of holding
+// it. The file is also empty for the minute or so after a new install, before
+// the first token is minted; on a new database nothing is sent then, since no
+// task can have opened a pull request yet.
 function githubHeaders(): Record<string, string> {
   return {
     Authorization: `Bearer ${tokenProvider()()}`,

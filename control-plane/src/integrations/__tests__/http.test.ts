@@ -221,6 +221,18 @@ describe("Linear deliver: token failures", () => {
       () => Promise.reject(new DOMException("The operation timed out.", "TimeoutError")),
       "hold",
     ],
+    [
+      "a 200 whose body is cut off",
+      () =>
+        Promise.resolve(
+          new Response('{"access_token":"tok', {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      "hold",
+    ],
+    ["408", answers(408), "hold"],
     ["429", answers(429), "hold"],
     ["500 server_error", answers(500, "server_error"), "hold"],
     ["502", answers(502), "hold"],
