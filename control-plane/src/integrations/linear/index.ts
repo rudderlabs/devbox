@@ -27,19 +27,18 @@ import type { HookCtx, Integration, Person, PrRef } from "../types";
 // is private to the workspace, so a failure shows its raw detail.
 export class LinearIntegration implements Integration<LinearStatus> {
   readonly name = "linear";
-  // Today's webhook controller. It enqueues through InboxService, which needs
-  // this registry, so app.ts attaches it afterwards (only when enabled).
-  controller?: Pick<LinearWebhookController, "handleWebhook">;
 
   constructor(
     private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
     // LINEAR_ENABLED.
     readonly enabled: boolean,
     private statusService: Pick<LinearStatusService, "status">,
+    // Today's webhook controller; none while Linear is off.
+    private controller?: Pick<LinearWebhookController, "handleWebhook">,
   ) {}
 
   // Today's responses, including 503 session_not_found when a prompt arrives
-  // before its session (Linear retries). The controller already holds its TaskService.
+  // before its session (Linear retries). The controller holds its TaskService.
   async webhook(c: Context): Promise<Response> {
     if (!this.controller) return c.notFound();
     return this.controller.handleWebhook(c);

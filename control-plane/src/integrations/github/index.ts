@@ -28,18 +28,17 @@ type GithubSpec = Extract<
 // enabled exactly when they are, and disabling them skips open rounds' replies.
 export class GithubIntegration implements Integration<GithubStatus> {
   readonly name = "github";
-  // Today's webhook controller. It enqueues through InboxService, which needs
-  // this registry, so app.ts attaches it afterwards (only when enabled).
-  controller?: GitHubWebhookController;
 
   constructor(
     // GITHUB_WEBHOOKS_ENABLED.
     readonly enabled: boolean,
     private statusService: Pick<GithubStatusService, "status">,
+    // Today's webhook controller; none while webhooks are off.
+    private controller?: Pick<GitHubWebhookController, "handleWebhook">,
   ) {}
 
   // Today's responses: 403 for untrusted actors, 503 when the trusted set
-  // can't be fetched. The controller already holds its TaskService.
+  // can't be fetched. The controller holds its TaskService.
   async webhook(c: Context): Promise<Response> {
     if (!this.controller) return c.notFound();
     return this.controller.handleWebhook(c);

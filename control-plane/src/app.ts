@@ -85,13 +85,40 @@ export function createApp(): AppBundle {
     config.linear ? linearTokenProvider : undefined,
     logger,
   );
+
+  // The only way tasks and rounds are created, one service per source. A
+  // restart's preempted sandbox is killed in the hooks' tracked detached set.
+  // The hooks need the integrations, built below from these services; that is
+  // safe because no task is assigned or restarted before requests are served.
+  const detach: Pick<IntegrationHooks, "detach"> = {
+    detach: (...args) => hooks.detach(...args),
+  };
+  const bound = (source: IntegrationName) =>
+    new BoundTaskService(source, taskRepository, inboxRepository, sandboxManager, detach);
+  const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
+
+  // A webhook controller needs only its source's TaskService, so it is built
+  // first and handed to its integration, only when enabled.
+  const linearController = config.linear
+    ? new LinearWebhookController(
+        new AgentSessionService(tasks.linear, linearTokenProvider),
+        (at) => linearStatus.recordWebhook(at),
+      )
+    : undefined;
+  const githubController = config.github.webhooks
+    ? new GitHubWebhookController(tasks.github, config.github.webhooks)
+    : undefined;
+
   const githubStatus = new GithubStatusService(githubTokenState, {
     enabled: config.github.webhooks !== undefined,
     ciResults: config.github.ciResultEnabled,
-    lastWebhookAt: (): string | null => integrations.github.controller?.lastWebhookAt() ?? null,
+    lastWebhookAt: (): string | null => githubController?.lastWebhookAt() ?? null,
   });
 
-  const integrations = createIntegrations(config, linearTokenProvider, linearStatus, githubStatus);
+  const integrations = createIntegrations(config, linearTokenProvider, linearStatus, githubStatus, {
+    linear: linearController,
+    github: githubController,
+  });
   // The registered integrations that create tasks (github creates none). Only
   // these sources are claimed and reconciled, so an older image never works a
   // task whose source it doesn't know.
@@ -101,27 +128,8 @@ export function createApp(): AppBundle {
   const replyHolds = new ReplyHolds();
   // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.
   const hooks = new IntegrationHooks(integrations, inboxRepository);
-  // The only way tasks and rounds are created, one service per source; a
-  // restart's preempted sandbox is killed in the hooks' tracked detached set.
-  const bound = (source: IntegrationName) =>
-    new BoundTaskService(source, taskRepository, inboxRepository, sandboxManager, hooks);
-  const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
 
   const inboxService = new InboxService(inboxRepository, sandboxManager, integrations, hooks);
-
-  // Each webhook controller is attached to its module here, only when enabled.
-  if (config.linear) {
-    integrations.linear.controller = new LinearWebhookController(
-      new AgentSessionService(tasks.linear, linearTokenProvider),
-      (at) => linearStatus.recordWebhook(at),
-    );
-  }
-  if (config.github.webhooks) {
-    integrations.github.controller = new GitHubWebhookController(
-      tasks.github,
-      config.github.webhooks,
-    );
-  }
 
   const slackNotifier = new SlackNotifierService(
     taskRepository,
@@ -196,12 +204,25 @@ export function createIntegrations(
   linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
   linearStatus: Pick<LinearStatusService, "status">,
   githubStatus: Pick<GithubStatusService, "status">,
+  controllers: {
+    linear?: Pick<LinearWebhookController, "handleWebhook">;
+    github?: Pick<GitHubWebhookController, "handleWebhook">;
+  },
 ) {
   return {
-    linear: new LinearIntegration(linearTokenProvider, cfg.linear !== undefined, linearStatus),
+    linear: new LinearIntegration(
+      linearTokenProvider,
+      cfg.linear !== undefined,
+      linearStatus,
+      controllers.linear,
+    ),
     api: new ApiIntegration(cfg.api.enabled),
     // GitHub rounds come only from its webhooks.
-    github: new GithubIntegration(cfg.github.webhooks !== undefined, githubStatus),
+    github: new GithubIntegration(
+      cfg.github.webhooks !== undefined,
+      githubStatus,
+      controllers.github,
+    ),
   } satisfies Record<IntegrationName, Integration>;
 }
 

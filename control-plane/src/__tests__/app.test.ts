@@ -10,7 +10,7 @@ const { ReplyHolds } = await import("../services/replyHolds");
 type Cfg = Parameters<typeof createIntegrations>[0];
 const statusOf = (body: object) => ({ status: async () => body }) as never;
 const registry = (cfg: Cfg, linear = {}, github = {}) =>
-  createIntegrations(cfg, {} as never, statusOf(linear), statusOf(github));
+  createIntegrations(cfg, {} as never, statusOf(linear), statusOf(github), {});
 
 describe("createIntegrations", () => {
   it("enables each integration from its own setting", () => {
@@ -29,6 +29,19 @@ describe("createIntegrations", () => {
       api: false,
       github: true,
     });
+  });
+
+  it("hands each webhook controller to its integration", async () => {
+    const answers = (body: string) => ({ handleWebhook: async () => new Response(body) });
+    const integrations = createIntegrations(
+      { linear: {}, api: { enabled: true }, github: { webhooks: {} } },
+      {} as never,
+      statusOf({}),
+      statusOf({}),
+      { linear: answers("linear"), github: answers("github") },
+    );
+    expect(await (await integrations.linear.webhook({} as never)).text()).toBe("linear");
+    expect(await (await integrations.github.webhook({} as never)).text()).toBe("github");
   });
 });
 
