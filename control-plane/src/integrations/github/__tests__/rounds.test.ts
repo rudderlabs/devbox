@@ -36,7 +36,7 @@ describe("GitHub rounds", () => {
   });
 
   describe("enqueueComment", () => {
-    it("appends a kind='comment' row and fires a 👀 reaction", async () => {
+    it("enqueues a comment round for the task's PR", async () => {
       await enqueueComment(tasks, {
         task: makeTask(),
         commentId: 555,
@@ -197,12 +197,13 @@ describe("GitHub rounds", () => {
 
     it("logs the loop-breaker line when the cap drops the round", async () => {
       const warn = spyOn(logger, "warn").mockImplementation(() => logger);
-      enqueueRound.mockResolvedValueOnce({ dropped: "limit", count: 20 });
+      // seen is the rows already stored, which can exceed a lowered cap.
+      enqueueRound.mockResolvedValueOnce({ dropped: "limit", count: 23 });
       await enqueueCiResult(tasks, ciParams);
       expect(warn.mock.calls).toEqual([
         [
           "ci_result loop breaker tripped — dropping CI failure",
-          { taskId: "task-1", seen: 20, max: 20, runId: 123456789, prNumber: 42 },
+          { taskId: "task-1", seen: 23, max: 20, runId: 123456789, prNumber: 42 },
         ],
       ]);
       // Nothing for a round that went in or another drop.

@@ -504,7 +504,7 @@ describe("TaskService", () => {
       const task = await insertTask({ source: "linear", externalId: "issue-1", key: "ISS-1" });
       await expect(
         api.restart(task.id, def({ id: task.id, spec: { kind: "api_session" } })),
-      ).rejects.toThrow("is not a api task");
+      ).rejects.toThrow("is not from api");
       const [row] = await db.execute(sql`SELECT title FROM tasks`);
       expect(row).toEqual({ title: "t" });
     });

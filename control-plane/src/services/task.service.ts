@@ -129,7 +129,7 @@ export class BoundTaskService implements TaskService {
     const task = await this.taskRepo.getById(taskId);
     if (!task) throw new Error(`restart: task ${taskId} not found`);
     if (task.source !== this.source) {
-      throw new Error(`restart: task ${taskId} is not a ${this.source} task`);
+      throw new Error(`restart: task ${taskId} is not from ${this.source}`);
     }
     const { prevSandboxId } = await this.taskRepo.restartTaskWithInbox({
       taskId,

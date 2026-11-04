@@ -500,7 +500,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(addIssueCommentReaction).toHaveBeenCalledTimes(2);
   });
 
-  // 👀 tells the commenter the round is queued, so it waits for the enqueue.
+  // 👀 is sent only once the enqueue call has returned.
   it("a failed enqueue answers 500 and reacts to nothing", async () => {
     enqueueRound.mockRejectedValue(new Error("db down"));
     const comment = commentBody("alice");
@@ -872,7 +872,6 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "pull_request", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueRound).not.toHaveBeenCalled();
     expect(enqueueRound).not.toHaveBeenCalled();
   });
 
