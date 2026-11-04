@@ -27,7 +27,8 @@ function describeEvent(e: ApiEventEnvelope): { marker: string; text: string; ton
     case "task_restarted":
       return { marker: "↻", text: `task restarted: ${s("title")}`, tone: "bold" };
     case "message_queued":
-      return { marker: "→", text: s("body"), tone: null };
+      // Only a comment round carries its text.
+      return { marker: "→", text: s("body") || `${s("kind")} queued (${s("source")})`, tone: null };
     case "sandbox_started":
       return { marker: "▸", text: `sandbox started (${s("mode")})`, tone: null };
     case "round_failed":

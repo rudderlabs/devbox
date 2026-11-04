@@ -106,8 +106,9 @@ export function serveEvents(stub: Stub, ref: string, log: ApiEventEnvelope[], de
   });
 }
 
-// A Linear task: its log pages report `logging: unavailable`, and its stream
-// sends one state event, then `logging`, then closes.
+// A Linear task on an older server, which logs only API tasks: its log pages
+// report `logging: unavailable`, and its stream sends one state event, then
+// `logging`, then closes.
 export function serveLinearTask(stub: Stub, ref: string): void {
   stub.app.get(`/api/tasks/${ref}/events`, (c) =>
     c.json({ events: [], next_after: 0, logging: "unavailable" }),

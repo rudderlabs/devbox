@@ -4,6 +4,7 @@ import { type ApiClient, ApiFailure, isFatal } from "./api";
 import { MAX_TIMEOUT_MS } from "./limits";
 import { followStream, type Sleep } from "./sse";
 
+// An older server logs only API tasks and says so for any other task.
 export class NoEventLog extends Error {
   constructor(ref: string) {
     super(`${ref} has no event log (only API tasks are logged)`);
