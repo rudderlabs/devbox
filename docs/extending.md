@@ -103,7 +103,9 @@ discussion to a follow-up only for `github` rounds
   `assignee()`, through that person's `githubAccount`. An integration whose
   platform links GitHub accounts returns the link as it is, an account id or a
   login, or `null` when the person hasn't linked one; one that can't link
-  accounts leaves it out.
+  accounts leaves it out. An all-digit `githubAccount` is taken as an account
+  id and anything else as a login. Only github.com pull request URLs get the
+  comment or an assignee.
 - **Reply targets.** Each round carries reply targets that say where the
   harness's answers go, each with a `spec` in the integration's own shape. The
   control plane stores the spec and hands it back to the `deliver` of the
