@@ -11,9 +11,10 @@ const INTEGRATIONS = join(SRC, "integrations");
 const SOURCE = /\.[cm]?([jt]sx?)$/;
 
 // Besides its own folder and packages (node:*, hono, npm), a file under
-// integrations/<name>/ may import these, its own API clients (clients/<name>*,
-// so Linear never calls GitHub: the code host does), and the database row
-// types (type-only).
+// integrations/<name>/ may import these, its own API clients (named <name>
+// up to their first capital, such as clients/linearOauth for linear, so Linear
+// never calls GitHub: the code host does), and the database row types
+// (type-only).
 const SHARED = [
   "integrations/types",
   "integrations/outbound",
@@ -41,8 +42,10 @@ function violation(file: string, spec: string, typeOnly: boolean): string | unde
   const target = relative(SRC, resolve(dirname(file), spec)).replace(SOURCE, "");
   const own = relative(SRC, dirname(file)).split("/").slice(0, 2).join("/");
   if (target === own || target.startsWith(`${own}/`)) return undefined;
-  const name = own.split("/")[1];
-  if (SHARED.includes(target) || target.startsWith(`clients/${name}`)) return undefined;
+  if (SHARED.includes(target)) return undefined;
+  const client =
+    target.startsWith("clients/") && target.replace(/^clients\//, "").replace(/[A-Z].*$/, "");
+  if (client === own.split("/")[1]) return undefined;
   if (typeOnly && TYPES_ONLY.includes(target)) return undefined;
   return why;
 }
@@ -101,6 +104,29 @@ describe("integration folders", () => {
       "integrations/linear/index.ts imports /abs/integrations/types",
       "integrations/linear/index.ts imports ../../clients/github",
       "integrations/linear/index.ts imports ../../repositories/inbox.repository",
+    ]);
+  });
+
+  it("an integration's clients are those named after it up to their first capital", () => {
+    const allowed = (name: string, client: string) =>
+      violations(
+        join(INTEGRATIONS, name, "index.ts"),
+        `import { x } from "../../clients/${client}";`,
+      ).length === 0;
+    expect(["linear", "linearApi", "linearOauth"].map((c) => allowed("linear", c))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(["github", "githubApi", "githubToken"].map((c) => allowed("github", c))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(["github", "githubApi", "gitlab"].map((c) => allowed("git", c))).toEqual([
+      false,
+      false,
+      false,
     ]);
   });
 });
