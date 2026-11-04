@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { sql } from "drizzle-orm";
 import type { HarnessEvent } from "../../types/harnessEvent";
 
@@ -11,6 +11,7 @@ mock.module("../../config", () => ({
 
 const { db, schema } = await import("../../db");
 const { TaskRepository } = await import("../task.repository");
+const { InboxRepository } = await import("../inbox.repository");
 const { validateHarnessEvent } = await import("../../services/sandboxManager.service");
 const { TaskEventRepository, insertCpEvent } = await import("../taskEvent.repository");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
@@ -847,6 +848,26 @@ describe("TaskRepository", () => {
       expect(row?.heartbeatAt?.getTime()).toBeGreaterThan(stale.getTime() + 90_000);
     });
 
+    it("a Linear task logs the events of its GitHub round", async () => {
+      const t = await insertTask({ ownerId: "pod-a" });
+      const [round] = await db.execute<{ id: string }>(sql`
+        INSERT INTO inbox (task_id, source, kind, external_id, payload)
+             VALUES (${t.id}, 'github', 'comment', '555', '{}'::jsonb)
+        RETURNING id`);
+      const roundId = (round as { id: string }).id;
+      await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(1, roundId) });
+      expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "daemon",
+          type: "agent_action",
+          inbox_id: roundId,
+          seq: 1,
+          data: ev(1, roundId),
+        },
+      ]);
+    });
+
     // Postgres rejects both in jsonb; a rejected insert would fail the cursor
     // advance on every tick, after the message was already sent.
     it("a Linear task's event with a NUL and a lone surrogate advances the cursor, cleaned", async () => {
@@ -1428,6 +1449,132 @@ describe("TaskRepository", () => {
         sandboxId: null,
         pvcName: null,
       });
+    });
+  });
+
+  // Each event is written in its cause's transaction, for a task of any
+  // source: a cause that fails to commit leaves no event. A deferred trigger
+  // fails the commit after the event's insert has run.
+  describe("a cause that fails to commit writes no event", () => {
+    const inboxRepo = new InboxRepository();
+    // A run killed mid-test can leave a trigger behind.
+    const dropTriggers = async () => {
+      await db.execute(sql`DROP TRIGGER IF EXISTS test_fail_commit ON tasks`);
+      await db.execute(sql`DROP TRIGGER IF EXISTS test_fail_commit ON inbox`);
+    };
+    beforeAll(async () => {
+      await dropTriggers();
+      await db.execute(sql`
+        CREATE OR REPLACE FUNCTION test_fail_commit() RETURNS trigger LANGUAGE plpgsql
+          AS $$ BEGIN RAISE EXCEPTION 'commit blocked'; END $$`);
+    });
+    afterAll(async () => {
+      await dropTriggers();
+      await db.execute(sql`DROP FUNCTION IF EXISTS test_fail_commit()`);
+    });
+
+    async function failingCommit(
+      table: "tasks" | "inbox",
+      op: "INSERT" | "UPDATE",
+      write: () => Promise<unknown>,
+    ): Promise<void> {
+      await db.execute(
+        sql.raw(`CREATE CONSTRAINT TRIGGER test_fail_commit AFTER ${op} ON ${table}
+                   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_fail_commit()`),
+      );
+      try {
+        await expect(write()).rejects.toThrow();
+      } finally {
+        await dropTriggers();
+      }
+    }
+
+    const logTypes = async () =>
+      [...(await db.execute<{ type: string }>(sql`SELECT type FROM task_events ORDER BY id`))].map(
+        (r) => r.type,
+      );
+
+    // A Linear task leased to pod-a, and its assignment round's id.
+    const linearTask = async () => {
+      const t = await assignLinear({ session: "sess-1" });
+      await db.execute(sql`UPDATE tasks SET owner_id = 'pod-a' WHERE id = ${t.id}`);
+      const [round] = await db.execute<{ id: string }>(
+        sql`SELECT id FROM inbox WHERE task_id = ${t.id}`,
+      );
+      return { id: t.id, roundId: (round as { id: string }).id };
+    };
+
+    it("task_created", async () => {
+      await failingCommit("tasks", "INSERT", () => assignLinear({ session: "sess-1" }));
+      expect(await db.execute(sql`SELECT 1 FROM tasks`)).toHaveLength(0);
+      expect(await logTypes()).toEqual([]);
+    });
+
+    it("task_restarted, from a re-delegation", async () => {
+      await linearTask();
+      await failingCommit("tasks", "UPDATE", () => assignLinear({ session: "sess-2" }));
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("sandbox_started", async () => {
+      const t = await linearTask();
+      await failingCommit("tasks", "UPDATE", () =>
+        repo.attachSandboxResources({
+          taskId: t.id,
+          ownerId: "pod-a",
+          sandboxId: "s",
+          pvcName: "p",
+        }),
+      );
+      await failingCommit("tasks", "UPDATE", () =>
+        repo.setSandboxId({ taskId: t.id, ownerId: "pod-a", sandboxId: "s" }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("a daemon event", async () => {
+      const t = await linearTask();
+      const event = {
+        seq: 1,
+        ts: "2026-10-07T12:00:00Z",
+        type: "agent_action",
+        inbox_id: t.roundId,
+        target_id: "sess-1",
+        body: "step",
+      } as HarnessEvent;
+      await failingCommit("tasks", "UPDATE", () =>
+        repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("message_queued", async () => {
+      const t = await linearTask();
+      await failingCommit("inbox", "INSERT", () =>
+        inboxRepo.appendFollowUp({
+          taskId: t.id,
+          message: { source: "linear", kind: "comment", external_id: "a-1", payload: {} },
+          replyTargets: [],
+          body: "more",
+        }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("round_failed", async () => {
+      const t = await linearTask();
+      await failingCommit("inbox", "UPDATE", () =>
+        inboxRepo.failTaskInbox({ taskId: t.id, ownerId: "pod-a", reason: "x" }),
+      );
+      await failingCommit("inbox", "UPDATE", () =>
+        inboxRepo.markFailed({
+          inboxId: t.roundId,
+          ownerId: "pod-a",
+          reason: "r",
+          userMessage: "m",
+        }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
     });
   });
 });
