@@ -47,7 +47,9 @@ type TaskServiceDeps = Omit<ConstructorParameters<typeof BoundTaskService>[1], "
 // RetryableError (nothing was sent) from deliver or onPrOpened, which escapes
 // so the caller can hold the event. runId is the assignment id of the run the
 // call belongs to, or null when there is none; the hook's isCurrent() compares
-// it with the task's assignment id when the hook asks.
+// it with the task's assignment id when the hook asks. deliver and
+// onRoundFinished go to the round's own integration (round.source), whichever
+// name they were looked up by, so a round can't reach another integration.
 export type WrappedIntegration = {
   // One message for one of the round's targets: "dropped" when it timed out
   // or failed for good (logged). An unknown or disabled integration's send is
@@ -137,7 +139,7 @@ export class IntegrationRegistry {
   // The integration named `name` (a task's or a round's source), wrapped.
   for(name: string): WrappedIntegration {
     return {
-      deliver: (round, target, message, meta) => this.deliver(name, round, target, message, meta),
+      deliver: (round, target, message, meta) => this.deliver(round, target, message, meta),
       onTaskStarted: async (task, assignment) => {
         const target = assignment.reply_targets[0];
         if (!target) return;
@@ -154,7 +156,7 @@ export class IntegrationRegistry {
         this.background.track(
           task.id,
           "onRoundFinished",
-          this.hook(name, "onRoundFinished", task, runId, (ctx, i) =>
+          this.hook(round.source, "onRoundFinished", task, runId, (ctx, i) =>
             i.onRoundFinished?.({ ...ctx, firstTransition, archive }, task, round, outcome),
           ),
         ),
@@ -189,16 +191,15 @@ export class IntegrationRegistry {
   }
 
   private async deliver(
-    name: string,
     round: Round,
     target: ReplyTarget,
     message: Outbound,
     meta: Record<string, unknown>,
   ): Promise<"ok" | "dropped"> {
-    const log = { ...meta, inboxId: round.id, source: name, targetId: target.id };
+    const log = { ...meta, inboxId: round.id, source: round.source, targetId: target.id };
     // A source this build doesn't know (rows written by a newer build before
     // a rollback) or a disabled integration has no instance.
-    const live: Integration | undefined = this.live[name];
+    const live: Integration | undefined = this.live[round.source];
     if (!live) {
       logger.info(`${message.type} skipped: integration unknown or disabled`, log);
       return "ok";

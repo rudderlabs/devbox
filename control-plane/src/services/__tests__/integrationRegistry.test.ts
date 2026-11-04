@@ -591,3 +591,26 @@ describe("IntegrationRegistry.for: hooks", () => {
     }
   });
 });
+
+describe("IntegrationRegistry.for: routing", () => {
+  it("a round goes to its own integration, whichever name it was looked up by", async () => {
+    const sent: string[] = [];
+    const finished: string[] = [];
+    const parts = (name: string): Partial<Integration> => ({
+      deliver: async () => {
+        sent.push(name);
+      },
+      onRoundFinished: async () => {
+        finished.push(name);
+      },
+    });
+    const { r, background } = wrapped(parts("linear"), parts("github"));
+    const githubRound = row("gh-1", "comment", "github");
+    expect(await r.for("linear").deliver(githubRound, target, reply, {})).toBe("ok");
+    r.for("linear").onRoundFinished(task, githubRound, "a-1", null, true);
+    await background.drain(sleep(500));
+
+    expect(sent).toEqual(["github"]);
+    expect(finished).toEqual(["github"]);
+  });
+});
