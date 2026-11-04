@@ -312,9 +312,9 @@ export class TaskProcessorService {
     }
 
     // The owner integration's onTaskStarted (Linear: issue state and the
-    // Provisioning action), at most once per assignment on this pod. Never
-    // throws. API tasks' logs get sandbox_started from attachSandboxResources.
-    await this.hooks.taskStarted(task);
+    // Provisioning action), on every fresh-provision attempt. Never throws. API
+    // tasks' logs get sandbox_started from attachSandboxResources.
+    await this.hooks.taskStarted(task, assignment);
 
     // WORKSPACE is the only task-specific input passed at creation; the daemon
     // derives its .harness dir from it and reads everything else from the inbox file

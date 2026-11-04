@@ -112,7 +112,9 @@ export class LinearIntegration implements Integration {
 
   // A fresh provision: moves the issue to its team's started state, then shows
   // "Provisioning" on the session. Each is best-effort; a team without a
-  // started state still gets the action.
+  // started state still gets the action. A retried provision repeats both:
+  // the move sets the same state again, and the session shows "Provisioning"
+  // once per attempt.
   async onTaskStarted(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void> {
     const client = await this.client(ctx.signal);
     await setIssueStarted(client, task.externalId).catch((err: unknown) => {

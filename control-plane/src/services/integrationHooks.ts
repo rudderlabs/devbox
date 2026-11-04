@@ -27,10 +27,6 @@ type DetachedWork = HookName | "killSandbox" | "slack";
 // tracked so TaskProcessor.stop() can drain it.
 export class IntegrationHooks {
   private readonly detached = new Map<Promise<void>, { taskId: string; hook: DetachedWork }>();
-  // Assignment ids whose onTaskStarted already ran on this pod: a provision
-  // deferred by a transient error runs again for the same assignment.
-  // ponytail: one id per started task for the pod's lifetime; prune if that ever matters.
-  private readonly started = new Set<string>();
 
   constructor(
     // The registry's enabled integrations, by name.
@@ -39,18 +35,14 @@ export class IntegrationHooks {
     private timeoutsMs: Record<HookName, number> = HOOK_TIMEOUT_MS,
   ) {}
 
-  // Fresh provision, before the sandbox is created. Awaited; no hold.
-  async taskStarted(task: Task): Promise<void> {
+  // Fresh provision, before the sandbox is created, on every attempt: a
+  // provision deferred by a transient error runs it again, so the integration
+  // makes it idempotent. Awaited; no hold.
+  async taskStarted(task: Task, assignment: InboxRow): Promise<void> {
     const owner = this.integrations[task.source];
-    if (!owner?.onTaskStarted) return;
-    const round = await this.inboxRepo.getAssignment(task.id).catch((err) => {
-      logErr("onTaskStarted skipped: assignment lookup failed", err, { taskId: task.id });
-      return null;
-    });
-    const target = round?.reply_targets[0];
-    if (!round || !target || this.started.has(round.id)) return;
-    this.started.add(round.id);
-    await this.callHook("onTaskStarted", task.source, task, round, (ctx) =>
+    const target = assignment.reply_targets[0];
+    if (!owner?.onTaskStarted || !target) return;
+    await this.callHook("onTaskStarted", task.source, task, assignment, (ctx) =>
       owner.onTaskStarted?.(ctx, task, target),
     );
   }

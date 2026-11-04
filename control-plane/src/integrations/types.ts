@@ -47,6 +47,8 @@ export interface Integration {
 
   // Lifecycle hooks. Core runs each through IntegrationHooks (catch, log,
   // timeout, abort signal); see services/integrationHooks.ts for where and how.
+  // Before each fresh-provision attempt: a deferred provision calls it again,
+  // so it must be safe to repeat.
   onTaskStarted?(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void>;
   onPrOpened?(ctx: HookCtx & { firstTime: boolean }, task: Task, pr: PrRef): Promise<void>;
   onRoundFinished?(

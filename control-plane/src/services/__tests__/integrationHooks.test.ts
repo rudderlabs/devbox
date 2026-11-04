@@ -74,7 +74,7 @@ describe("IntegrationHooks", () => {
       const pr = { url: "u", repo: "r", branch: "b" };
       expect(await hooks.assignee(task, row("a-1"), {})).toBeUndefined();
       expect(await hooks.prOpened(task, row("a-1"), pr, true)).toBeUndefined();
-      await hooks.taskStarted(task);
+      await hooks.taskStarted(task, row("a-1"));
       hooks.roundFinished(task, row("a-1"), "completed", true);
       await hooks.drain(Promise.resolve());
       expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
@@ -151,16 +151,19 @@ describe("IntegrationHooks", () => {
     expect(await ctx?.isCurrent()).toBe(false);
   });
 
-  it("onTaskStarted runs at most once per assignment id", async () => {
-    const onTaskStarted = mock(() => Promise.resolve());
+  it("onTaskStarted runs on each fresh-provision attempt, with the assignment's first target", async () => {
+    const onTaskStarted = mock((_ctx: HookCtx, _task: Task, _target: unknown) => Promise.resolve());
     const { hooks, inboxRepo } = hooksWith({ onTaskStarted });
-    await hooks.taskStarted(task);
-    await hooks.taskStarted(task);
-    expect(onTaskStarted).toHaveBeenCalledTimes(1);
-    // A restart re-pends the assignment under a new id: a new run starts.
-    inboxRepo.getAssignment.mockResolvedValue(row("a-2"));
-    await hooks.taskStarted(task);
+    // A deferred provision retries the same assignment.
+    await hooks.taskStarted(task, row("a-1"));
+    await hooks.taskStarted(task, row("a-1"));
     expect(onTaskStarted).toHaveBeenCalledTimes(2);
+    expect(onTaskStarted.mock.calls.map((c) => c[2])).toEqual([
+      { id: "sess-1", spec: { kind: "linear_session" } },
+      { id: "sess-1", spec: { kind: "linear_session" } },
+    ]);
+    // The caller hands in the assignment row: no lookup of its own.
+    expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
   });
 
   it("drain also waits for work detached while it drains", async () => {

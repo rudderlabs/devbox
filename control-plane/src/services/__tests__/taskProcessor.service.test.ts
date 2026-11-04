@@ -434,7 +434,7 @@ describe("TaskProcessorService", () => {
       expect(failTaskInbox).not.toHaveBeenCalled();
     });
 
-    it("runs the owner's onTaskStarted once per assignment id, before the sandbox is created", async () => {
+    it("runs the owner's onTaskStarted on each fresh-provision attempt, before the sandbox is created", async () => {
       const order: string[] = [];
       const onTaskStarted = mock(async () => {
         order.push("started");
@@ -462,12 +462,11 @@ describe("TaskProcessorService", () => {
       await waitFor(() => attachSandboxResources.mock.calls.length > 0);
       await service.stop();
 
-      expect(order).toEqual(["started", "create", "create"]);
-      expect(onTaskStarted).toHaveBeenCalledWith(
-        expect.anything(),
-        task,
-        assignment.reply_targets[0],
-      );
+      expect(order).toEqual(["started", "create", "started", "create"]);
+      expect(onTaskStarted.mock.calls.map((c) => (c as unknown[]).slice(1))).toEqual([
+        [task, assignment.reply_targets[0]],
+        [task, assignment.reply_targets[0]],
+      ]);
     });
 
     it("threads experimental flags from task metadata into sandbox creation", async () => {
