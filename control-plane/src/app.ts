@@ -107,25 +107,17 @@ export function createApp(): AppBundle {
     new BoundTaskService(source, taskRepository, inboxRepository, sandboxManager, hooks);
   const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
 
-  const inboxService = new InboxService(
-    inboxRepository,
-    sandboxManager,
-    integrations,
-    hooks,
-    tasks,
-  );
+  const inboxService = new InboxService(inboxRepository, sandboxManager, integrations, hooks);
 
-  // Today's webhook controllers enqueue through InboxService, which needs the
-  // registry, so each is attached to its module here, only when enabled.
+  // Each webhook controller is attached to its module here, only when enabled.
   if (config.linear) {
     integrations.linear.controller = new LinearWebhookController(
-      new AgentSessionService(tasks.linear, linearTokenProvider, inboxService),
+      new AgentSessionService(tasks.linear, linearTokenProvider),
       (at) => linearStatus.recordWebhook(at),
     );
   }
   if (config.github.webhooks) {
     integrations.github.controller = new GitHubWebhookController(
-      inboxService,
       tasks.github,
       config.github.webhooks,
     );

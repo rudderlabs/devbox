@@ -8,10 +8,10 @@ import {
   getUserIdByLogin,
 } from "../clients/github";
 import { config } from "../config";
+import { enqueueCiResult, enqueueComment, enqueueReview } from "../integrations/github/rounds";
 import type { GithubWebhooksConfig } from "../integrationsConfig";
 import { logger } from "../logger";
 import type { ReplyTargetSpec } from "../repositories/inbox.repository";
-import type { InboxService } from "../services/inbox.service";
 import type { TaskService } from "../services/task.service";
 
 // ──── Parsed event surface ────
@@ -340,8 +340,7 @@ export class GitHubWebhookController {
   private lastSignedAt: number | null = null;
 
   constructor(
-    private inboxService: InboxService,
-    private tasks: Pick<TaskService, "findTaskByPrUrl">,
+    private tasks: Pick<TaskService, "findTaskByPrUrl" | "enqueueRound">,
     private readonly settings: GithubWebhooksConfig,
     private readonly now: () => number = Date.now,
   ) {
@@ -519,7 +518,7 @@ export class GitHubWebhookController {
             prNumber: pr.number,
           });
 
-          await this.inboxService.enqueueCiResult({
+          await enqueueCiResult(this.tasks, {
             task,
             runId: parsed.runId,
             runAttempt: parsed.runAttempt,
@@ -555,7 +554,7 @@ export class GitHubWebhookController {
       if (!task) return c.json({ status: "ignored" }, 200);
 
       if (parsed.kind === "comment") {
-        await this.inboxService.enqueueComment({
+        await enqueueComment(this.tasks, {
           task,
           commentId: parsed.commentId,
           body: parsed.body,
@@ -583,7 +582,7 @@ export class GitHubWebhookController {
         const inlineComments = reviewBodyMentionsBot
           ? fetchedInlineComments
           : mentioningInlineComments;
-        await this.inboxService.enqueueReview({
+        await enqueueReview(this.tasks, {
           task,
           reviewId: parsed.reviewId,
           reviewBody: reviewBodyMentionsBot ? parsed.reviewBody : "",

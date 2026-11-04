@@ -3,7 +3,6 @@ import { createHmac } from "node:crypto";
 import { Hono } from "hono";
 import type { Task } from "../../db/schema";
 import { logger } from "../../logger";
-import type { InboxService } from "../../services/inbox.service";
 import type { TaskService } from "../../services/task.service";
 
 const WEBHOOK_SECRET = "gh-test-secret";
@@ -329,11 +328,6 @@ describe("parseGithubEvent", () => {
 
 // ──── Controller tests ────
 
-type InboxServiceLike = Pick<
-  InboxService,
-  "enqueueComment" | "enqueueReview" | "enqueueLinearComment" | "enqueueCiResult"
->;
-
 const linearTask = {
   id: "task-1",
   key: "XYZ-1",
@@ -347,19 +341,57 @@ const apiTask = {
   externalUrl: "https://cp.example/api/tasks/DBX-API-7",
 } as Task;
 
+const PR_URL = "https://github.com/o/r/pull/7";
+
+// The round a trusted `@acme-bot fix` comment (commentBody) queues.
+const commentDraft = (task: Task) => ({
+  task,
+  kind: "comment",
+  externalId: "555",
+  payload: {
+    target_id: "555",
+    body: "@acme-bot fix",
+    pr: { repo: "r", pr_url: PR_URL },
+    created_at: "",
+  },
+  targets: [
+    {
+      id: "555",
+      spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: 555 },
+    },
+  ],
+  prUrl: PR_URL,
+});
+
+// A review round's reply target for an inline comment.
+const inlineTarget = (id: number, path: string, line: number, startLine?: number) => ({
+  id: String(id),
+  spec: {
+    kind: "review_comment",
+    owner: "o",
+    repo: "r",
+    prNumber: 7,
+    commentId: id,
+    inReplyTo: id,
+    path,
+    line,
+    startLine,
+  },
+});
+const reviewBodyTarget = {
+  id: "88",
+  spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 7, reviewId: 88 },
+};
+
 describe("GitHubWebhookController.handleWebhook", () => {
-  let enqueueComment: ReturnType<typeof mock>;
-  let enqueueReview: ReturnType<typeof mock>;
-  let enqueueCiResult: ReturnType<typeof mock>;
+  let enqueueRound: ReturnType<typeof mock>;
   let findByPrUrl: ReturnType<typeof mock>;
   let app: Hono;
   let controller: InstanceType<typeof GitHubWebhookController>;
   let clock: { now: number };
 
   const build = () => {
-    enqueueComment = mock(() => Promise.resolve());
-    enqueueReview = mock(() => Promise.resolve());
-    enqueueCiResult = mock(() => Promise.resolve());
+    enqueueRound = mock(() => Promise.resolve({ roundId: "round-1" }));
     findByPrUrl = mock(() => Promise.resolve(linearTask));
     getReviewComments.mockReset();
     getReviewComments.mockResolvedValue([]);
@@ -368,12 +400,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     addReviewCommentReaction.mockReset();
     addReviewCommentReaction.mockResolvedValue(undefined);
 
-    const inboxService = {
-      enqueueComment,
-      enqueueReview,
-      enqueueCiResult,
-    } as unknown as InboxServiceLike as InboxService;
-    const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskService;
+    const tasks = { findTaskByPrUrl: findByPrUrl, enqueueRound } as unknown as TaskService;
     // Reset the module-mocked fetchOrgMembers so per-test mockImplementationOnce
     // overrides don't leak across cases. Default: resolves to the trusted-set
     // logins used across positive-path bodies. The bot login `acme-bot[bot]` is
@@ -384,7 +411,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     getUserIdByLogin.mockReset();
     getUserIdByLogin.mockResolvedValue(null);
     clock = { now: 1_000_000 };
-    controller = new GitHubWebhookController(inboxService, intake, SETTINGS, () => clock.now);
+    controller = new GitHubWebhookController(tasks, SETTINGS, () => clock.now);
     const a = new Hono();
     a.post("/webhook/github", (c) => controller.handleWebhook(c));
     return a;
@@ -441,7 +468,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
   it("returns 401 on a missing / bad signature", async () => {
     const res = await post(commentBody(), "issue_comment");
     expect(res.status).toBe(401);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("enqueues a comment on an API task's PR without parsing its URL", async () => {
@@ -449,15 +476,15 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = commentBody("alice");
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).toHaveBeenCalledWith(expect.objectContaining({ task: apiTask }));
+    expect(enqueueRound).toHaveBeenCalledWith(commentDraft(apiTask));
   });
 
   it("enqueues a comment on a valid @acme-bot issue_comment from a trusted org member", async () => {
     const body = commentBody("alice");
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).toHaveBeenCalledTimes(1);
-    expect(enqueueComment.mock.calls[0]?.[0]).toMatchObject({ task: linearTask, commentId: 555 });
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+    expect(enqueueRound).toHaveBeenCalledWith(commentDraft(linearTask));
     await flushMicrotasks();
     expect(addIssueCommentReaction).toHaveBeenCalledWith("o", "r", 555, "eyes");
   });
@@ -468,16 +495,37 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect((await post(body, "issue_comment", sign(body))).status).toBe(200);
     expect((await post(body, "issue_comment", sign(body))).status).toBe(200);
     await flushMicrotasks();
-    expect(enqueueComment).toHaveBeenCalledTimes(2);
-    expect(enqueueComment.mock.calls[1]).toEqual(enqueueComment.mock.calls[0]);
+    expect(enqueueRound).toHaveBeenCalledTimes(2);
+    expect(enqueueRound.mock.calls[1]).toEqual(enqueueRound.mock.calls[0]);
     expect(addIssueCommentReaction).toHaveBeenCalledTimes(2);
+  });
+
+  // 👀 tells the commenter the round is queued, so it waits for the enqueue.
+  it("a failed enqueue answers 500 and reacts to nothing", async () => {
+    enqueueRound.mockRejectedValue(new Error("db down"));
+    const comment = commentBody("alice");
+    expect((await post(comment, "issue_comment", sign(comment))).status).toBe(500);
+    getReviewComments.mockResolvedValue([
+      { id: 11, path: "a.ts", line: 3, body: "@acme-bot nit", user: { login: "reviewer" } },
+    ]);
+    const review = JSON.stringify({
+      action: "submitted",
+      repository: { name: "r", owner: { login: "o" } },
+      pull_request: { number: 7, user: { login: "acme-bot[bot]" } },
+      review: { id: 88, body: "notes", user: { login: "a", id: 2 } },
+    });
+    expect((await post(review, "pull_request_review", sign(review))).status).toBe(500);
+    await flushMicrotasks();
+    expect(enqueueRound).toHaveBeenCalledTimes(2);
+    expect(addIssueCommentReaction).not.toHaveBeenCalled();
+    expect(addReviewCommentReaction).not.toHaveBeenCalled();
   });
 
   it("does not react to a shortened alias of the bot login", async () => {
     const body = commentBody("alice", "acme-bot[bot]", "@bot fix");
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("accepts a form-encoded body (payload=<urlencoded JSON>)", async () => {
@@ -493,15 +541,15 @@ describe("GitHubWebhookController.handleWebhook", () => {
       "application/x-www-form-urlencoded",
     );
     expect(res.status).toBe(200);
-    expect(enqueueComment).toHaveBeenCalledTimes(1);
-    expect(enqueueComment.mock.calls[0]?.[0]).toMatchObject({ task: linearTask, commentId: 555 });
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+    expect(enqueueRound).toHaveBeenCalledWith(commentDraft(linearTask));
   });
 
   it("rejects a comment from a user id not in the trusted org with 403", async () => {
     const body = commentBody("outsider");
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(403);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("trusts by numeric user id, not login — a renamed handle with a trusted id is accepted", async () => {
@@ -518,7 +566,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).toHaveBeenCalledTimes(1);
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a comment whose login matches a trusted user but whose id does not (fail closed on id)", async () => {
@@ -533,7 +581,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(403);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("rejects a comment with a missing user.id as 403 (fail closed)", async () => {
@@ -552,7 +600,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(403);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("ignores an unhandled event header (issues, push, …) before any trust/DB work", async () => {
@@ -565,7 +613,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(res.status).toBe(200);
     expect(fetchOrgMembers).not.toHaveBeenCalled();
     expect(findByPrUrl).not.toHaveBeenCalled();
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("ignores an issue_comment on a plain issue (no pull_request) before any trust/DB work", async () => {
@@ -580,7 +628,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(res.status).toBe(200);
     expect(fetchOrgMembers).not.toHaveBeenCalled();
     expect(findByPrUrl).not.toHaveBeenCalled();
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("rejects a submitted review from an outside contributor with 403", async () => {
@@ -592,7 +640,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "pull_request_review", sign(body));
     expect(res.status).toBe(403);
-    expect(enqueueReview).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
     expect(getReviewComments).not.toHaveBeenCalled();
   });
 
@@ -602,7 +650,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = commentBody("alice", "human-author");
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
     expect(fetchOrgMembers).not.toHaveBeenCalled();
     expect(findByPrUrl).not.toHaveBeenCalled();
   });
@@ -619,7 +667,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
     expect(fetchOrgMembers).not.toHaveBeenCalled();
     expect(findByPrUrl).not.toHaveBeenCalled();
   });
@@ -629,7 +677,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = commentBody();
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("ignores a submitted review when neither body nor fetched inlines mention the bot", async () => {
@@ -647,7 +695,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: "ignored", reason: "no mention" });
     expect(getReviewComments).toHaveBeenCalledWith("o", "r", 7, 88);
-    expect(enqueueReview).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
     await flushMicrotasks();
     expect(addReviewCommentReaction).not.toHaveBeenCalled();
   });
@@ -678,20 +726,24 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const res = await post(body, "pull_request_review", sign(body));
     expect(res.status).toBe(200);
     expect(getReviewComments).toHaveBeenCalledWith("o", "r", 7, 88);
-    expect(enqueueReview).toHaveBeenCalledTimes(1);
-    expect(enqueueReview).toHaveBeenCalledWith({
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+    // The bot's own inline comment (13) is left out.
+    expect(enqueueRound).toHaveBeenCalledWith({
       task: linearTask,
-      reviewId: 88,
-      reviewBody: "@acme-bot please handle this review",
-      inlineComments: [
-        { id: 11, path: "a.ts", line: 3, startLine: 1, body: "nit", user: { login: "reviewer" } },
-        { id: 12, path: "b.ts", line: 9, body: "rename", user: { login: "reviewer" } },
-      ],
-      owner: "o",
-      repo: "r",
-      prNumber: 7,
-      reviewerLogin: "a",
-      createdAt: "2026-04-23T12:00:00Z",
+      kind: "review",
+      externalId: "88",
+      payload: {
+        review_body: { target_id: "88", body: "@acme-bot please handle this review" },
+        inline_comments: [
+          { target_id: "11", path: "a.ts", line: 3, start_line: 1, body: "nit" },
+          { target_id: "12", path: "b.ts", line: 9, start_line: undefined, body: "rename" },
+        ],
+        pr: { owner: "o", repo: "r", prNumber: 7, pr_url: PR_URL },
+        reviewer_login: "a",
+        created_at: "2026-04-23T12:00:00Z",
+      },
+      targets: [inlineTarget(11, "a.ts", 3, 1), inlineTarget(12, "b.ts", 9), reviewBodyTarget],
+      prUrl: PR_URL,
     });
     await flushMicrotasks();
     // 👀 fires once per processed inline; review_body has no reactions API.
@@ -719,7 +771,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect((await post(body, "pull_request_review", sign(body))).status).toBe(200);
     await flushMicrotasks();
     expect(getReviewComments).toHaveBeenCalledTimes(2);
-    expect(enqueueReview).toHaveBeenCalledTimes(2);
+    expect(enqueueRound).toHaveBeenCalledTimes(2);
     expect(addReviewCommentReaction).toHaveBeenCalledTimes(2);
   });
 
@@ -738,7 +790,9 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "pull_request_review", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueReview).toHaveBeenCalledWith(expect.objectContaining({ task: apiTask }));
+    expect(enqueueRound).toHaveBeenCalledWith(
+      expect.objectContaining({ task: apiTask, kind: "review", externalId: "88" }),
+    );
   });
 
   it("enqueues only mentioning inline comments and blanks the review body for inline-only mentions", async () => {
@@ -773,33 +827,35 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "pull_request_review", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueReview).toHaveBeenCalledTimes(1);
-    expect(enqueueReview).toHaveBeenCalledWith({
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+    expect(enqueueRound).toHaveBeenCalledWith({
       task: linearTask,
-      reviewId: 88,
-      reviewBody: "",
-      inlineComments: [
-        {
-          id: 11,
-          path: "a.ts",
-          line: 3,
-          startLine: 1,
-          body: "@acme-bot fix this range",
-          user: { login: "reviewer" },
-        },
-        {
-          id: 13,
-          path: "c.ts",
-          line: 14,
-          body: "Can @ACME-BOT take this one?",
-          user: { login: "reviewer" },
-        },
-      ],
-      owner: "o",
-      repo: "r",
-      prNumber: 7,
-      reviewerLogin: "a",
-      createdAt: "2026-04-23T13:00:00Z",
+      kind: "review",
+      externalId: "88",
+      payload: {
+        review_body: { target_id: "88", body: "" },
+        inline_comments: [
+          {
+            target_id: "11",
+            path: "a.ts",
+            line: 3,
+            start_line: 1,
+            body: "@acme-bot fix this range",
+          },
+          {
+            target_id: "13",
+            path: "c.ts",
+            line: 14,
+            start_line: undefined,
+            body: "Can @ACME-BOT take this one?",
+          },
+        ],
+        pr: { owner: "o", repo: "r", prNumber: 7, pr_url: PR_URL },
+        reviewer_login: "a",
+        created_at: "2026-04-23T13:00:00Z",
+      },
+      targets: [inlineTarget(11, "a.ts", 3, 1), inlineTarget(13, "c.ts", 14), reviewBodyTarget],
+      prUrl: PR_URL,
     });
     await flushMicrotasks();
     expect(addReviewCommentReaction).toHaveBeenCalledTimes(2);
@@ -816,8 +872,8 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "pull_request", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueComment).not.toHaveBeenCalled();
-    expect(enqueueReview).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   const workflowRunBody = (
@@ -848,28 +904,40 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = workflowRunBody();
     const missing = await post(body, "workflow_run");
     expect(missing.status).toBe(401);
-    expect(enqueueCiResult).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
 
     const bad = await post(body, "workflow_run", sign(body, "bad-secret"));
     expect(bad.status).toBe(401);
-    expect(enqueueCiResult).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("enqueues ci_result for a failed workflow_run on a known PR", async () => {
     const body = workflowRunBody();
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueCiResult).toHaveBeenCalledTimes(1);
-    expect(enqueueCiResult.mock.calls[0]?.[0]).toMatchObject({
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+    expect(enqueueRound).toHaveBeenCalledWith({
       task: linearTask,
-      runId: 123456789,
-      runAttempt: 1,
-      conclusion: "failure",
-      workflowName: "CI",
-      workflowPath: ".github/workflows/ci.yml",
-      owner: "o",
-      repo: "r",
-      prNumber: 42,
+      kind: "ci_result",
+      externalId: "workflow_run:123456789:1:42",
+      payload: {
+        target_id: "123456789",
+        workflow_name: "CI",
+        workflow_path: ".github/workflows/ci.yml",
+        conclusion: "failure",
+        run_url: "https://github.com/o/r/actions/runs/123456789",
+        head_sha: "abc123",
+        head_branch: "devbox/XYZ-1234-fix",
+        pr: { repo: "r", pr_url: "https://github.com/o/r/pull/42" },
+      },
+      targets: [
+        {
+          id: "123456789",
+          spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 42, commentId: 0 },
+        },
+      ],
+      prUrl: "https://github.com/o/r/pull/42",
+      // The loop breaker's cap, GITHUB_CI_RESULT_MAX_PER_TASK.
       limit: 20,
     });
   });
@@ -879,7 +947,9 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = workflowRunBody();
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueCiResult).toHaveBeenCalledWith(expect.objectContaining({ task: apiTask }));
+    expect(enqueueRound).toHaveBeenCalledWith(
+      expect.objectContaining({ task: apiTask, kind: "ci_result", limit: 20 }),
+    );
   });
 
   it("enqueues ci_result for a bot-triggered workflow_run (sender is the bot)", async () => {
@@ -889,14 +959,14 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = workflowRunBody("failure", [42], 7, "acme-bot[bot]");
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueCiResult).toHaveBeenCalledTimes(1);
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
   });
 
   it("ignores workflow_run with success conclusion", async () => {
     const body = workflowRunBody("success");
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueCiResult).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("ignores workflow_run with non-completed action", async () => {
@@ -918,7 +988,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueCiResult).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("ignores workflow_run on a PR not tracked by harness", async () => {
@@ -926,14 +996,14 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = workflowRunBody();
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueCiResult).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("rejects workflow_run from untrusted sender with 403", async () => {
     const body = workflowRunBody("success", [42], 99);
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(403);
-    expect(enqueueCiResult).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   it("enqueues ci_result for each matched PR when workflow_run has multiple pull_requests", async () => {
@@ -948,9 +1018,17 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = workflowRunBody("failure", [42, 43]);
     const res = await post(body, "workflow_run", sign(body));
     expect(res.status).toBe(200);
-    expect(enqueueCiResult).toHaveBeenCalledTimes(2);
-    expect(enqueueCiResult.mock.calls[0]?.[0]).toMatchObject({ prNumber: 42 });
-    expect(enqueueCiResult.mock.calls[1]?.[0]).toMatchObject({ prNumber: 43 });
+    expect(enqueueRound).toHaveBeenCalledTimes(2);
+    expect(enqueueRound.mock.calls[0]?.[0]).toMatchObject({
+      task: { id: "task-1" },
+      externalId: "workflow_run:123456789:1:42",
+      prUrl: "https://github.com/o/r/pull/42",
+    });
+    expect(enqueueRound.mock.calls[1]?.[0]).toMatchObject({
+      task: { id: "task-2" },
+      externalId: "workflow_run:123456789:1:43",
+      prUrl: "https://github.com/o/r/pull/43",
+    });
   });
 
   it("ignores workflow_run when ciResultEnabled flag is off", async () => {
@@ -962,19 +1040,15 @@ describe("GitHubWebhookController.handleWebhook", () => {
         github: { ciResultEnabled: false },
       },
     }));
-    const flagOffEnqueueCiResult = mock(() => Promise.resolve());
+    const flagOffEnqueueRound = mock(() => Promise.resolve({ roundId: "round-1" }));
     const flagOffFindByPrUrl = mock(() => Promise.resolve(linearTask));
-    const flagOffService = {
-      enqueueComment: mock(() => Promise.resolve()),
-      enqueueReview: mock(() => Promise.resolve()),
-      enqueueCiResult: flagOffEnqueueCiResult,
-    } as unknown as InboxService;
-    const flagOffIntake = { findTaskByPrUrl: flagOffFindByPrUrl } as unknown as TaskService;
+    const flagOffTasks = {
+      findTaskByPrUrl: flagOffFindByPrUrl,
+      enqueueRound: flagOffEnqueueRound,
+    } as unknown as TaskService;
     fetchOrgMembers.mockResolvedValue(new Set([1, 2, 3]) as ReadonlySet<number>);
     const flagOffApp = new Hono();
-    flagOffApp.post("/webhook/github", (c) =>
-      new Ctrl(flagOffService, flagOffIntake, SETTINGS).handleWebhook(c),
-    );
+    flagOffApp.post("/webhook/github", (c) => new Ctrl(flagOffTasks, SETTINGS).handleWebhook(c));
 
     const body = workflowRunBody();
     const res = await flagOffApp.request("/webhook/github", {
@@ -983,7 +1057,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       body,
     });
     expect(res.status).toBe(200);
-    expect(flagOffEnqueueCiResult).not.toHaveBeenCalled();
+    expect(flagOffEnqueueRound).not.toHaveBeenCalled();
 
     // Restore flag for remaining tests.
     mock.module("../../config", () => ({
@@ -1015,11 +1089,11 @@ describe("GitHubWebhookController.handleWebhook", () => {
 
     const first = await post(body, "issue_comment", sig);
     expect(first.status).toBe(503);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
 
     const second = await post(body, "issue_comment", sig);
     expect(second.status).toBe(200);
-    expect(enqueueComment).toHaveBeenCalledTimes(1);
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
     expect(fetchOrgMembers).toHaveBeenCalledTimes(2);
   });
 
@@ -1030,7 +1104,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     const body = commentBody("alice");
     const res = await post(body, "issue_comment", sign(body));
     expect(res.status).toBe(503);
-    expect(enqueueComment).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
   });
 
   describe("lastWebhookAt and rejection logs", () => {
@@ -1111,7 +1185,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       const info = spyOn(logger, "info").mockImplementation(() => logger);
       const body = asApp("other-app[bot]", 4242);
       expect((await postWithDelivery(body, "issue_comment", sign(body))).status).toBe(403);
-      expect(enqueueComment).not.toHaveBeenCalled();
+      expect(enqueueRound).not.toHaveBeenCalled();
       expect(info.mock.calls).toEqual([
         [
           "github_webhook.rejected",
@@ -1132,15 +1206,9 @@ describe("GitHubWebhookController.handleWebhook", () => {
 
   describe("actor trust", () => {
     const rebuild = (settings: Partial<typeof SETTINGS>) => {
-      const inboxService = {
-        enqueueComment,
-        enqueueReview,
-        enqueueCiResult,
-      } as unknown as InboxService;
-      const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskService;
+      const tasks = { findTaskByPrUrl: findByPrUrl, enqueueRound } as unknown as TaskService;
       controller = new GitHubWebhookController(
-        inboxService,
-        intake,
+        tasks,
         { ...SETTINGS, ...settings },
         () => clock.now,
       );
@@ -1165,11 +1233,11 @@ describe("GitHubWebhookController.handleWebhook", () => {
 
       const trusted = asUser("carol", 50);
       expect((await post(trusted, "issue_comment", sign(trusted))).status).toBe(200);
-      expect(enqueueComment).toHaveBeenCalledTimes(1);
+      expect(enqueueRound).toHaveBeenCalledTimes(1);
 
       const stranger = asUser("mallory", 999);
       expect((await post(stranger, "issue_comment", sign(stranger))).status).toBe(403);
-      expect(enqueueComment).toHaveBeenCalledTimes(1);
+      expect(enqueueRound).toHaveBeenCalledTimes(1);
       expect(fetchOrgMembers).not.toHaveBeenCalled();
     });
 
@@ -1179,7 +1247,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       // Someone who took the login "carol" later has a different id.
       const impostor = asUser("carol", 51);
       expect((await post(impostor, "issue_comment", sign(impostor))).status).toBe(403);
-      expect(enqueueComment).not.toHaveBeenCalled();
+      expect(enqueueRound).not.toHaveBeenCalled();
     });
 
     it("accepts a member of any trusted org", async () => {
@@ -1189,7 +1257,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       const body = asUser("dave", 77);
       expect((await post(body, "issue_comment", sign(body))).status).toBe(200);
       expect(fetchOrgMembers).toHaveBeenCalledTimes(2);
-      expect(enqueueComment).toHaveBeenCalledTimes(1);
+      expect(enqueueRound).toHaveBeenCalledTimes(1);
     });
 
     it("skips an unresolvable trusted user and still trusts the orgs", async () => {
@@ -1236,7 +1304,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       getUserIdByLogin.mockResolvedValue(50);
       const body = workflowRunBody("failure", [42], 7, "acme-bot[bot]");
       expect((await post(body, "workflow_run", sign(body))).status).toBe(200);
-      expect(enqueueCiResult).toHaveBeenCalledTimes(1);
+      expect(enqueueRound).toHaveBeenCalledTimes(1);
     });
   });
 });

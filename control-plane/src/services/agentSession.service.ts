@@ -1,9 +1,9 @@
 import { emitAction, emitResponse, requireLinearTicketId } from "../clients/linear";
+import type { Task } from "../db/schema";
 import { logger } from "../logger";
 import type { ReplyTarget } from "../repositories/inbox.repository";
 import type { HandleAgentSessionResult, ParsedAgentSessionEvent } from "../types/agentSession";
 import { parseExperimentalFlags } from "./experimentalFlags";
-import type { InboxService } from "./inbox.service";
 import type { LinearTokenProvider } from "./linearTokenProvider";
 import type { TaskService } from "./task.service";
 
@@ -16,18 +16,15 @@ const RESTARTED_BODY = [
 const STOP_NOT_SUPPORTED_BODY = "Stop is not supported yet — work will continue.";
 
 export class AgentSessionService {
-  private readonly tasks: Pick<TaskService, "assign" | "findTask">;
+  private readonly tasks: Pick<TaskService, "assign" | "findTask" | "enqueueRound">;
   private readonly linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
-  private readonly inboxService: InboxService;
 
   constructor(
-    tasks: Pick<TaskService, "assign" | "findTask">,
+    tasks: Pick<TaskService, "assign" | "findTask" | "enqueueRound">,
     linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
-    inboxService: InboxService,
   ) {
     this.tasks = tasks;
     this.linearTokenProvider = linearTokenProvider;
-    this.inboxService = inboxService;
   }
 
   async handleEvent(event: ParsedAgentSessionEvent): Promise<HandleAgentSessionResult> {
@@ -94,7 +91,7 @@ export class AgentSessionService {
         // remains the one from `created` until the next re-delegation.
         // The sweep handles sandbox recreate-from-PVC; a pruned workspace
         // surfaces a PVC-missing error.
-        await this.inboxService.enqueueLinearComment({
+        await this.enqueueLinearComment({
           task,
           agentActivityId: event.activityId,
           agentSessionId: event.agentSessionId,
@@ -122,6 +119,35 @@ export class AgentSessionService {
         throw new Error(`unhandled agent session action: ${(event as { action: string }).action}`);
       }
     }
+  }
+
+  // Linear `prompted` — a follow-up comment on the agent session. Same inbox
+  // path as a GitHub comment; the single reply target routes to the Linear
+  // session. Idempotent on the Linear activity UUID — a duplicate redelivery
+  // is dropped.
+  private async enqueueLinearComment(params: {
+    task: Pick<Task, "id" | "key">;
+    agentActivityId: string;
+    agentSessionId: string;
+    body: string;
+  }): Promise<void> {
+    await this.tasks.enqueueRound({
+      task: params.task,
+      kind: "comment",
+      // Linear activity UUID — drives idempotency at (source, kind, external_id).
+      externalId: params.agentActivityId,
+      payload: {
+        // Replies route to the Linear agent session — matches reply_targets[0].id.
+        target_id: params.agentSessionId,
+        body: params.body,
+        // Linear comment isn't PR-scoped — lives on the agent session.
+        pr: null,
+        // Linear-sourced → the daemon never injects PR discussion (gated on
+        // source == "github"), so there is no comment timestamp to scope by.
+        created_at: "",
+      },
+      targets: [{ id: params.agentSessionId, spec: { kind: "linear_session" } }],
+    });
   }
 
   // Voids the whole chain (including auth fetch) so the webhook handler never

@@ -3,7 +3,6 @@ import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import type { ReplyTarget } from "../../repositories/inbox.repository";
 import type { AgentSessionCreated, AgentSessionPrompted } from "../../types/agentSession";
-import type { InboxService } from "../inbox.service";
 import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { TaskRef, TaskService } from "../task.service";
 
@@ -64,10 +63,9 @@ const foundTask = {
 describe("AgentSessionService", () => {
   let tasks: TaskService;
   let linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
-  let inboxService: InboxService;
   let assign: ReturnType<typeof mock>;
   let findTask: ReturnType<typeof mock>;
-  let enqueueLinearComment: ReturnType<typeof mock>;
+  let enqueueRound: ReturnType<typeof mock>;
   let getAuthorizedLinearClient: ReturnType<typeof mock>;
   let service: InstanceType<typeof AgentSessionService>;
 
@@ -90,7 +88,8 @@ describe("AgentSessionService", () => {
 
     assign = mock(() => Promise.resolve({ taskId: "task-1", key: "ISS-1", result: "created" }));
     findTask = mock(() => Promise.resolve(foundTask));
-    tasks = { assign, findTask } as unknown as TaskService;
+    enqueueRound = mock(() => Promise.resolve({ roundId: "round-1" }));
+    tasks = { assign, findTask, enqueueRound } as unknown as TaskService;
 
     getAuthorizedLinearClient = mock(() => Promise.resolve({} as unknown as LinearClient));
     linearTokenProvider = { getAuthorizedLinearClient } as unknown as Pick<
@@ -98,10 +97,7 @@ describe("AgentSessionService", () => {
       "getAuthorizedLinearClient"
     >;
 
-    enqueueLinearComment = mock(() => Promise.resolve());
-    inboxService = { enqueueLinearComment } as unknown as InboxService;
-
-    service = new AgentSessionService(tasks, linearTokenProvider, inboxService);
+    service = new AgentSessionService(tasks, linearTokenProvider);
   });
 
   describe("handleEvent created", () => {
@@ -197,11 +193,12 @@ describe("AgentSessionService", () => {
 
       expect(result).toEqual({ status: "ok" });
       expect(findTask).toHaveBeenCalledWith("issue-1");
-      expect(enqueueLinearComment).toHaveBeenCalledWith({
+      expect(enqueueRound).toHaveBeenCalledWith({
         task: foundTask,
-        agentActivityId: "activity-1",
-        agentSessionId: "sess-1",
-        body: "follow-up question",
+        kind: "comment",
+        externalId: "activity-1",
+        payload: { target_id: "sess-1", body: "follow-up question", pr: null, created_at: "" },
+        targets: [{ id: "sess-1", spec: { kind: "linear_session" } }],
       });
 
       await flushMicrotasks();
@@ -214,9 +211,53 @@ describe("AgentSessionService", () => {
       await service.handleEvent(promptedEvent());
       await service.handleEvent(promptedEvent());
       await flushMicrotasks();
-      expect(enqueueLinearComment).toHaveBeenCalledTimes(2);
-      expect(enqueueLinearComment.mock.calls[1]).toEqual(enqueueLinearComment.mock.calls[0]);
+      expect(enqueueRound).toHaveBeenCalledTimes(2);
+      expect(enqueueRound.mock.calls[1]).toEqual(enqueueRound.mock.calls[0]);
       expect(emitAction).toHaveBeenCalledTimes(2);
+    });
+
+    // The comment round, queued through Linear's TaskService, which stamps the
+    // source and the task identity.
+    it("activity UUID is the external_id; agent session id is the reply target + payload target_id", async () => {
+      await service.handleEvent({
+        ...promptedEvent(),
+        activityId: "act-1",
+        activityBody: "any update?",
+      });
+
+      const arg = enqueueRound.mock.calls[0]?.[0] as {
+        task: { id: string; key: string };
+        externalId: string;
+        payload: { target_id: string };
+        targets: Array<{ id: string; spec: { kind: string } }>;
+      };
+      expect(arg.externalId).toBe("act-1");
+      expect(arg.task).toMatchObject({ id: "task-1", key: "XYZ-1" });
+      // Replies route to the session, not the activity.
+      expect(arg.payload.target_id).toBe("sess-1");
+      expect(arg.targets[0]?.id).toBe("sess-1");
+      expect(arg.targets[0]?.spec.kind).toBe("linear_session");
+    });
+
+    it("hands enqueueRound the task row", async () => {
+      await service.handleEvent({
+        ...promptedEvent(),
+        agentSessionId: "sess-2",
+        activityId: "act-1",
+        activityBody: "follow-up",
+      });
+      expect(enqueueRound).toHaveBeenCalledWith({
+        task: foundTask,
+        kind: "comment",
+        externalId: "act-1",
+        payload: {
+          target_id: "sess-2",
+          body: "follow-up",
+          pr: null,
+          created_at: "",
+        },
+        targets: [{ id: "sess-2", spec: { kind: "linear_session" } }],
+      });
     });
 
     it("fires the Evaluating ack even when the task is not yet known (session_not_found)", async () => {
@@ -225,7 +266,7 @@ describe("AgentSessionService", () => {
       const result = await service.handleEvent(promptedEvent());
 
       expect(result).toEqual({ status: "session_not_found" });
-      expect(enqueueLinearComment).not.toHaveBeenCalled();
+      expect(enqueueRound).not.toHaveBeenCalled();
       await flushMicrotasks();
       expect(emitAction).toHaveBeenCalledWith(expect.anything(), "sess-1", "Evaluating", "");
     });

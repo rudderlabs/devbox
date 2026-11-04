@@ -24,6 +24,9 @@ const { TaskEventRepository } = await import("../repositories/taskEvent.reposito
 const { BoundTaskService } = await import("../services/task.service");
 const { InboxService } = await import("../services/inbox.service");
 const { AgentSessionService } = await import("../services/agentSession.service");
+const { enqueueCiResult, enqueueComment, enqueueReview } = await import(
+  "../integrations/github/rounds"
+);
 const { ApiTaskService } = await import("../services/apiTask.service");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
@@ -71,14 +74,12 @@ describe("harness contract", () => {
       new BoundTaskService(source, taskRepo, inboxRepo, sandboxManager, { detach: () => {} });
     const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
     // The sweep never reaches the integrations or hooks.
-    const inbox = new InboxService(inboxRepo, sandboxManager, {} as never, {} as never, tasks);
+    const inbox = new InboxService(inboxRepo, sandboxManager, {} as never, {} as never);
     // The webhook acks are fire-and-forget; a client that never arrives keeps
     // them from running.
-    const linear = new AgentSessionService(
-      tasks.linear,
-      { getAuthorizedLinearClient: () => new Promise(() => {}) },
-      inbox,
-    );
+    const linear = new AgentSessionService(tasks.linear, {
+      getAuthorizedLinearClient: () => new Promise(() => {}),
+    });
     const api = new ApiTaskService(new ApiTaskRepository(), tasks.api, new TaskEventRepository(), {
       publicBaseUrl: "https://devbox.example",
       taskKeyPrefix: "DBX-API-",
@@ -127,14 +128,14 @@ describe("harness contract", () => {
       sql`SELECT id, key FROM tasks WHERE source = 'linear'`,
     );
     const task = linearTask as { id: string; key: string };
-    await inbox.enqueueComment({
+    await enqueueComment(tasks.github, {
       task,
       commentId: 101,
       body: "@devbox rename the helper",
       spec: { kind: "issue_comment", ...PR, commentId: 101 },
       createdAt: "2026-01-02T04:00:00Z",
     });
-    await inbox.enqueueReview({
+    await enqueueReview(tasks.github, {
       task,
       reviewId: 201,
       reviewBody: "A few things to fix",
@@ -146,7 +147,7 @@ describe("harness contract", () => {
       reviewerLogin: "reviewer",
       createdAt: "2026-01-02T05:00:00Z",
     });
-    await inbox.enqueueCiResult({
+    await enqueueCiResult(tasks.github, {
       task,
       runId: 401,
       runAttempt: 2,
