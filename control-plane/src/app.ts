@@ -74,7 +74,13 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     detach: (...args) => hooks.detach(...args),
   };
   const taskService = (def: IntegrationDefinition) =>
-    new BoundTaskService(def.name, taskRepository, inboxRepository, sandboxManager, detach);
+    new BoundTaskService(def.name, {
+      createsTasks: def.createsTasks,
+      taskRepo: taskRepository,
+      inboxRepo: inboxRepository,
+      sandboxManager,
+      hooks: detach,
+    });
   // Sends held because they failed before anything went out; each
   // integration's status reports its own.
   const replyHolds = new ReplyHolds();

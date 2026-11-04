@@ -43,13 +43,13 @@ describe("ApiTaskService", () => {
     );
     principal.tokenId = (tok as { id: string }).id;
     killSandbox = mock(() => Promise.resolve());
-    const tasks = new BoundTaskService(
-      "api",
-      new TaskRepository(),
-      new InboxRepository(),
-      { killSandbox },
-      { detach: () => {} },
-    );
+    const tasks = new BoundTaskService("api", {
+      createsTasks: true,
+      taskRepo: new TaskRepository(),
+      inboxRepo: new InboxRepository(),
+      sandboxManager: { killSandbox },
+      hooks: { detach: () => {} },
+    });
     service = new ApiTaskService(new ApiTaskRepository(), tasks, new TaskEventRepository(), {
       publicBaseUrl: "https://api.example",
       taskKeyPrefix: "DBX-API-",

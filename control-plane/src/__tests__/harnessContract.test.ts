@@ -71,7 +71,13 @@ describe("harness contract", () => {
     const taskRepo = new TaskRepository();
     const inboxRepo = new InboxRepository();
     const bound = (source: "linear" | "github" | "api") =>
-      new BoundTaskService(source, taskRepo, inboxRepo, sandboxManager, { detach: () => {} });
+      new BoundTaskService(source, {
+        createsTasks: source !== "github",
+        taskRepo,
+        inboxRepo,
+        sandboxManager,
+        hooks: { detach: () => {} },
+      });
     const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
     // The sweep never reaches the integrations or hooks.
     const inbox = new InboxService(inboxRepo, sandboxManager, {} as never, {} as never);

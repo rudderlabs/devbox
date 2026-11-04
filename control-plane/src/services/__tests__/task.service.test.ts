@@ -97,13 +97,13 @@ describe("TaskService", () => {
     killSandbox = mock(() => Promise.resolve());
     detach = mock(() => {});
     const bound = (source: "linear" | "github" | "api") =>
-      new BoundTaskService(
-        source,
-        new TaskRepository(),
-        new InboxRepository(),
-        { killSandbox },
-        { detach },
-      );
+      new BoundTaskService(source, {
+        createsTasks: source !== "github",
+        taskRepo: new TaskRepository(),
+        inboxRepo: new InboxRepository(),
+        sandboxManager: { killSandbox },
+        hooks: { detach },
+      });
     linear = bound("linear");
     github = bound("github");
     api = bound("api");
@@ -319,6 +319,24 @@ describe("TaskService", () => {
       expect(killSandbox).toHaveBeenCalledWith("sb-old");
     });
 
+    it("only a source that creates tasks may assign", async () => {
+      await expect(
+        github.assign({
+          externalId: "pr-1",
+          key: { hint: "PR-1" },
+          title: "t",
+          description: null,
+          flags: [],
+          url: () => "https://github.com/o/r/pull/1",
+          target: () => ({
+            id: "1",
+            spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 1 },
+          }),
+        }),
+      ).rejects.toThrow("assign: github creates no tasks");
+      expect(await db.execute(sql`SELECT 1 FROM tasks`)).toHaveLength(0);
+    });
+
     it("rejects a target of another integration, and a hint without an external id", async () => {
       await expect(assignLinear({ id: "t", spec: { kind: "api_session" } })).rejects.toThrow(
         "a linear round can't carry a api_session reply target",
@@ -499,6 +517,19 @@ describe("TaskService", () => {
 
   describe("restart", () => {
     const def = (target: ReplyTarget) => ({ title: "T2", description: null, flags: [], target });
+
+    it("only a source that creates tasks may restart", async () => {
+      const task = await insertTask({ source: "linear", externalId: "issue-1", key: "ISS-1" });
+      const target = {
+        id: "1",
+        spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 1 },
+      } as const;
+      await expect(github.restart(task.id, def(target))).rejects.toThrow(
+        "restart: github creates no tasks",
+      );
+      const [row] = await db.execute(sql`SELECT title FROM tasks`);
+      expect(row).toEqual({ title: "t" });
+    });
 
     it("refuses another source's task", async () => {
       const task = await insertTask({ source: "linear", externalId: "issue-1", key: "ISS-1" });

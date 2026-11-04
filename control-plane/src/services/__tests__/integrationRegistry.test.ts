@@ -39,8 +39,12 @@ const definition = (
   };
 };
 const bound = (def: IntegrationDefinition) =>
-  new BoundTaskService(def.name, {} as TaskRepository, {} as InboxRepository, {} as never, {
-    detach: () => {},
+  new BoundTaskService(def.name, {
+    createsTasks: def.createsTasks,
+    taskRepo: {} as TaskRepository,
+    inboxRepo: {} as InboxRepository,
+    sandboxManager: {} as never,
+    hooks: { detach: () => {} },
   });
 const registry = (
   defs: IntegrationDefinition[],

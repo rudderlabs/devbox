@@ -40,7 +40,9 @@ export interface IntegrationDefinition<C = unknown> {
   // GET /api/integrations/<name>. Stored in tasks.source and inbox.source, so
   // never renamed.
   name: string;
-  // Its tasks are claimed and reconciled, even while it is off.
+  // Whether it creates tasks. Only then may it assign and restart tasks
+  // through its TaskService, and its tasks are claimed and reconciled, even
+  // while it is off.
   createsTasks: boolean;
   // Its settings, or undefined when it is off. Throws on a bad value, which
   // fails boot before migrations run.

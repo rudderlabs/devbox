@@ -89,15 +89,21 @@ const TARGET_OWNER: Record<ReplyTargetSpec["kind"], IntegrationName> = {
 export class BoundTaskService implements TaskService {
   constructor(
     readonly source: string,
-    private taskRepo: TaskRepository,
-    private inboxRepo: InboxRepository,
-    private sandboxManager: Pick<SandboxManager, "killSandbox">,
-    private hooks: Pick<IntegrationHooks, "detach">,
+    private readonly deps: {
+      // Whether this source creates tasks (its definition's createsTasks):
+      // only then may it assign and restart them.
+      createsTasks: boolean;
+      taskRepo: TaskRepository;
+      inboxRepo: InboxRepository;
+      sandboxManager: Pick<SandboxManager, "killSandbox">;
+      hooks: Pick<IntegrationHooks, "detach">;
+    },
   ) {}
 
   async assign(p: Parameters<TaskService["assign"]>[0]): ReturnType<TaskService["assign"]> {
+    this.requireCreatesTasks("assign");
     if ("hint" in p.key && !p.externalId) throw new Error("assign: a hint key needs externalId");
-    const { prevSandboxId, prevTargetId, ...t } = await this.taskRepo.assign({
+    const { prevSandboxId, prevTargetId, ...t } = await this.deps.taskRepo.assign({
       ...p,
       // The task_source enum lists only the sources that create tasks.
       source: this.source as TaskSource,
@@ -125,13 +131,14 @@ export class BoundTaskService implements TaskService {
     taskId: string,
     def: Parameters<TaskService["restart"]>[1],
   ): ReturnType<TaskService["restart"]> {
+    this.requireCreatesTasks("restart");
     checkTargets(this.source, [def.target]);
-    const task = await this.taskRepo.getById(taskId);
+    const task = await this.deps.taskRepo.getById(taskId);
     if (!task) throw new Error(`restart: task ${taskId} not found`);
     if (task.source !== this.source) {
       throw new Error(`restart: task ${taskId} is not from ${this.source}`);
     }
-    const { prevSandboxId } = await this.taskRepo.restartTaskWithInbox({
+    const { prevSandboxId } = await this.deps.taskRepo.restartTaskWithInbox({
       taskId,
       inboxPayload: {
         title: def.title,
@@ -154,7 +161,7 @@ export class BoundTaskService implements TaskService {
       throw new Error("enqueueRound: payload.target_id must equal targets[0].id");
     }
     checkTargets(this.source, targets);
-    return this.inboxRepo.appendFollowUp({
+    return this.deps.inboxRepo.appendFollowUp({
       taskId: task.id,
       message: {
         source: this.source,
@@ -169,21 +176,25 @@ export class BoundTaskService implements TaskService {
   }
 
   findTask(externalId: string): Promise<Task | null> {
-    return this.taskRepo.findByExternalId(this.source as TaskSource, externalId);
+    return this.deps.taskRepo.findByExternalId(this.source as TaskSource, externalId);
   }
 
   findTaskByPrUrl(prUrl: string): Promise<Task | null> {
-    return this.taskRepo.findByPrUrl(prUrl);
+    return this.deps.taskRepo.findByPrUrl(prUrl);
+  }
+
+  private requireCreatesTasks(op: string): void {
+    if (!this.deps.createsTasks) throw new Error(`${op}: ${this.source} creates no tasks`);
   }
 
   // A restart's preempted sandbox, killed after commit in the tracked detached
   // set so shutdown drains it. The old workspace volume is kept (a known leak).
   private killPreempted(taskId: string, sandboxId: string | null, why: string): void {
     if (!sandboxId) return;
-    this.hooks.detach(
+    this.deps.hooks.detach(
       taskId,
       "killSandbox",
-      this.sandboxManager.killSandbox(sandboxId).catch((err) => {
+      this.deps.sandboxManager.killSandbox(sandboxId).catch((err) => {
         const e = err instanceof Error ? err : new Error(String(err));
         logger.error(`killSandbox(${why}) failed`, {
           taskId,
