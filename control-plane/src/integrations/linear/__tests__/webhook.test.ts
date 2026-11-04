@@ -1,22 +1,18 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Hono } from "hono";
-import type {
-  AgentSessionCreated,
-  AgentSessionPrompted,
-  HandleAgentSessionResult,
-} from "../../types/agentSession";
+import type { AgentSessionCreated, AgentSessionPrompted, HandleAgentSessionResult } from "../types";
 
 const WEBHOOK_SECRET = "test-webhook-secret";
 
-mock.module("../../config", () => ({
+mock.module("../../../config", () => ({
   config: {
     linear: { webhookSecret: WEBHOOK_SECRET },
   },
 }));
 
-const { LinearWebhookController } = await import("../linearWebhook.controller");
-const { logger } = await import("../../logger");
+const { LinearWebhookController } = await import("../webhook");
+const { logger } = await import("../../../logger");
 
 type AgentSessionServiceLike = {
   handleEvent: (

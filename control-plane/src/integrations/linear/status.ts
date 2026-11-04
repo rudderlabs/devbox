@@ -1,5 +1,5 @@
-import type { logger } from "../logger";
-import type { LinearTokenProvider } from "./linearTokenProvider";
+import type { logger } from "../../logger";
+import type { LinearTokenProvider } from "./tokenProvider";
 
 export type LinearStatus =
   | { configured: false }

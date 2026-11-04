@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Hono } from "hono";
-import type { Task } from "../../db/schema";
-import { logger } from "../../logger";
-import type { TaskService } from "../../services/task.service";
+import type { Task } from "../../../db/schema";
+import { logger } from "../../../logger";
+import type { TaskService } from "../../../services/task.service";
 
 const WEBHOOK_SECRET = "gh-test-secret";
 
-mock.module("../../config", () => ({
+mock.module("../../../config", () => ({
   config: {
     podId: "pod-test",
     github: { ciResultEnabled: true, ciResultMaxPerTask: 20 },
@@ -32,7 +32,7 @@ const addReviewCommentReaction = mock(() => Promise.resolve());
 // in CI this mock reached github.test.ts and failed 25 of its tests. The suite
 // now runs with --isolate (package.json "test"), which gives every file a fresh
 // module registry, so this cannot leak. Do not drop that flag.
-mock.module("../../clients/github", () => ({
+mock.module("../../../clients/github", () => ({
   getReviewComments,
   fetchOrgMembers,
   getUserIdByLogin,
@@ -52,7 +52,7 @@ const {
   GitHubWebhookController,
   mentionRegex,
   parseGithubEvent: parseWithMention,
-} = await import("../githubWebhook.controller");
+} = await import("../webhook");
 
 const parseGithubEvent = (eventHeader: string | undefined, payload: unknown) =>
   parseWithMention(eventHeader, payload, mentionRegex(SETTINGS.botLogin));
@@ -1032,8 +1032,8 @@ describe("GitHubWebhookController.handleWebhook", () => {
 
   it("ignores workflow_run when ciResultEnabled flag is off", async () => {
     // Rebuild the app with the feature flag disabled.
-    const { GitHubWebhookController: Ctrl } = await import("../githubWebhook.controller");
-    mock.module("../../config", () => ({
+    const { GitHubWebhookController: Ctrl } = await import("../webhook");
+    mock.module("../../../config", () => ({
       config: {
         podId: "pod-test",
         github: { ciResultEnabled: false },
@@ -1059,7 +1059,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(flagOffEnqueueRound).not.toHaveBeenCalled();
 
     // Restore flag for remaining tests.
-    mock.module("../../config", () => ({
+    mock.module("../../../config", () => ({
       config: {
         podId: "pod-test",
         github: { ciResultEnabled: true, ciResultMaxPerTask: 20 },

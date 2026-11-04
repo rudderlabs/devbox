@@ -13,7 +13,7 @@ const { LinearIntegration } = await import("../linear");
 const { LinearTokenError, requestClientCredentialsToken } = await import(
   "../../clients/linearOauth"
 );
-const { LinearTokenProvider } = await import("../../services/linearTokenProvider");
+const { LinearTokenProvider } = await import("../linear/tokenProvider");
 // A fresh instance (see github.test.ts): never the possibly-mocked barrel.
 const { postIssueComment } = (await import(
   "../../clients/githubApi.ts" + "?http-test"

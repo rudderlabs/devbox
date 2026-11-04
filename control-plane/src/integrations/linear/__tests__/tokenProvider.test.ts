@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import type { ClientCredentialsToken, LinearCredentials } from "../../clients/linearOauth";
+import type { ClientCredentialsToken, LinearCredentials } from "../../../clients/linearOauth";
 
-const { LinearTokenError } = await import("../../clients/linearOauth");
-const { LinearTokenProvider } = await import("../linearTokenProvider");
+const { LinearTokenError } = await import("../../../clients/linearOauth");
+const { LinearTokenProvider } = await import("../tokenProvider");
 
 const CREDS: LinearCredentials = { clientId: "id", clientSecret: "s" };
 const NOW = 1_760_000_000_000;

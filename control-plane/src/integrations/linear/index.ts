@@ -12,15 +12,15 @@ import {
   uploadIssueAttachment,
 } from "../../clients/linear";
 import { LinearTokenError } from "../../clients/linearOauth";
-import type { LinearWebhookController } from "../../controllers/linearWebhook.controller";
 import type { Task } from "../../db/schema";
 import type { InboxRow, ReplyTarget } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
-import type { LinearStatus, LinearStatusService } from "../../services/linearStatus.service";
-import type { LinearTokenProvider } from "../../services/linearTokenProvider";
 import { rateLimitWaitMs, retryable } from "../http";
 import { type Outbound, RetryableError, type SendCtx } from "../outbound";
 import type { HookCtx, Integration, Person, PrRef } from "../types";
+import type { LinearStatus, LinearStatusService } from "./status";
+import type { LinearTokenProvider } from "./tokenProvider";
+import type { LinearWebhookController } from "./webhook";
 
 // Linear rounds post to the agent session. target.id IS the agent session id
 // by construction (the enqueue paths stamp the live session id). The session

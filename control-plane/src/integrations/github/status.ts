@@ -1,4 +1,4 @@
-import type { GithubTokenState } from "../clients/githubToken";
+import type { GithubTokenState } from "../../clients/githubToken";
 
 export type GithubStatus = {
   token: GithubTokenState;

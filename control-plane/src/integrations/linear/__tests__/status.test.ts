@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import type { ClientCredentialsToken } from "../../clients/linearOauth";
-import { LinearStatusService } from "../linearStatus.service";
-import { LinearTokenProvider } from "../linearTokenProvider";
+import type { ClientCredentialsToken } from "../../../clients/linearOauth";
+import { LinearStatusService } from "../status";
+import { LinearTokenProvider } from "../tokenProvider";
 
 const IDENTITY = {
   viewer: { id: "app-1", name: "Devbox" },

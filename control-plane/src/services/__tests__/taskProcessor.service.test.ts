@@ -5,13 +5,13 @@ import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../../errors";
 import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { Integration, IntegrationName } from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
 import type { EventDispatcher } from "../eventDispatcher";
 import type { InboxService } from "../inbox.service";
-import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
 import type { SlackNotifierService } from "../slackNotifier.service";
 

@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { LinearClient } from "@linear/sdk";
-import type { Task } from "../../db/schema";
-import type { ReplyTarget } from "../../repositories/inbox.repository";
-import type { AgentSessionCreated, AgentSessionPrompted } from "../../types/agentSession";
-import type { LinearTokenProvider } from "../linearTokenProvider";
-import type { TaskRef, TaskService } from "../task.service";
+import type { Task } from "../../../db/schema";
+import type { ReplyTarget } from "../../../repositories/inbox.repository";
+import type { TaskRef, TaskService } from "../../../services/task.service";
+import type { LinearTokenProvider } from "../tokenProvider";
+import type { AgentSessionCreated, AgentSessionPrompted } from "../types";
 
 const emitResponse = mock(() => Promise.resolve());
 const emitAction = mock(() => Promise.resolve());
 
-mock.module("../../clients/linear", () => ({
+mock.module("../../../clients/linear", () => ({
   emitResponse,
   emitAction,
   emitThought: mock(() => Promise.resolve()),
@@ -31,7 +31,7 @@ mock.module("../../clients/linear", () => ({
   },
 }));
 
-const { AgentSessionService } = await import("../agentSession.service");
+const { AgentSessionService } = await import("../agentSession");
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
 

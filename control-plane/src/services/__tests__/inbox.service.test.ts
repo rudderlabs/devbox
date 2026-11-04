@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
 import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
-import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
 
 // Pin the config value InboxService reads (podId) so results do not depend on

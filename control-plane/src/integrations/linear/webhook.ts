@@ -1,9 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
-import { config } from "../config";
-import { logger } from "../logger";
-import type { AgentSessionService } from "../services/agentSession.service";
-import type { ParsedAgentSessionEvent } from "../types/agentSession";
+import { config } from "../../config";
+import { logger } from "../../logger";
+import type { AgentSessionService } from "./agentSession";
+import type { ParsedAgentSessionEvent } from "./types";
 
 const HEX_SHA256 = /^[0-9a-f]{64}$/i;
 

@@ -1,11 +1,11 @@
-import { emitAction, emitResponse, requireLinearTicketId } from "../clients/linear";
-import type { Task } from "../db/schema";
-import { logger } from "../logger";
-import type { ReplyTarget } from "../repositories/inbox.repository";
-import type { HandleAgentSessionResult, ParsedAgentSessionEvent } from "../types/agentSession";
-import { parseExperimentalFlags } from "./experimentalFlags";
-import type { LinearTokenProvider } from "./linearTokenProvider";
-import type { TaskService } from "./task.service";
+import { emitAction, emitResponse, requireLinearTicketId } from "../../clients/linear";
+import type { Task } from "../../db/schema";
+import { logger } from "../../logger";
+import type { ReplyTarget } from "../../repositories/inbox.repository";
+import { parseExperimentalFlags } from "../../services/experimentalFlags";
+import type { TaskService } from "../../services/task.service";
+import type { LinearTokenProvider } from "./tokenProvider";
+import type { HandleAgentSessionResult, ParsedAgentSessionEvent } from "./types";
 
 const RESTARTED_BODY = [
   "🔄 **Restarting from scratch.**",

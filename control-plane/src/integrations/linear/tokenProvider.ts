@@ -4,8 +4,8 @@ import {
   type LinearCredentials,
   LinearTokenError,
   requestClientCredentialsToken,
-} from "../clients/linearOauth";
-import type { logger } from "../logger";
+} from "../../clients/linearOauth";
+import type { logger } from "../../logger";
 
 type Logger = typeof logger;
 

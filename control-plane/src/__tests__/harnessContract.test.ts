@@ -23,7 +23,7 @@ const { ApiTaskRepository } = await import("../repositories/apiTask.repository")
 const { TaskEventRepository } = await import("../repositories/taskEvent.repository");
 const { BoundTaskService } = await import("../services/task.service");
 const { InboxService } = await import("../services/inbox.service");
-const { AgentSessionService } = await import("../services/agentSession.service");
+const { AgentSessionService } = await import("../integrations/linear/agentSession");
 const { enqueueCiResult, enqueueComment, enqueueReview } = await import(
   "../integrations/github/rounds"
 );

@@ -5,10 +5,10 @@ import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/
 import type { LinearHumanUser } from "../../clients/linearApi";
 import type { Task } from "../../db/schema";
 import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { InboxRepository, InboxRow, InboxStatus } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
-import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
 import type { SlackNotifierService } from "../slackNotifier.service";
 

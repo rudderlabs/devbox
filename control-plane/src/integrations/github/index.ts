@@ -8,14 +8,14 @@ import {
   requestReviewers,
 } from "../../clients/github";
 import { config } from "../../config";
-import type { GitHubWebhookController } from "../../controllers/githubWebhook.controller";
 import type { Task } from "../../db/schema";
 import type { InboxRow, ReplyTarget, ReplyTargetSpec } from "../../repositories/inbox.repository";
-import type { GithubStatus, GithubStatusService } from "../../services/githubStatus.service";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
 import type { HookCtx, Integration } from "../types";
+import type { GithubStatus, GithubStatusService } from "./status";
+import type { GitHubWebhookController } from "./webhook";
 
 type GithubSpec = Extract<
   ReplyTargetSpec,

@@ -6,13 +6,13 @@ import {
   fetchOrgMembers,
   getReviewComments,
   getUserIdByLogin,
-} from "../clients/github";
-import { config } from "../config";
-import { enqueueCiResult, enqueueComment, enqueueReview } from "../integrations/github/rounds";
-import type { GithubWebhooksConfig } from "../integrationsConfig";
-import { logger } from "../logger";
-import type { ReplyTargetSpec } from "../repositories/inbox.repository";
-import type { TaskService } from "../services/task.service";
+} from "../../clients/github";
+import { config } from "../../config";
+import type { GithubWebhooksConfig } from "../../integrationsConfig";
+import { logger } from "../../logger";
+import type { ReplyTargetSpec } from "../../repositories/inbox.repository";
+import type { TaskService } from "../../services/task.service";
+import { enqueueCiResult, enqueueComment, enqueueReview } from "./rounds";
 
 // ──── Parsed event surface ────
 //

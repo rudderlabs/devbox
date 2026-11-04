@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { GithubStatusService } from "../githubStatus.service";
+import { GithubStatusService } from "../status";
 
 const TOKEN = {
   source: "file" as const,
