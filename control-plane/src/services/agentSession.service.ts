@@ -5,7 +5,7 @@ import type { HandleAgentSessionResult, ParsedAgentSessionEvent } from "../types
 import { parseExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
 import type { LinearTokenProvider } from "./linearTokenProvider";
-import type { TaskIntake } from "./task.service";
+import type { TaskService } from "./task.service";
 
 const RESTARTED_BODY = [
   "🔄 **Restarting from scratch.**",
@@ -16,16 +16,16 @@ const RESTARTED_BODY = [
 const STOP_NOT_SUPPORTED_BODY = "Stop is not supported yet — work will continue.";
 
 export class AgentSessionService {
-  private readonly intake: Pick<TaskIntake, "assign" | "findTask">;
+  private readonly tasks: Pick<TaskService, "assign" | "findTask">;
   private readonly linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
   private readonly inboxService: InboxService;
 
   constructor(
-    intake: Pick<TaskIntake, "assign" | "findTask">,
+    tasks: Pick<TaskService, "assign" | "findTask">,
     linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
     inboxService: InboxService,
   ) {
-    this.intake = intake;
+    this.tasks = tasks;
     this.linearTokenProvider = linearTokenProvider;
     this.inboxService = inboxService;
   }
@@ -42,10 +42,9 @@ export class AgentSessionService {
         // the stored session with this one. The same session is a redelivery
         // of a processed delegation (no change, no ack: a restart would kill
         // the freshly-provisioned sandbox); a new one is a re-delegation, which
-        // preempts any in-flight run and restarts from a clean slate (intake
-        // kills the preempted sandbox).
-        const { taskId, result, previousTargetId } = await this.intake.assign({
-          source: "linear",
+        // preempts any in-flight run and restarts from a clean slate (the
+        // TaskService kills the preempted sandbox).
+        const { taskId, result, previousTargetId } = await this.tasks.assign({
           externalId: event.issue.id,
           key: { hint: requireLinearTicketId(event.issue.url) },
           title: event.issue.title,
@@ -85,7 +84,7 @@ export class AgentSessionService {
         // (Linear mints a fresh agent session per re-prompt). Unknown issue →
         // session_not_found so the webhook returns 503 and Linear retries after
         // the `created` event lands.
-        const task = await this.intake.findTask("linear", event.issue.id);
+        const task = await this.tasks.findTask(event.issue.id);
         if (!task) return { status: "session_not_found" };
 
         // enqueueLinearComment queues the round (idempotent on activityId).

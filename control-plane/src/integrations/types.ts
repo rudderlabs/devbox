@@ -2,7 +2,6 @@ import type { Context } from "hono";
 import type { Task, taskSource } from "../db/schema";
 import type { logger } from "../logger";
 import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
-import type { TaskIntake } from "../services/task.service";
 import type { ApiTaskSource } from "../types/api";
 import type { InboxSource } from "../types/inboxMessage";
 import type { Outbound, SendCtx } from "./outbound";
@@ -33,7 +32,7 @@ export interface Integration<S = unknown> {
 
   // Incoming. Core mounts POST /webhook/<name> only when enabled (404
   // otherwise), behind the shared body limit and raw-body read.
-  webhook?(c: Context, intake: TaskIntake): Promise<Response>;
+  webhook?(c: Context): Promise<Response>;
 
   // Outgoing. Core labels each message; the integration decides where (or
   // whether) it shows up. Throws RetryableError only before anything was sent.

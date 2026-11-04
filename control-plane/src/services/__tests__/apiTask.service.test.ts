@@ -9,7 +9,7 @@ const { db } = await import("../../db");
 const { ApiTaskRepository } = await import("../../repositories/apiTask.repository");
 const { InboxRepository } = await import("../../repositories/inbox.repository");
 const { TaskRepository } = await import("../../repositories/task.repository");
-const { Intake } = await import("../task.service");
+const { BoundTaskService } = await import("../task.service");
 const { TaskEventRepository } = await import("../../repositories/taskEvent.repository");
 const { ApiTaskService } = await import("../apiTask.service");
 const { ApiError } = await import("../../errors");
@@ -43,15 +43,16 @@ describe("ApiTaskService", () => {
     );
     principal.tokenId = (tok as { id: string }).id;
     killSandbox = mock(() => Promise.resolve());
-    const intake = new Intake(
+    const tasks = new BoundTaskService(
+      "api",
       new TaskRepository(),
       new InboxRepository(),
       { killSandbox },
       { detach: () => {} },
-      { apiKeyPrefix: "DBX-API-", ciResultMaxPerTask: 20 },
     );
-    service = new ApiTaskService(new ApiTaskRepository(), intake, new TaskEventRepository(), {
+    service = new ApiTaskService(new ApiTaskRepository(), tasks, new TaskEventRepository(), {
       publicBaseUrl: "https://api.example",
+      taskKeyPrefix: "DBX-API-",
       now: () => new Date(T0),
     });
   });

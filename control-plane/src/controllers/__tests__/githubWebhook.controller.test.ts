@@ -4,14 +4,14 @@ import { Hono } from "hono";
 import type { Task } from "../../db/schema";
 import { logger } from "../../logger";
 import type { InboxService } from "../../services/inbox.service";
-import type { TaskIntake } from "../../services/task.service";
+import type { TaskService } from "../../services/task.service";
 
 const WEBHOOK_SECRET = "gh-test-secret";
 
 mock.module("../../config", () => ({
   config: {
     podId: "pod-test",
-    github: { ciResultEnabled: true },
+    github: { ciResultEnabled: true, ciResultMaxPerTask: 20 },
   },
 }));
 
@@ -373,7 +373,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       enqueueReview,
       enqueueCiResult,
     } as unknown as InboxServiceLike as InboxService;
-    const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskIntake;
+    const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskService;
     // Reset the module-mocked fetchOrgMembers so per-test mockImplementationOnce
     // overrides don't leak across cases. Default: resolves to the trusted-set
     // logins used across positive-path bodies. The bot login `acme-bot[bot]` is
@@ -870,6 +870,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       owner: "o",
       repo: "r",
       prNumber: 42,
+      limit: 20,
     });
   });
 
@@ -968,7 +969,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       enqueueReview: mock(() => Promise.resolve()),
       enqueueCiResult: flagOffEnqueueCiResult,
     } as unknown as InboxService;
-    const flagOffIntake = { findTaskByPrUrl: flagOffFindByPrUrl } as unknown as TaskIntake;
+    const flagOffIntake = { findTaskByPrUrl: flagOffFindByPrUrl } as unknown as TaskService;
     fetchOrgMembers.mockResolvedValue(new Set([1, 2, 3]) as ReadonlySet<number>);
     const flagOffApp = new Hono();
     flagOffApp.post("/webhook/github", (c) =>
@@ -988,7 +989,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     mock.module("../../config", () => ({
       config: {
         podId: "pod-test",
-        github: { ciResultEnabled: true },
+        github: { ciResultEnabled: true, ciResultMaxPerTask: 20 },
       },
     }));
   });
@@ -1136,7 +1137,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
         enqueueReview,
         enqueueCiResult,
       } as unknown as InboxService;
-      const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskIntake;
+      const intake = { findTaskByPrUrl: findByPrUrl } as unknown as TaskService;
       controller = new GitHubWebhookController(
         inboxService,
         intake,

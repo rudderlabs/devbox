@@ -4,7 +4,7 @@ export type ApiStatus = { enabled: boolean };
 
 // API tasks have no outbound channel: the task_events log carries replies and
 // failures (failTaskInbox / markFailed write round_failed there). No webhook:
-// the /api controller and ApiTaskService call TaskIntake.
+// the /api controller and ApiTaskService call its TaskService.
 export class ApiIntegration implements Integration<ApiStatus> {
   readonly name = "api";
 

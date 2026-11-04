@@ -12,7 +12,7 @@ import type { GithubWebhooksConfig } from "../integrationsConfig";
 import { logger } from "../logger";
 import type { ReplyTargetSpec } from "../repositories/inbox.repository";
 import type { InboxService } from "../services/inbox.service";
-import type { TaskIntake } from "../services/task.service";
+import type { TaskService } from "../services/task.service";
 
 // ──── Parsed event surface ────
 //
@@ -341,7 +341,7 @@ export class GitHubWebhookController {
 
   constructor(
     private inboxService: InboxService,
-    private intake: Pick<TaskIntake, "findTaskByPrUrl">,
+    private tasks: Pick<TaskService, "findTaskByPrUrl">,
     private readonly settings: GithubWebhooksConfig,
     private readonly now: () => number = Date.now,
   ) {
@@ -506,11 +506,11 @@ export class GitHubWebhookController {
       }
       try {
         // One workflow_run can list multiple PRs; enqueue per matching task.
-        // The loop breaker (service-side) drops failures past the per-task cap
-        // and logs each trip — nothing to surface in the response here.
+        // The loop breaker drops failures past the per-task cap and logs each
+        // trip — nothing to surface in the response here.
         for (const pr of parsed.pullRequests) {
           const prUrl = prUrlOf(parsed.owner, parsed.repo, pr.number);
-          const task = await this.intake.findTaskByPrUrl(prUrl);
+          const task = await this.tasks.findTaskByPrUrl(prUrl);
           if (!task) continue;
           logger.debug("workflow_run matched a bot-opened task; enqueueing ci_result", {
             taskId: task.id,
@@ -532,6 +532,7 @@ export class GitHubWebhookController {
             owner: parsed.owner,
             repo: parsed.repo,
             prNumber: pr.number,
+            limit: config.github.ciResultMaxPerTask,
           });
         }
         return c.json({ status: "ok" }, 200);
@@ -550,7 +551,7 @@ export class GitHubWebhookController {
       // comment / review — task has no status; every comment enqueues an inbox
       // row. The sweep recreates the sandbox from PVC if needed and surfaces a
       // PVC-missing error if the workspace has already been pruned.
-      const task = await this.intake.findTaskByPrUrl(parsed.prUrl);
+      const task = await this.tasks.findTaskByPrUrl(parsed.prUrl);
       if (!task) return c.json({ status: "ignored" }, 200);
 
       if (parsed.kind === "comment") {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
 import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import { logger } from "../../logger";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
 import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
@@ -129,7 +130,8 @@ describe("InboxService", () => {
   let listNonTerminalByTask: ReturnType<typeof mock>;
   let markDelivered: ReturnType<typeof mock>;
   let markFailed: ReturnType<typeof mock>;
-  let followUp: ReturnType<typeof mock>;
+  let githubRound: ReturnType<typeof mock>;
+  let linearRound: ReturnType<typeof mock>;
   let writeHarnessFile: ReturnType<typeof mock>;
   let killSandbox: ReturnType<typeof mock>;
   let getById: ReturnType<typeof mock>;
@@ -157,7 +159,8 @@ describe("InboxService", () => {
     listNonTerminalByTask = mock(() => Promise.resolve([] as InboxRow[]));
     markDelivered = mock(() => Promise.resolve());
     markFailed = mock(() => Promise.resolve([{ id: "x" }]));
-    followUp = mock(() => Promise.resolve({ roundId: "inbox-new" }));
+    githubRound = mock(() => Promise.resolve({ roundId: "inbox-new" }));
+    linearRound = mock(() => Promise.resolve({ roundId: "inbox-new" }));
     getById = mock((id: string) => Promise.resolve(ghCommentRow(id)));
     inboxRepo = {
       listPendingByTask,
@@ -191,7 +194,7 @@ describe("InboxService", () => {
       sandboxManager,
       integrations,
       new IntegrationHooks(integrations, inboxRepo),
-      { followUp },
+      { github: { enqueueRound: githubRound }, linear: { enqueueRound: linearRound } },
     );
   });
 
@@ -520,6 +523,8 @@ describe("InboxService", () => {
     });
   });
 
+  // Each builder queues through its own source's TaskService, which stamps
+  // the source and the task identity.
   describe("enqueueComment", () => {
     it("appends a kind='comment' row and fires a 👀 reaction", async () => {
       await service.enqueueComment({
@@ -530,25 +535,22 @@ describe("InboxService", () => {
         createdAt: "2026-04-23T10:00:00Z",
       });
 
-      const arg = followUp.mock.calls[0]?.[0] as {
+      expect(linearRound).not.toHaveBeenCalled();
+      const arg = githubRound.mock.calls[0]?.[0] as {
         task: { id: string; key: string };
-        message: {
-          source: string;
-          kind: string;
-          external_id: string;
-          payload: { target_id: string; created_at: string };
-        };
+        kind: string;
+        externalId: string;
+        payload: { target_id: string; created_at: string };
         targets: Array<{ id: string }>;
         prUrl: string;
       };
-      expect(arg.message.source).toBe("github");
-      expect(arg.message.kind).toBe("comment");
-      expect(arg.message.external_id).toBe("555");
-      expect(arg.message.payload.target_id).toBe("555");
-      // followUp stamps task_id / task_key from the task.
+      expect(arg.kind).toBe("comment");
+      expect(arg.externalId).toBe("555");
+      expect(arg.payload.target_id).toBe("555");
+      // enqueueRound stamps task_id / task_key from the task.
       expect(arg.task).toMatchObject({ id: "task-1", key: "XYZ-1" });
       // The comment's created_at is carried into the payload for temporal scoping.
-      expect(arg.message.payload.created_at).toBe("2026-04-23T10:00:00Z");
+      expect(arg.payload.created_at).toBe("2026-04-23T10:00:00Z");
       expect(arg.targets[0]?.id).toBe("555");
       // Dropped as stale if a restart has since cleared the PR from the task.
       expect(arg.prUrl).toBe("https://github.com/o/r/pull/7");
@@ -572,21 +574,20 @@ describe("InboxService", () => {
         createdAt: "2026-04-23T10:00:00Z",
       });
 
-      const arg = followUp.mock.calls[0]?.[0] as {
-        message: {
-          kind: string;
-          payload: {
-            created_at: string;
-            reviewer_login?: string;
-            pr: { owner?: string; repo: string; prNumber?: number; pr_url: string };
-            inline_comments: Array<{
-              target_id: string;
-              path: string;
-              line: number;
-              start_line?: number;
-              body: string;
-            }>;
-          };
+      expect(linearRound).not.toHaveBeenCalled();
+      const arg = githubRound.mock.calls[0]?.[0] as {
+        kind: string;
+        payload: {
+          created_at: string;
+          reviewer_login?: string;
+          pr: { owner?: string; repo: string; prNumber?: number; pr_url: string };
+          inline_comments: Array<{
+            target_id: string;
+            path: string;
+            line: number;
+            start_line?: number;
+            body: string;
+          }>;
         };
         targets: Array<{
           id: string;
@@ -596,11 +597,11 @@ describe("InboxService", () => {
           };
         }>;
       };
-      expect(arg.message.kind).toBe("review");
+      expect(arg.kind).toBe("review");
       // The review's submitted_at is carried into the payload for temporal scoping.
-      expect(arg.message.payload.created_at).toBe("2026-04-23T10:00:00Z");
-      expect(arg.message.payload.reviewer_login).toBe("reviewer");
-      expect(arg.message.payload.pr).toEqual({
+      expect(arg.payload.created_at).toBe("2026-04-23T10:00:00Z");
+      expect(arg.payload.reviewer_login).toBe("reviewer");
+      expect(arg.payload.pr).toEqual({
         owner: "o",
         repo: "r",
         prNumber: 7,
@@ -608,13 +609,13 @@ describe("InboxService", () => {
       });
       // 2 inline + 1 review_body
       expect(arg.targets).toHaveLength(3);
-      expect(arg.message.payload.inline_comments[0]).toMatchObject({
+      expect(arg.payload.inline_comments[0]).toMatchObject({
         target_id: "11",
         path: "a.ts",
         line: 3,
         start_line: 1,
       });
-      expect(arg.message.payload.inline_comments[1]?.start_line).toBeUndefined();
+      expect(arg.payload.inline_comments[1]?.start_line).toBeUndefined();
       expect(arg.targets[0]).toMatchObject({
         id: "11",
         spec: { kind: "review_comment", startLine: 1 },
@@ -632,76 +633,74 @@ describe("InboxService", () => {
         body: "any update?",
       });
 
-      const arg = followUp.mock.calls[0]?.[0] as {
+      expect(githubRound).not.toHaveBeenCalled();
+      const arg = linearRound.mock.calls[0]?.[0] as {
         task: { id: string; key: string };
-        message: {
-          source: string;
-          external_id: string;
-          payload: { target_id: string };
-        };
+        externalId: string;
+        payload: { target_id: string };
         targets: Array<{ id: string; spec: { kind: string } }>;
       };
-      expect(arg.message.source).toBe("linear");
-      expect(arg.message.external_id).toBe("act-1");
+      expect(arg.externalId).toBe("act-1");
       expect(arg.task).toMatchObject({ id: "task-1", key: "XYZ-1" });
       // Replies route to the session, not the activity.
-      expect(arg.message.payload.target_id).toBe("sess-1");
+      expect(arg.payload.target_id).toBe("sess-1");
       expect(arg.targets[0]?.id).toBe("sess-1");
       expect(arg.targets[0]?.spec.kind).toBe("linear_session");
     });
   });
 
   describe("enqueueCiResult", () => {
-    it("appends a kind='ci_result' row with correct payload and reply target", async () => {
-      await service.enqueueCiResult({
-        task: makeTask(),
-        runId: 123456789,
-        runAttempt: 2,
-        workflowName: "CI",
-        workflowPath: ".github/workflows/ci.yml",
-        conclusion: "success",
-        runUrl: "https://github.com/o/r/actions/runs/123456789",
-        headSha: "abc123",
-        headBranch: "devbox/XYZ-1234-fix",
-        owner: "o",
-        repo: "r",
-        prNumber: 42,
-      });
+    const ciParams = {
+      task: makeTask(),
+      runId: 123456789,
+      runAttempt: 2,
+      workflowName: "CI",
+      workflowPath: ".github/workflows/ci.yml",
+      conclusion: "success",
+      runUrl: "https://github.com/o/r/actions/runs/123456789",
+      headSha: "abc123",
+      headBranch: "devbox/XYZ-1234-fix",
+      owner: "o",
+      repo: "r",
+      prNumber: 42,
+      limit: 20,
+    };
 
-      const arg = followUp.mock.calls[0]?.[0] as {
+    it("appends a kind='ci_result' row with correct payload and reply target", async () => {
+      await service.enqueueCiResult(ciParams);
+
+      expect(linearRound).not.toHaveBeenCalled();
+      const arg = githubRound.mock.calls[0]?.[0] as {
         task: { id: string; key: string };
-        message: {
-          source: string;
-          kind: string;
-          external_id: string;
-          payload: {
-            target_id: string;
-            workflow_name: string;
-            workflow_path: string;
-            conclusion: string;
-            run_url: string;
-            head_sha: string;
-            head_branch: string;
-            pr: { repo: string; pr_url: string };
-          };
+        kind: string;
+        externalId: string;
+        payload: {
+          target_id: string;
+          workflow_name: string;
+          workflow_path: string;
+          conclusion: string;
+          run_url: string;
+          head_sha: string;
+          head_branch: string;
+          pr: { repo: string; pr_url: string };
         };
         targets: Array<{
           id: string;
           spec: { kind: string; owner: string; repo: string; prNumber: number; commentId: number };
         }>;
+        limit: number;
       };
-      expect(arg.message.source).toBe("github");
-      expect(arg.message.kind).toBe("ci_result");
-      expect(arg.message.external_id).toBe("workflow_run:123456789:2:42");
-      expect(arg.message.payload.target_id).toBe("123456789");
-      expect(arg.message.payload.workflow_name).toBe("CI");
-      expect(arg.message.payload.workflow_path).toBe(".github/workflows/ci.yml");
-      expect(arg.message.payload.conclusion).toBe("success");
-      expect(arg.message.payload.run_url).toBe("https://github.com/o/r/actions/runs/123456789");
-      expect(arg.message.payload.head_sha).toBe("abc123");
-      expect(arg.message.payload.head_branch).toBe("devbox/XYZ-1234-fix");
+      expect(arg.kind).toBe("ci_result");
+      expect(arg.externalId).toBe("workflow_run:123456789:2:42");
+      expect(arg.payload.target_id).toBe("123456789");
+      expect(arg.payload.workflow_name).toBe("CI");
+      expect(arg.payload.workflow_path).toBe(".github/workflows/ci.yml");
+      expect(arg.payload.conclusion).toBe("success");
+      expect(arg.payload.run_url).toBe("https://github.com/o/r/actions/runs/123456789");
+      expect(arg.payload.head_sha).toBe("abc123");
+      expect(arg.payload.head_branch).toBe("devbox/XYZ-1234-fix");
       expect(arg.task).toMatchObject({ id: "task-1", key: "XYZ-1" });
-      expect(arg.message.payload.pr).toEqual({
+      expect(arg.payload.pr).toEqual({
         repo: "r",
         pr_url: "https://github.com/o/r/pull/42",
       });
@@ -710,11 +709,32 @@ describe("InboxService", () => {
         id: "123456789",
         spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 42, commentId: 0 },
       });
+      // The loop breaker's cap.
+      expect(arg.limit).toBe(20);
+    });
+
+    it("logs the loop-breaker line when the cap drops the round", async () => {
+      const warn = spyOn(logger, "warn").mockImplementation(() => logger);
+      githubRound.mockResolvedValueOnce({ dropped: "limit", count: 20 });
+      await service.enqueueCiResult(ciParams);
+      expect(warn.mock.calls).toEqual([
+        [
+          "ci_result loop breaker tripped — dropping CI failure",
+          { taskId: "task-1", seen: 20, max: 20, runId: 123456789, prNumber: 42 },
+        ],
+      ]);
+      // Nothing for a round that went in or another drop.
+      warn.mockClear();
+      await service.enqueueCiResult(ciParams);
+      githubRound.mockResolvedValueOnce({ dropped: "duplicate" });
+      await service.enqueueCiResult(ciParams);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
     });
   });
 
-  // followUp stamps task_id and task_key from the task it is handed.
-  describe("enqueue paths hand followUp the task row", () => {
+  // enqueueRound stamps task_id and task_key from the task it is handed.
+  describe("enqueue paths hand enqueueRound the task row", () => {
     const apiTask = makeTask({
       id: "task-api",
       source: "api",
@@ -737,18 +757,15 @@ describe("InboxService", () => {
         spec,
         createdAt: "2026-10-07T12:00:00Z",
       });
-      expect(followUp).toHaveBeenCalledWith({
+      expect(githubRound).toHaveBeenCalledWith({
         task: apiTask,
-        message: {
-          source: "github",
-          kind: "comment",
-          external_id: "555",
-          payload: {
-            target_id: "555",
-            body: "@harness fix",
-            pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
-            created_at: "2026-10-07T12:00:00Z",
-          },
+        kind: "comment",
+        externalId: "555",
+        payload: {
+          target_id: "555",
+          body: "@harness fix",
+          pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
+          created_at: "2026-10-07T12:00:00Z",
         },
         targets: [{ id: "555", spec }],
         prUrl: "https://github.com/o/r/pull/7",
@@ -767,21 +784,18 @@ describe("InboxService", () => {
         reviewerLogin: "rev",
         createdAt: "2026-10-07T12:00:00Z",
       });
-      expect(followUp).toHaveBeenCalledWith({
+      expect(githubRound).toHaveBeenCalledWith({
         task: apiTask,
-        message: {
-          source: "github",
-          kind: "review",
-          external_id: "88",
-          payload: {
-            review_body: { target_id: "88", body: "@harness" },
-            inline_comments: [
-              { target_id: "11", path: "a.ts", line: 3, start_line: undefined, body: "nit" },
-            ],
-            pr: { owner: "o", repo: "r", prNumber: 7, pr_url: "https://github.com/o/r/pull/7" },
-            reviewer_login: "rev",
-            created_at: "2026-10-07T12:00:00Z",
-          },
+        kind: "review",
+        externalId: "88",
+        payload: {
+          review_body: { target_id: "88", body: "@harness" },
+          inline_comments: [
+            { target_id: "11", path: "a.ts", line: 3, start_line: undefined, body: "nit" },
+          ],
+          pr: { owner: "o", repo: "r", prNumber: 7, pr_url: "https://github.com/o/r/pull/7" },
+          reviewer_login: "rev",
+          created_at: "2026-10-07T12:00:00Z",
         },
         prUrl: "https://github.com/o/r/pull/7",
         targets: [
@@ -821,23 +835,21 @@ describe("InboxService", () => {
         owner: "o",
         repo: "r",
         prNumber: 7,
+        limit: 20,
       });
-      expect(followUp).toHaveBeenCalledWith({
+      expect(githubRound).toHaveBeenCalledWith({
         task: apiTask,
-        message: {
-          source: "github",
-          kind: "ci_result",
-          external_id: "workflow_run:9:1:7",
-          payload: {
-            target_id: "9",
-            workflow_name: "CI",
-            workflow_path: ".github/workflows/ci.yml",
-            conclusion: "failure",
-            run_url: "https://github.com/o/r/actions/runs/9",
-            head_sha: "abc",
-            head_branch: "devbox/DBX-API-7-x",
-            pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
-          },
+        kind: "ci_result",
+        externalId: "workflow_run:9:1:7",
+        payload: {
+          target_id: "9",
+          workflow_name: "CI",
+          workflow_path: ".github/workflows/ci.yml",
+          conclusion: "failure",
+          run_url: "https://github.com/o/r/actions/runs/9",
+          head_sha: "abc",
+          head_branch: "devbox/DBX-API-7-x",
+          pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
         },
         prUrl: "https://github.com/o/r/pull/7",
         targets: [
@@ -846,6 +858,7 @@ describe("InboxService", () => {
             spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: 0 },
           },
         ],
+        limit: 20,
       });
     });
 
@@ -857,18 +870,15 @@ describe("InboxService", () => {
         agentSessionId: "sess-2",
         body: "follow-up",
       });
-      expect(followUp).toHaveBeenCalledWith({
+      expect(linearRound).toHaveBeenCalledWith({
         task,
-        message: {
-          source: "linear",
-          kind: "comment",
-          external_id: "act-1",
-          payload: {
-            target_id: "sess-2",
-            body: "follow-up",
-            pr: null,
-            created_at: "",
-          },
+        kind: "comment",
+        externalId: "act-1",
+        payload: {
+          target_id: "sess-2",
+          body: "follow-up",
+          pr: null,
+          created_at: "",
         },
         targets: [{ id: "sess-2", spec: { kind: "linear_session" } }],
       });

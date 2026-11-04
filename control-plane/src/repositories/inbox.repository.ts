@@ -67,7 +67,7 @@ export type ReplyTarget = {
   id: string;
   spec: ReplyTargetSpec;
   // An assignment's delegation order, when the platform has one: a delegation
-  // whose order is not above the stored one is a duplicate (TaskIntake.assign).
+  // whose order is not above the stored one is a duplicate (TaskService.assign).
   order?: number;
 };
 
@@ -90,10 +90,6 @@ export type AssignmentContent = Omit<AssignmentPayload, keyof TaskIdentity>;
 
 export function taskIdentity(task: Pick<Task, "id" | "key">): TaskIdentity {
   return { task_id: task.id, task_key: task.key };
-}
-
-export function apiSessionTarget(taskId: string): ReplyTarget {
-  return { id: taskId, spec: { kind: "api_session" } };
 }
 
 // Row lifecycle. pending → delivered → responded; failed is the CP-side
@@ -192,18 +188,21 @@ export class InboxRepository {
     }
   }
 
-  // TaskIntake.followUp's transaction. Locks the task row first: tasks before
-  // inbox, and task_events ids handed out in commit order per task. Drops the
-  // round when `prUrl` is no longer one of the task's PRs (a restart cleared
-  // it) or when the CI loop breaker trips, and as a duplicate when the round is
-  // already stored. message_queued is written for an inserted API message.
+  // TaskService.enqueueRound's transaction. Locks the task row first: tasks
+  // before inbox, and task_events ids handed out in commit order per task.
+  // Drops the round when `prUrl` is no longer one of the task's PRs (a restart
+  // cleared it) or when the task already has `limit` rounds of this source and
+  // kind, and as a duplicate when the round is already stored. message_queued
+  // is written for an inserted API message.
   async appendFollowUp(p: {
     taskId: string;
     message: NewInboxMessage;
     replyTargets: ReplyTarget[];
     prUrl?: string;
-    ciResultMax: number;
-  }): Promise<{ roundId: string } | { dropped: "duplicate" | "stale" | "ci_limit" }> {
+    limit?: number;
+  }): Promise<
+    { roundId: string } | { dropped: "duplicate" | "stale" } | { dropped: "limit"; count: number }
+  > {
     const { message } = p;
     const hasPr =
       p.prUrl === undefined
@@ -224,32 +223,19 @@ export class InboxRepository {
         return { dropped: "stale" };
       }
 
-      // Loop breaker. harness fixes CI → pushes → CI re-runs → may fail again,
-      // ad infinitum. Once a task has accumulated `ciResultMax` ci_result rows,
-      // stop forwarding new failures. Every row counts regardless of status: a
-      // 'failed' or 'responded' row is still a CI failure the harness saw. The
-      // count runs under the task lock, so concurrent webhooks can't overshoot.
-      // 0 / negative disables the breaker.
-      if (message.kind === "ci_result" && p.ciResultMax > 0) {
+      // Every row counts regardless of status: a 'failed' or 'responded' row
+      // is still a round the harness saw. The count runs under the task lock,
+      // so concurrent webhooks can't overshoot. The caller logs a drop.
+      const limit = p.limit ?? 0;
+      if (limit > 0) {
         const [count] = asRows<{ n: number }>(
           await tx.execute(sql`
             SELECT COUNT(*)::int AS n FROM inbox
-             WHERE task_id = ${p.taskId} AND source = 'github' AND kind = 'ci_result';
+             WHERE task_id = ${p.taskId} AND source = ${message.source} AND kind = ${message.kind};
           `),
         );
-        const seen = count?.n ?? 0;
-        if (seen >= p.ciResultMax) {
-          // external_id is workflow_run:<run>:<attempt>:<pr>.
-          const [, runId, , prNumber] = message.external_id.split(":").map(Number);
-          logger.warn("ci_result loop breaker tripped — dropping CI failure", {
-            taskId: p.taskId,
-            seen,
-            max: p.ciResultMax,
-            runId,
-            prNumber,
-          });
-          return { dropped: "ci_limit" };
-        }
+        const n = count?.n ?? 0;
+        if (n >= limit) return { dropped: "limit", count: n };
       }
 
       const row = await this.appendInbox(

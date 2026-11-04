@@ -2,7 +2,6 @@ import type { Task } from "../db/schema";
 import type { IntegrationName, Person, TaskSource } from "../integrations/types";
 import { logger } from "../logger";
 import {
-  apiSessionTarget,
   type InboxRepository,
   type NewInboxMessage,
   type ReplyTarget,
@@ -10,26 +9,37 @@ import {
   taskIdentity,
 } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
-import type { InboxMessage, TaskIdentity } from "../types/inboxMessage";
+import type {
+  CiResultPayload,
+  CommentPayload,
+  ReviewPayload,
+  TaskIdentity,
+} from "../types/inboxMessage";
 import type { IntegrationHooks } from "./integrationHooks";
 import type { SandboxManager } from "./sandboxManager.service";
 
-// The only way modules create work.
+// The only way integrations create work. Each instance is bound to one
+// source: the tasks and rounds it creates are that source's, and so are the
+// reply targets they carry.
 
 export type TaskRef = { id: string; key: string };
-type Draft<M> = M extends InboxMessage
-  ? Pick<M, "source" | "kind" | "external_id"> & { payload: Omit<M["payload"], keyof TaskIdentity> }
-  : never;
-export type InboxMessageDraft = Draft<Exclude<InboxMessage, { kind: "assignment" }>>;
 
-export interface TaskIntake {
+// A follow-up round as its integration builds it. The payloads are what the
+// harness reads; the task identity is stamped here.
+export type RoundDraft =
+  | { kind: "comment"; payload: Omit<CommentPayload, keyof TaskIdentity> }
+  | { kind: "review"; payload: Omit<ReviewPayload, keyof TaskIdentity> }
+  | { kind: "ci_result"; payload: Omit<CiResultPayload, keyof TaskIdentity> };
+
+export interface TaskService {
+  readonly source: IntegrationName;
+
   assign(p: {
-    source: TaskSource;
     externalId?: string; // required with a hint key; with a sequence key the new key is used
-    key: { hint: string } | { sequence: "api" };
+    key: { hint: string } | { sequence: string }; // sequence: the key prefix
     title: string;
     description: string | null; // Markdown/plain; flags already stripped; bot mention stripped
-    flags: string[]; // modules parse with parseExperimentalFlags; intake never parses
+    flags: string[]; // modules parse with parseExperimentalFlags; this service never parses
     url: (t: TaskRef) => string;
     target: (t: TaskRef) => ReplyTarget; // target.id = delegation id; optional target.order (monotonic number)
     requester?: Person; // tasks.metadata.requester
@@ -41,20 +51,29 @@ export interface TaskIntake {
     previousTargetId?: string; // a restart's replaced delegation id
   }>;
 
+  // Replaces the task's title, description and flags and restarts it from a
+  // clean slate, delegated through `target`. Only this source's tasks.
   restart(
     taskId: string,
-    def: { title: string; description: string | null; flags: string[] },
+    def: { title: string; description: string | null; flags: string[]; target: ReplyTarget },
   ): Promise<void>;
 
-  followUp(p: {
-    task: Pick<Task, "id" | "key">;
-    message: InboxMessageDraft;
-    targets: ReplyTarget[];
-    prUrl?: string;
-  }): Promise<{ roundId: string } | { dropped: "duplicate" | "stale" | "ci_limit" }>;
+  enqueueRound(
+    p: RoundDraft & {
+      task: Pick<Task, "id" | "key">;
+      externalId: string; // idempotency key, with the source and kind
+      targets: ReplyTarget[];
+      prUrl?: string; // dropped once this PR is no longer one of the task's
+      // At most this many rounds of this source and kind per task; absent,
+      // 0 or negative: no cap.
+      limit?: number;
+    },
+  ): Promise<
+    { roundId: string } | { dropped: "duplicate" | "stale" } | { dropped: "limit"; count: number } // count: the rounds the task already has
+  >;
 
-  findTask(source: TaskSource, externalId: string): Promise<Task | null>;
-  findTaskByPrUrl(prUrl: string): Promise<Task | null>;
+  findTask(externalId: string): Promise<Task | null>; // this source's task
+  findTaskByPrUrl(prUrl: string): Promise<Task | null>; // any source's task
 }
 
 // Which integration each reply-target kind belongs to. Exists only for the
@@ -67,26 +86,28 @@ const TARGET_OWNER: Record<ReplyTargetSpec["kind"], IntegrationName> = {
   review_body: "github",
 };
 
-export class Intake implements TaskIntake {
+export class BoundTaskService implements TaskService {
   constructor(
+    readonly source: IntegrationName,
     private taskRepo: TaskRepository,
     private inboxRepo: InboxRepository,
     private sandboxManager: Pick<SandboxManager, "killSandbox">,
     private hooks: Pick<IntegrationHooks, "detach">,
-    private opts: { apiKeyPrefix: string; ciResultMaxPerTask: number },
   ) {}
 
-  async assign(p: Parameters<TaskIntake["assign"]>[0]): ReturnType<TaskIntake["assign"]> {
+  async assign(p: Parameters<TaskService["assign"]>[0]): ReturnType<TaskService["assign"]> {
     if ("hint" in p.key && !p.externalId) throw new Error("assign: a hint key needs externalId");
     const { prevSandboxId, prevTargetId, ...t } = await this.taskRepo.assign({
       ...p,
+      // The task_source enum lists only the sources that create tasks.
+      source: this.source as TaskSource,
       key:
         "hint" in p.key
           ? { hint: p.key.hint.replace(/[^A-Za-z0-9-]/g, "-") } // branch-safe
-          : { sequencePrefix: this.opts.apiKeyPrefix },
+          : { sequencePrefix: p.key.sequence },
       target: (ref) => {
         const target = p.target(ref);
-        checkTargets(p.source, [target]);
+        checkTargets(this.source, [target]);
         // A NaN order is never "not above" the stored one, so every
         // redelivery would restart the task.
         const { order } = target;
@@ -100,50 +121,55 @@ export class Intake implements TaskIntake {
     return { taskId: t.id, key: t.key, result: t.result, previousTargetId: prevTargetId };
   }
 
-  // API only: today's API restart, with the definition replacing the current
-  // title, description and flags.
   async restart(
     taskId: string,
-    def: { title: string; description: string | null; flags: string[] },
-  ): Promise<void> {
+    def: Parameters<TaskService["restart"]>[1],
+  ): ReturnType<TaskService["restart"]> {
+    checkTargets(this.source, [def.target]);
     const task = await this.taskRepo.getById(taskId);
     if (!task) throw new Error(`restart: task ${taskId} not found`);
-    if (task.source !== "api") throw new Error(`restart: task ${taskId} is not an API task`);
+    if (task.source !== this.source) {
+      throw new Error(`restart: task ${taskId} is not a ${this.source} task`);
+    }
     const { prevSandboxId } = await this.taskRepo.restartTaskWithInbox({
       taskId,
       inboxPayload: {
         title: def.title,
         description: def.description,
         external_url: task.externalUrl,
-        target_id: taskId,
+        target_id: def.target.id,
       },
-      inboxReplyTargets: [apiSessionTarget(taskId)],
+      inboxReplyTargets: [def.target],
       api: { title: def.title, description: def.description, experimentalFlags: def.flags },
     });
-    this.killPreempted(taskId, prevSandboxId, "API restart");
+    this.killPreempted(taskId, prevSandboxId, "restart");
   }
 
-  async followUp(p: Parameters<TaskIntake["followUp"]>[0]): ReturnType<TaskIntake["followUp"]> {
-    const { task, message, targets } = p;
+  async enqueueRound(
+    p: Parameters<TaskService["enqueueRound"]>[0],
+  ): ReturnType<TaskService["enqueueRound"]> {
+    const { task, kind, payload, targets } = p;
     // A review's payload carries one target id per thread instead.
-    if ("target_id" in message.payload && message.payload.target_id !== targets[0]?.id) {
-      throw new Error("followUp: payload.target_id must equal targets[0].id");
+    if ("target_id" in payload && payload.target_id !== targets[0]?.id) {
+      throw new Error("enqueueRound: payload.target_id must equal targets[0].id");
     }
-    checkTargets(message.source, targets);
+    checkTargets(this.source, targets);
     return this.inboxRepo.appendFollowUp({
       taskId: task.id,
       message: {
-        ...message,
-        payload: { ...message.payload, ...taskIdentity(task) },
+        source: this.source,
+        kind,
+        external_id: p.externalId,
+        payload: { ...payload, ...taskIdentity(task) },
       } as NewInboxMessage,
       replyTargets: targets,
       prUrl: p.prUrl,
-      ciResultMax: this.opts.ciResultMaxPerTask,
+      limit: p.limit,
     });
   }
 
-  findTask(source: TaskSource, externalId: string): Promise<Task | null> {
-    return this.taskRepo.findByExternalId(source, externalId);
+  findTask(externalId: string): Promise<Task | null> {
+    return this.taskRepo.findByExternalId(this.source as TaskSource, externalId);
   }
 
   findTaskByPrUrl(prUrl: string): Promise<Task | null> {

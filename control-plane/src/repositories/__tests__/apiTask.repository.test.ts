@@ -9,15 +9,16 @@ mock.module("../../config", () => ({ config: { databaseUrl: TEST_DATABASE_URL } 
 const { db } = await import("../../db");
 const { ApiTaskRepository } = await import("../apiTask.repository");
 const { TaskRepository } = await import("../task.repository");
-const { InboxRepository, apiSessionTarget } = await import("../inbox.repository");
+const { InboxRepository } = await import("../inbox.repository");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
 const repo = new ApiTaskRepository();
 const taskRepo = new TaskRepository();
 const inboxRepo = new InboxRepository();
 const T0 = "2026-10-07T12:00:00.000Z";
+const apiSessionTarget = (id: string) => ({ id, spec: { kind: "api_session" as const } });
 
-// An API create: assign with a sequence key, as TaskIntake does it.
+// An API create: assign with a sequence key, as TaskService does it.
 const create = async (o: { createdBy?: string } = {}) => {
   const t = await taskRepo.assign({
     source: "api",
@@ -50,7 +51,6 @@ const appendMessage = async (p: { task: { id: string; key: string }; body: strin
       },
     },
     replyTargets: [apiSessionTarget(p.task.id)],
-    ciResultMax: 0,
   });
   if (!("roundId" in result)) throw new Error(`dropped: ${result.dropped}`);
   return result;

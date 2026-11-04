@@ -33,7 +33,7 @@ import { LinearTokenProvider } from "./services/linearTokenProvider";
 import { ReplyHolds } from "./services/replyHolds";
 import { SandboxManager } from "./services/sandboxManager.service";
 import { SlackNotifierService } from "./services/slackNotifier.service";
-import { Intake } from "./services/task.service";
+import { BoundTaskService } from "./services/task.service";
 import { TaskProcessorService } from "./services/taskProcessor.service";
 
 export type AppBundle = {
@@ -101,33 +101,32 @@ export function createApp(): AppBundle {
   const replyHolds = new ReplyHolds();
   // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.
   const hooks = new IntegrationHooks(integrations, inboxRepository);
-  // The only way tasks and rounds are created; a restart's preempted sandbox
-  // is killed in the hooks' tracked detached set.
-  const intake = new Intake(taskRepository, inboxRepository, sandboxManager, hooks, {
-    apiKeyPrefix: config.api.taskKeyPrefix,
-    ciResultMaxPerTask: config.github.ciResultMaxPerTask,
-  });
+  // The only way tasks and rounds are created, one service per source; a
+  // restart's preempted sandbox is killed in the hooks' tracked detached set.
+  const bound = (source: IntegrationName) =>
+    new BoundTaskService(source, taskRepository, inboxRepository, sandboxManager, hooks);
+  const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
 
   const inboxService = new InboxService(
     inboxRepository,
     sandboxManager,
     integrations,
     hooks,
-    intake,
+    tasks,
   );
 
   // Today's webhook controllers enqueue through InboxService, which needs the
   // registry, so each is attached to its module here, only when enabled.
   if (config.linear) {
     integrations.linear.controller = new LinearWebhookController(
-      new AgentSessionService(intake, linearTokenProvider, inboxService),
+      new AgentSessionService(tasks.linear, linearTokenProvider, inboxService),
       (at) => linearStatus.recordWebhook(at),
     );
   }
   if (config.github.webhooks) {
     integrations.github.controller = new GitHubWebhookController(
       inboxService,
-      intake,
+      tasks.github,
       config.github.webhooks,
     );
   }
@@ -166,14 +165,15 @@ export function createApp(): AppBundle {
 
   const app = new Hono();
   app.route("/", createHealthRoutes(healthController));
-  app.route("/", createWebhookRoutes(Object.values(integrations), intake));
+  app.route("/", createWebhookRoutes(Object.values(integrations)));
 
   // /api only mounts when explicitly enabled: a CP deployed before the
   // internal ingress exists must expose nothing.
   let stopApiStreams = () => {};
   if (config.api.enabled) {
-    const apiTaskService = new ApiTaskService(apiTaskRepository, intake, taskEventRepository, {
+    const apiTaskService = new ApiTaskService(apiTaskRepository, tasks.api, taskEventRepository, {
       publicBaseUrl: config.api.publicBaseUrl,
+      taskKeyPrefix: config.api.taskKeyPrefix,
       now: () => new Date(),
     });
     const apiController = new ApiController(apiTaskService, {

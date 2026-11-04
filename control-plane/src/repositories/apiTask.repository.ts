@@ -3,7 +3,7 @@ import { db } from "../db";
 import type { TaskSource } from "../integrations/types";
 import type { ApiRound, ApiTaskState } from "../types/api";
 
-// The API read model. API tasks are written through TaskIntake.
+// The API read model. API tasks are written through TaskService.
 
 export type ApiTaskRecord = {
   id: string;

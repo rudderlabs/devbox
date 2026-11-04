@@ -21,7 +21,7 @@ const { TaskRepository } = await import("../repositories/task.repository");
 const { InboxRepository } = await import("../repositories/inbox.repository");
 const { ApiTaskRepository } = await import("../repositories/apiTask.repository");
 const { TaskEventRepository } = await import("../repositories/taskEvent.repository");
-const { Intake } = await import("../services/task.service");
+const { BoundTaskService } = await import("../services/task.service");
 const { InboxService } = await import("../services/inbox.service");
 const { AgentSessionService } = await import("../services/agentSession.service");
 const { ApiTaskService } = await import("../services/apiTask.service");
@@ -67,24 +67,21 @@ describe("harness contract", () => {
 
     const taskRepo = new TaskRepository();
     const inboxRepo = new InboxRepository();
-    const intake = new Intake(
-      taskRepo,
-      inboxRepo,
-      sandboxManager,
-      { detach: () => {} },
-      { apiKeyPrefix: "DBX-API-", ciResultMaxPerTask: 20 },
-    );
+    const bound = (source: "linear" | "github" | "api") =>
+      new BoundTaskService(source, taskRepo, inboxRepo, sandboxManager, { detach: () => {} });
+    const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
     // The sweep never reaches the integrations or hooks.
-    const inbox = new InboxService(inboxRepo, sandboxManager, {} as never, {} as never, intake);
+    const inbox = new InboxService(inboxRepo, sandboxManager, {} as never, {} as never, tasks);
     // The webhook acks are fire-and-forget; a client that never arrives keeps
     // them from running.
     const linear = new AgentSessionService(
-      intake,
+      tasks.linear,
       { getAuthorizedLinearClient: () => new Promise(() => {}) },
       inbox,
     );
-    const api = new ApiTaskService(new ApiTaskRepository(), intake, new TaskEventRepository(), {
+    const api = new ApiTaskService(new ApiTaskRepository(), tasks.api, new TaskEventRepository(), {
       publicBaseUrl: "https://devbox.example",
+      taskKeyPrefix: "DBX-API-",
       now: () => new Date("2026-01-02T03:04:05.000Z"),
     });
 
@@ -160,6 +157,7 @@ describe("harness contract", () => {
       headSha: "abc123",
       headBranch: "devbox/eng-42",
       ...PR,
+      limit: 20,
     });
 
     // API: an assignment and a message.

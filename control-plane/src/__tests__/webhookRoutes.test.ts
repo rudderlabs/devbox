@@ -3,9 +3,6 @@ import type { Context } from "hono";
 import type { IntegrationName } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
 import { createWebhookRoutes as createRoutes } from "../routes/webhook";
-import type { TaskIntake } from "../services/task.service";
-
-const intake = {} as TaskIntake;
 
 // The routes for enabled integrations with these webhooks.
 function createWebhookRoutes(
@@ -17,7 +14,6 @@ function createWebhookRoutes(
       enabled: true,
       webhook: (c: Context) => w.handleWebhook(c),
     })),
-    intake,
   );
 }
 
@@ -109,32 +105,28 @@ describe("createWebhookRoutes", () => {
     }
   });
 
-  it("serves no webhook for a disabled integration, and hands the intake to an enabled one", async () => {
-    const seen: unknown[] = [];
-    const app = createRoutes(
-      [
-        {
-          name: "linear",
-          enabled: false,
-          webhook: async () => new Response(null, { status: 200 }),
+  it("serves no webhook for a disabled integration, and calls an enabled one's", async () => {
+    let calls = 0;
+    const app = createRoutes([
+      {
+        name: "linear",
+        enabled: false,
+        webhook: async () => new Response(null, { status: 200 }),
+      },
+      {
+        name: "github",
+        enabled: true,
+        webhook: async () => {
+          calls++;
+          return new Response(null, { status: 200 });
         },
-        {
-          name: "github",
-          enabled: true,
-          webhook: async (_c, i) => {
-            seen.push(i);
-            return new Response(null, { status: 200 });
-          },
-        },
-        { name: "api", enabled: true },
-      ],
-      intake,
-    );
+      },
+      { name: "api", enabled: true },
+    ]);
     expect((await app.request("/webhook/linear", { method: "POST", body: "{}" })).status).toBe(404);
     expect((await app.request("/webhook/api", { method: "POST", body: "{}" })).status).toBe(404);
     expect((await app.request("/webhook/github", { method: "POST", body: "{}" })).status).toBe(200);
-    expect(seen).toHaveLength(1);
-    expect(seen[0]).toBe(intake);
+    expect(calls).toBe(1);
   });
 
   it("leaves disabled and unknown webhook routes as 404 even for oversized bodies", async () => {

@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import type { ReplyTarget } from "../../repositories/inbox.repository";
-import type { TaskIntake, TaskRef } from "../../services/task.service";
 import type { AgentSessionCreated, AgentSessionPrompted } from "../../types/agentSession";
 import type { InboxService } from "../inbox.service";
 import type { LinearTokenProvider } from "../linearTokenProvider";
+import type { TaskRef, TaskService } from "../task.service";
 
 const emitResponse = mock(() => Promise.resolve());
 const emitAction = mock(() => Promise.resolve());
@@ -62,7 +62,7 @@ const foundTask = {
 } as Task;
 
 describe("AgentSessionService", () => {
-  let intake: TaskIntake;
+  let tasks: TaskService;
   let linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
   let inboxService: InboxService;
   let assign: ReturnType<typeof mock>;
@@ -72,7 +72,6 @@ describe("AgentSessionService", () => {
   let service: InstanceType<typeof AgentSessionService>;
 
   type AssignArg = {
-    source: string;
     externalId: string;
     key: { hint: string };
     title: string;
@@ -91,7 +90,7 @@ describe("AgentSessionService", () => {
 
     assign = mock(() => Promise.resolve({ taskId: "task-1", key: "ISS-1", result: "created" }));
     findTask = mock(() => Promise.resolve(foundTask));
-    intake = { assign, findTask } as unknown as TaskIntake;
+    tasks = { assign, findTask } as unknown as TaskService;
 
     getAuthorizedLinearClient = mock(() => Promise.resolve({} as unknown as LinearClient));
     linearTokenProvider = { getAuthorizedLinearClient } as unknown as Pick<
@@ -102,7 +101,7 @@ describe("AgentSessionService", () => {
     enqueueLinearComment = mock(() => Promise.resolve());
     inboxService = { enqueueLinearComment } as unknown as InboxService;
 
-    service = new AgentSessionService(intake, linearTokenProvider, inboxService);
+    service = new AgentSessionService(tasks, linearTokenProvider, inboxService);
   });
 
   describe("handleEvent created", () => {
@@ -112,14 +111,15 @@ describe("AgentSessionService", () => {
       expect(result).toEqual({ status: "ok" });
       expect(assign).toHaveBeenCalledTimes(1);
       const arg = assign.mock.calls[0]?.[0] as AssignArg;
-      expect(arg.source).toBe("linear");
+      // The Linear-bound TaskService supplies the source.
+      expect(arg).not.toHaveProperty("source");
       expect(arg.externalId).toBe("issue-1");
       expect(arg.key).toEqual({ hint: "ISS-1" });
       expect(arg.url(ref)).toBe("https://linear.app/x/issue/ISS-1");
       expect(arg.description).toBe("desc");
       expect(arg.flags).toEqual([]);
       // The agent session id is the delegation id: the assignment row's reply
-      // target (intake stamps it as payload.target_id too).
+      // target (TaskService stamps it as payload.target_id too).
       expect(arg.target(ref)).toEqual({ id: "sess-1", spec: { kind: "linear_session" } });
 
       await flushMicrotasks();
@@ -196,7 +196,7 @@ describe("AgentSessionService", () => {
       const result = await service.handleEvent(promptedEvent());
 
       expect(result).toEqual({ status: "ok" });
-      expect(findTask).toHaveBeenCalledWith("linear", "issue-1");
+      expect(findTask).toHaveBeenCalledWith("issue-1");
       expect(enqueueLinearComment).toHaveBeenCalledWith({
         task: foundTask,
         agentActivityId: "activity-1",

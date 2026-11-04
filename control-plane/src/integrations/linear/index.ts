@@ -39,7 +39,7 @@ export class LinearIntegration implements Integration<LinearStatus> {
   ) {}
 
   // Today's responses, including 503 session_not_found when a prompt arrives
-  // before its session (Linear retries). The controller already holds the intake.
+  // before its session (Linear retries). The controller already holds its TaskService.
   async webhook(c: Context): Promise<Response> {
     if (!this.controller) return c.notFound();
     return this.controller.handleWebhook(c);

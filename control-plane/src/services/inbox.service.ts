@@ -12,13 +12,13 @@ import type {
 import type { InboxMessage } from "../types/inboxMessage";
 import type { IntegrationHooks } from "./integrationHooks";
 import type { SandboxManager } from "./sandboxManager.service";
-import type { TaskIntake } from "./task.service";
+import type { TaskService } from "./task.service";
 
 // InboxService builds the GitHub and Linear follow-up rounds (comment, review,
-// CI result, Linear comment) and queues them through TaskIntake.followUp; it
-// owns the sweep that delivers pending rows to the sandbox (recreating it from
-// the preserved PVC when it has been reaped), and the PVC-missing per-row
-// dead-letter.
+// CI result, Linear comment) and queues them through each source's
+// TaskService; it owns the sweep that delivers pending rows to the sandbox
+// (recreating it from the preserved PVC when it has been reaped), and the
+// PVC-missing per-row dead-letter.
 export const WORKSPACE_MISSING_MESSAGE =
   "The workspace for this task has been cleaned up and can no longer be resumed. " +
   "Please reach out to the harness team or open a new ticket to continue.";
@@ -29,7 +29,7 @@ export class InboxService {
     private sandboxManager: SandboxManager,
     private integrations: Record<IntegrationName, Integration>,
     private hooks: IntegrationHooks,
-    private intake: Pick<TaskIntake, "followUp">,
+    private tasks: Record<"github" | "linear", Pick<TaskService, "enqueueRound">>,
   ) {}
 
   // ──── Enqueue paths ────
@@ -45,18 +45,15 @@ export class InboxService {
   }): Promise<void> {
     const externalId = String(params.commentId);
     const prUrl = `https://github.com/${params.spec.owner}/${params.spec.repo}/pull/${params.spec.prNumber}`;
-    await this.intake.followUp({
+    await this.tasks.github.enqueueRound({
       task: params.task,
-      message: {
-        source: "github",
-        kind: "comment",
-        external_id: externalId,
-        payload: {
-          target_id: externalId, // matches reply_targets[0].id
-          body: params.body,
-          pr: { repo: params.spec.repo, pr_url: prUrl },
-          created_at: params.createdAt,
-        },
+      kind: "comment",
+      externalId,
+      payload: {
+        target_id: externalId, // matches reply_targets[0].id
+        body: params.body,
+        pr: { repo: params.spec.repo, pr_url: prUrl },
+        created_at: params.createdAt,
       },
       targets: [{ id: externalId, spec: params.spec }],
       prUrl,
@@ -130,9 +127,11 @@ export class InboxService {
       },
     ];
 
-    await this.intake.followUp({
+    await this.tasks.github.enqueueRound({
       task: params.task,
-      message: { source: "github", kind: "review", external_id: reviewIdStr, payload },
+      kind: "review",
+      externalId: reviewIdStr,
+      payload,
       targets: replyTargets,
       prUrl,
     });
@@ -148,23 +147,20 @@ export class InboxService {
     agentSessionId: string;
     body: string;
   }): Promise<void> {
-    await this.intake.followUp({
+    await this.tasks.linear.enqueueRound({
       task: params.task,
-      message: {
-        source: "linear",
-        kind: "comment",
-        // Linear activity UUID — drives idempotency at (source, kind, external_id).
-        external_id: params.agentActivityId,
-        payload: {
-          // Replies route to the Linear agent session — matches reply_targets[0].id.
-          target_id: params.agentSessionId,
-          body: params.body,
-          // Linear comment isn't PR-scoped — lives on the agent session.
-          pr: null,
-          // Linear-sourced → the daemon never injects PR discussion (gated on
-          // source == "github"), so there is no comment timestamp to scope by.
-          created_at: "",
-        },
+      kind: "comment",
+      // Linear activity UUID — drives idempotency at (source, kind, external_id).
+      externalId: params.agentActivityId,
+      payload: {
+        // Replies route to the Linear agent session — matches reply_targets[0].id.
+        target_id: params.agentSessionId,
+        body: params.body,
+        // Linear comment isn't PR-scoped — lives on the agent session.
+        pr: null,
+        // Linear-sourced → the daemon never injects PR discussion (gated on
+        // source == "github"), so there is no comment timestamp to scope by.
+        created_at: "",
       },
       targets: [{ id: params.agentSessionId, spec: { kind: "linear_session" } }],
     });
@@ -172,8 +168,11 @@ export class InboxService {
 
   // GitHub `workflow_run` completed — one row per task whose PR URL matches.
   // external_id includes runAttempt (re-runs share runId but bump attempt) and
-  // prNumber (one run can touch multiple PRs). followUp applies the per-task
-  // loop breaker.
+  // prNumber (one run can touch multiple PRs).
+  //
+  // Loop breaker. harness fixes CI → pushes → CI re-runs → may fail again, ad
+  // infinitum. Once a task has `limit` ci_result rows, whatever their status,
+  // further failures are dropped and logged. 0 or negative: no cap.
   async enqueueCiResult(params: {
     task: Pick<Task, "id" | "key">;
     runId: number;
@@ -187,26 +186,24 @@ export class InboxService {
     owner: string;
     repo: string;
     prNumber: number;
+    limit: number;
   }): Promise<void> {
     const runIdStr = String(params.runId);
     const externalId = `workflow_run:${params.runId}:${params.runAttempt}:${params.prNumber}`;
     const prUrl = `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`;
-    await this.intake.followUp({
+    const result = await this.tasks.github.enqueueRound({
       task: params.task,
-      message: {
-        source: "github",
-        kind: "ci_result",
-        external_id: externalId,
-        payload: {
-          target_id: runIdStr,
-          workflow_name: params.workflowName,
-          workflow_path: params.workflowPath,
-          conclusion: params.conclusion,
-          run_url: params.runUrl,
-          head_sha: params.headSha,
-          head_branch: params.headBranch,
-          pr: { repo: params.repo, pr_url: prUrl },
-        },
+      kind: "ci_result",
+      externalId,
+      payload: {
+        target_id: runIdStr,
+        workflow_name: params.workflowName,
+        workflow_path: params.workflowPath,
+        conclusion: params.conclusion,
+        run_url: params.runUrl,
+        head_sha: params.headSha,
+        head_branch: params.headBranch,
+        pr: { repo: params.repo, pr_url: prUrl },
       },
       targets: [
         {
@@ -223,7 +220,17 @@ export class InboxService {
         },
       ],
       prUrl,
+      limit: params.limit,
     });
+    if ("dropped" in result && result.dropped === "limit") {
+      logger.warn("ci_result loop breaker tripped — dropping CI failure", {
+        taskId: params.task.id,
+        seen: result.count,
+        max: params.limit,
+        runId: params.runId,
+        prNumber: params.prNumber,
+      });
+    }
   }
 
   // ──── Sweep ────

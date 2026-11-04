@@ -24,7 +24,7 @@ function asRows<T>(result: unknown): T[] {
 }
 
 export class TaskRepository {
-  // TaskIntake.assign's transaction. Inserts the task, or finds it by
+  // TaskService.assign's transaction. Inserts the task, or finds it by
   // (source, external_id) and locks it, then compares the stored delegation
   // (the assignment row's reply target) with the incoming one: when both carry
   // an order, one not above the stored order is a duplicate; otherwise the
@@ -160,7 +160,7 @@ export class TaskRepository {
     return row ? { ...pick, externalId, url } : null;
   }
 
-  // Restart: assign's newer delegation, or TaskIntake.restart (API). PREEMPTS
+  // Restart: assign's newer delegation, or TaskService.restart. PREEMPTS
   // any in-flight run and restarts from scratch, in one tx (the caller's, when
   // given: assign already holds the task row lock):
   //   1. Reset the task to a clean slate — pvc_name / sandbox_id / owner_id /

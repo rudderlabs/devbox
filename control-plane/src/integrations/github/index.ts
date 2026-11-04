@@ -39,7 +39,7 @@ export class GithubIntegration implements Integration<GithubStatus> {
   ) {}
 
   // Today's responses: 403 for untrusted actors, 503 when the trusted set
-  // can't be fetched. The controller already holds the intake.
+  // can't be fetched. The controller already holds its TaskService.
   async webhook(c: Context): Promise<Response> {
     if (!this.controller) return c.notFound();
     return this.controller.handleWebhook(c);

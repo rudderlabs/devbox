@@ -737,9 +737,13 @@ describe("TaskProcessorService", () => {
       Object.assign(inboxRepo, { getById: mock(() => Promise.resolve(row)), markFailed });
       // The real dead-letter path in place of the stub.
       Object.assign(service, {
-        inboxService: new RealInboxService(inboxRepo, sandboxManager, integrations, hooks, {
-          followUp: mock(),
-        }),
+        inboxService: new RealInboxService(
+          inboxRepo,
+          sandboxManager,
+          integrations,
+          hooks,
+          {} as never,
+        ),
       });
 
       await (
