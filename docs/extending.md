@@ -123,7 +123,9 @@ rounds (`harness/src/harness/followup.py`).
 
 The database and the CLI don't list the sources: `tasks.source` is text, and
 the control plane checks a source against the registered integrations. The
-old `task_source` enum type is still in the database, unused, for one release.
+old `task_source` enum type is still in the database, kept so pods on the
+previous release keep working during an upgrade, until a later migration
+drops it.
 
 ## The sandbox runtime
 
