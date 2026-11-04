@@ -71,6 +71,14 @@ schema, so each migration is written to keep the previous release working. A
 release that needs more, such as a step before upgrading, says so in its
 release notes.
 
+A migration that changes a column's type can't fully do that. The old pods
+keep the statements they prepared, and Postgres refuses a cached statement
+whose result type changed (`cached plan must not change result type`). Outside
+a transaction the control plane's database client prepares the statement again
+and goes on; inside one it can't, so a statement that returns the column fails
+once on each database connection, then works. The release notes of such a
+release say what that means for it.
+
 ## Rollbacks: migrations only go forward
 
 There are no down migrations. Rolling back the control plane does not roll
