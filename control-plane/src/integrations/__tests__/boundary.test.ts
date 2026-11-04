@@ -11,8 +11,9 @@ const INTEGRATIONS = join(SRC, "integrations");
 const SOURCE = /\.[cm]?([jt]sx?)$/;
 
 // Besides its own folder and packages (node:*, hono, npm), a file under
-// integrations/<name>/ may import these, the API clients in clients/, and the
-// database row types (type-only).
+// integrations/<name>/ may import these, its own API clients (clients/<name>*,
+// so Linear never calls GitHub: the code host does), and the database row
+// types (type-only).
 const SHARED = [
   "integrations/types",
   "integrations/outbound",
@@ -40,7 +41,8 @@ function violation(file: string, spec: string, typeOnly: boolean): string | unde
   const target = relative(SRC, resolve(dirname(file), spec)).replace(SOURCE, "");
   const own = relative(SRC, dirname(file)).split("/").slice(0, 2).join("/");
   if (target === own || target.startsWith(`${own}/`)) return undefined;
-  if (SHARED.includes(target) || target.startsWith("clients/")) return undefined;
+  const name = own.split("/")[1];
+  if (SHARED.includes(target) || target.startsWith(`clients/${name}`)) return undefined;
   if (typeOnly && TYPES_ONLY.includes(target)) return undefined;
   return why;
 }
@@ -63,7 +65,7 @@ const violations = (file: string, code: string) =>
     .filter(Boolean);
 
 describe("integration folders", () => {
-  it("import only their own files, the shared integration files, clients and packages", () => {
+  it("import only their own files, the shared integration files, their own clients and packages", () => {
     expect(files.map((f) => relative(INTEGRATIONS, f))).toEqual(
       expect.arrayContaining(["api/index.ts", "github/index.ts", "linear/index.ts"]),
     );
@@ -72,7 +74,7 @@ describe("integration folders", () => {
     expect(files.flatMap((file) => violations(file, readFileSync(file, "utf8")))).toEqual([]);
   });
 
-  it("the check rejects core modules, another integration and a value import of the schema", () => {
+  it("the check rejects core modules, another integration, its clients and a value import of the schema", () => {
     const file = join(INTEGRATIONS, "linear", "index.ts");
     const code = [
       'import type { Task } from "../../db/schema";',
@@ -88,6 +90,7 @@ describe("integration folders", () => {
       'import { Hono } from "hono";',
       'import { AgentSessionService } from "./agentSession.js";',
       'import { getUserById } from "../../clients/github";',
+      'import { LinearTokenError } from "../../clients/linearOauth";',
     ].join("\n");
     expect(violations(file, code)).toEqual([
       "integrations/linear/index.ts imports ../../db/schema",
@@ -96,6 +99,7 @@ describe("integration folders", () => {
       "integrations/linear/index.ts imports ../../config",
       "integrations/linear/index.ts imports ../../logger",
       "integrations/linear/index.ts imports /abs/integrations/types",
+      "integrations/linear/index.ts imports ../../clients/github",
       "integrations/linear/index.ts imports ../../repositories/inbox.repository",
     ]);
   });
