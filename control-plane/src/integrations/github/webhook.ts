@@ -496,9 +496,6 @@ export class GitHubWebhookController {
 
     const parsed = parseGithubEvent(eventHeader, payload, this.mention);
 
-    // this.log.debug("github webhook accepted: ", { userId, userLogin, prOpenerLogin });
-    // this.log.debug("parsed payload: ", { parsed });
-
     if (!parsed) return c.json({ status: "ignored" }, 200);
 
     if (parsed.kind === "inline_review_comment_dropped_as_dedup") {

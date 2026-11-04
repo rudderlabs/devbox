@@ -102,9 +102,10 @@ export async function withTimeout<T>(
 // Hands `message` for one of `round`'s targets to the round's integration,
 // under the send timeout. `integrations` are the registry's enabled ones: an
 // integration this build doesn't know (rows written by a newer build before a
-// rollback) or a disabled one is skipped and logged, which counts as sent. Any other failure is logged and the message
-// dropped, except a RetryableError (nothing was sent), which is rethrown: each
-// caller decides whether it holds or drops.
+// rollback) or a disabled one is skipped and logged, which counts as sent. Any
+// other failure is logged and the message dropped, except a RetryableError
+// (nothing was sent), which is rethrown: each caller decides whether it holds
+// or drops.
 export async function deliverToRound(
   integrations: Readonly<Record<string, Integration>>,
   round: InboxRow,
