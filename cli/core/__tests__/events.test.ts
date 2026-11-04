@@ -349,13 +349,36 @@ describe("followTask from a write's round", () => {
   });
 });
 
-describe("followTask without a round to report", () => {
-  // The task state alone never ends a wait.
-  it("keeps waiting when the task failed before any round event", async () => {
+// A task from before its server logged every task can have an empty log: once
+// it is settled, there is no round to wait for.
+describe("followTask on a task with an empty log", () => {
+  function empty(state: Parameters<typeof stateFrame>[0]): Stub {
     const stub = createStub();
     serveEvents(stub, REF, []);
-    serveStream(stub, REF, [() => sse([stateFrame("failed")], "hang")]);
-    const r = await run(stub, { ref: REF, from: "latest", untilDone: true, timeoutMs: 50 });
+    serveStream(stub, REF, [() => sse([stateFrame(state)], "hang")]);
+    return stub;
+  }
+
+  it.each([["latest" as const], [{ after: 0 }]])(
+    "ends at once when idle (from %p)",
+    async (from) => {
+      const r = await run(empty("idle"), { ref: REF, from, untilDone: true });
+      expect(r.items).toEqual([done({ outcome: null, failed: false })]);
+    },
+  );
+
+  it("fails at once when failed", async () => {
+    const r = await run(empty("failed"), { ref: REF, from: "latest", untilDone: true });
+    expect(r.items).toEqual([done({ outcome: null, failed: true, reason: "the task failed" })]);
+  });
+
+  it("keeps waiting while the task is running", async () => {
+    const r = await run(empty("running"), {
+      ref: REF,
+      from: "latest",
+      untilDone: true,
+      timeoutMs: 50,
+    });
     expect(r.items).toEqual([{ kind: "timeout" }]);
   });
 });

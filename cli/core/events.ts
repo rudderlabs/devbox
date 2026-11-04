@@ -161,8 +161,15 @@ class RoundTracker {
   result(state: string | undefined): RoundResult | undefined {
     const settled = state === "idle" || state === "failed";
     const target = this.fixed ?? this.latest;
-    // No round seen yet: the task's state alone doesn't say how a round ended.
-    if (target === null) return undefined;
+    // No round seen: a settled task has none to wait for (a task from before
+    // its server logged every task can have an empty log). Unsettled, the
+    // task's state alone doesn't say how a round will end.
+    if (target === null) {
+      if (!settled) return undefined;
+      return state === "failed"
+        ? { outcome: null, failed: true, reason: "the task failed" }
+        : { outcome: null, failed: false };
+    }
     const end = this.ended.get(target);
     // A superseded round is over at once. Other ends wait for the task to
     // settle: CP marks the round responded before it logs `completed`, so the
