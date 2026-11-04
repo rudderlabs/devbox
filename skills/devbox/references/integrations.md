@@ -73,3 +73,5 @@ Kubernetes only: `integrations.slack` in the target file and `SLACK_BOT_TOKEN`
 `bun run github:disable` / `bun run linear:disable` set `enabled: false` and
 keep the settings, so the setup turns it back on. `--forget` deletes the
 settings and saved secrets: ask first. Apply with `up` (or the k8s command).
+Open Linear tasks keep running with nothing posted to Linear; GitHub rounds
+already queued run without replies.

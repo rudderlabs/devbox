@@ -684,6 +684,7 @@ way.
 | `GITHUB_CI_RESULT_ENABLED` | | `true` sends a failed CI run on a task's pull request to the task. The setting `integrations.githubApp.ciResults` sets it. |
 | `GITHUB_CI_RESULT_MAX_PER_TASK` | `20` | The most CI failures sent to one task. Environment only. |
 | `SANDBOX_GIT_NAME`, `SANDBOX_GIT_EMAIL` | | The commit identity of the agent in every sandbox. Set both or neither. Unset, the harness image's own identity applies. The chart sets them from `git.name` and `git.email`. |
+| `SHUTDOWN_DRAIN_MS` | `10000` | How long shutdown waits, in milliseconds, for in-flight provisions and integration hooks once it has finished the task it was reconciling. On Kubernetes, set it with `extraEnv` and raise `controlPlane.terminationGracePeriodSeconds` by as much. |
 
 ### Settings for the token minter
 

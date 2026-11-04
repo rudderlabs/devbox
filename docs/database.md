@@ -42,9 +42,8 @@ process exits.
 Changing a table locks it: the migration waits for transactions already using
 the table, and until the run commits, other queries on that table wait for the
 migration. The migrations that change `tasks` and `inbox` start with
-`SET LOCAL lock_timeout = '5s'`, so each of
-their statements waits at most 5 seconds for a lock. The setting lasts until
-the end of the run's transaction.
+`SET LOCAL lock_timeout = '5s'`, so each of their statements waits at most 5
+seconds for a lock. The setting lasts until the end of the run's transaction.
 
 When the wait runs out, Postgres cancels the statement (`canceling statement
 due to lock timeout`), the run rolls back, and the control plane exits. It is
@@ -68,16 +67,16 @@ the old ones keep serving, and an old pod stops as a new one becomes ready.
 With four or more replicas, up to a quarter of the old pods may stop first. As
 soon as the first new pod has migrated, the old pods run against the new
 schema, so each migration is written to keep the previous release working. A
-release that needs more, such as a step before upgrading, says so in its
-release notes.
+release that needs more, such as a step before upgrading, says so in
+[the release's notes on GitHub](https://github.com/rudderlabs/devbox/releases).
 
 A migration that changes a column's type can't fully do that. The old pods
 keep the statements they prepared, and Postgres refuses a cached statement
 whose result type changed (`cached plan must not change result type`). Outside
 a transaction the control plane's database client prepares the statement again
 and goes on; inside one it can't, so a statement that returns the column fails
-once on each database connection, then works. The release notes of such a
-release say what that means for it.
+once on each database connection, then works. The notes of such a release on
+GitHub say what that means for it.
 
 ## Rollbacks: migrations only go forward
 

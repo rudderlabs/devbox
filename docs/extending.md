@@ -69,12 +69,16 @@ The API (`control-plane/src/routes/api.ts`, `control-plane/src/services/apiTask.
 is the documented way to create tasks. Every source of tasks and follow-up
 rounds, the API included, is an integration in its own folder under
 `control-plane/src/integrations/`. A new source is one more folder there and
-one entry in the list in `control-plane/src/integrations/index.ts`. The
-harness, though, treats a new source as not live, and sends it no progress
-messages, unless `LIVE_CHANNEL_SOURCES` in
-`harness/src/harness/handlers/_common.py` lists it. It also adds the PR
-discussion to a follow-up only for `github` rounds
-(`harness/src/harness/followup.py`).
+one entry in the list in `control-plane/src/integrations/index.ts`. Its
+settings must also reach the control plane's process: list them in
+`control-plane/.env.example`, pass them in the `control-plane` service's
+`environment:` in `control-plane/docker-compose.yml`, and set them in the Helm
+chart (`deploy/helm/devbox/templates/control-plane.yaml`, from a value in
+`values.yaml`), or have operators set them with `extraEnv`. The harness,
+though, treats a new source as not live, and sends it no progress messages,
+unless `LIVE_CHANNEL_SOURCES` in `harness/src/harness/handlers/_common.py`
+lists it. It also adds the PR discussion to a follow-up only for `github`
+rounds (`harness/src/harness/followup.py`).
 
 - **The definition.** The folder exports an `IntegrationDefinition`
   (`control-plane/src/integrations/types.ts`). Its `name` is stored as the
@@ -91,9 +95,9 @@ discussion to a follow-up only for `github` rounds
   for the harness's answers, optional lifecycle hooks, and its status. The
   control plane calls it only through the registry
   (`control-plane/src/services/integrationRegistry.ts`), which skips a
-  disabled integration, bounds each call with a timeout and an abort signal,
-  and logs a failure. `onTaskStarted` runs before every fresh-provision
-  attempt, so it must be safe to repeat.
+  disabled integration, bounds each `deliver` and hook call with a timeout and
+  an abort signal, and logs a failure. `onTaskStarted` runs before every
+  fresh-provision attempt, so it must be safe to repeat.
 - **The code host.** GitHub is the only code host, and the control plane
   handles new pull requests itself
   (`control-plane/src/services/codeHost.service.ts`). It posts a comment on
@@ -118,7 +122,8 @@ discussion to a follow-up only for `github` rounds
   `control-plane/src/integrations/__tests__/boundary.test.ts` checks this.
 
 The database and the CLI don't list the sources: `tasks.source` is text, and
-the control plane checks a source against the registered integrations.
+the control plane checks a source against the registered integrations. The
+old `task_source` enum type is still in the database, unused, for one release.
 
 ## The sandbox runtime
 

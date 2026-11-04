@@ -432,13 +432,11 @@ every 6 hours by default).
 
 A new control plane pod migrates the database when it starts, while the old
 pods keep serving. For a while old pods run against the new schema, and each
-migration is written to keep them working. While they overlap, an old pod can
-answer a webhook that races its own redelivery with a 500, such as a
-duplicate-key error: the other request stored the round, so nothing is lost.
+migration is written to keep them working.
 
 [docs/database.md](../database.md) explains when migrations run, the lock
 timeout and rollbacks. Steps a particular release needs before or after
-upgrading are in its release notes.
+upgrading are in [the release's notes on GitHub](https://github.com/rudderlabs/devbox/releases).
 
 ## Uninstall
 
