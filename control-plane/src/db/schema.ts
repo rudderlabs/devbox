@@ -136,7 +136,7 @@ export const inbox = pgTable(
   ],
 );
 
-// Progress log for API tasks (daemon events + CP events). `id` is the API/SSE
+// Every task's progress log (daemon events + CP events). `id` is the API/SSE
 // cursor. The daemon's `seq` restarts at 1 after a restart, so it is stored for
 // information only and is not unique.
 export const taskEvents = pgTable(

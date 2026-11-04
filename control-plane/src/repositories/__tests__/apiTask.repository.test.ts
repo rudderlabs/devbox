@@ -33,7 +33,8 @@ const create = async (o: { createdBy?: string } = {}) => {
   return { taskId: t.id, key: t.key };
 };
 
-// An API message: a comment round through the follow-up transaction.
+// An API message: a comment round through the follow-up transaction, with
+// its text for message_queued as TaskService passes it.
 const appendMessage = async (p: { task: { id: string; key: string }; body: string }) => {
   const result = await inboxRepo.appendFollowUp({
     taskId: p.task.id,
@@ -51,6 +52,7 @@ const appendMessage = async (p: { task: { id: string; key: string }; body: strin
       },
     },
     replyTargets: [apiSessionTarget(p.task.id)],
+    body: p.body,
   });
   if (!("roundId" in result)) throw new Error(`dropped: ${result.dropped}`);
   return result;
@@ -209,7 +211,11 @@ describe("ApiTaskRepository", () => {
         sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
       );
       expect([...events].slice(1)).toEqual([
-        { type: "message_queued", inbox_id: roundId, data: { body: "more" } },
+        {
+          type: "message_queued",
+          inbox_id: roundId,
+          data: { source: "api", kind: "comment", body: "more" },
+        },
       ]);
     });
 
@@ -282,6 +288,7 @@ describe("ApiTaskRepository", () => {
         taskId,
         inboxPayload: { title: "t", description: null, external_url: "u", target_id: taskId },
         inboxReplyTargets: [{ id: taskId, spec: { kind: "api_session" } }],
+        flags: [],
       });
       // The re-run completes later than the superseded follow-up's failure.
       await db.execute(sql`
@@ -327,7 +334,7 @@ describe("ApiTaskRepository", () => {
         taskId,
         inboxPayload: { title: "New", description: "D2", external_url: "u", target_id: taskId },
         inboxReplyTargets: [{ id: taskId, spec: { kind: "api_session" } }],
-        api: { title: "New", description: "D2", experimentalFlags: ["BAR"] },
+        flags: ["BAR"],
       });
       expect(res).toEqual({
         prevSandboxId: null,
@@ -373,7 +380,7 @@ describe("ApiTaskRepository", () => {
             taskId,
             inboxPayload: { title: "New", description: null, external_url: "u", target_id: taskId },
             inboxReplyTargets: [{ id: taskId, spec: { kind: "api_session" } }],
-            api: { title: "New", description: null, experimentalFlags: [] },
+            flags: [],
           }),
         ).rejects.toThrow();
         expect((await repo.findById(taskId))?.title).toBe("Add a thing");

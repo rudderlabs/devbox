@@ -11,7 +11,7 @@ mock.module("../../config", () => ({
 
 const { db, schema } = await import("../../db");
 const { TaskRepository } = await import("../task.repository");
-const { TaskEventRepository, insertCpEventIfApi } = await import("../taskEvent.repository");
+const { TaskEventRepository, insertCpEvent } = await import("../taskEvent.repository");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
 const repo = new TaskRepository();
@@ -260,6 +260,48 @@ describe("TaskRepository", () => {
         url: "https://linear.app/x/issue/ISS-1/v2",
         metadata: { experimentalFlags: ["NEW"] },
       });
+      // A re-delegation logs task_restarted like any restart, on the new run.
+      const [assignment] = await db.execute<{ id: string }>(
+        sql`SELECT id FROM inbox WHERE kind = 'assignment'`,
+      );
+      const events = await db.execute(
+        sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...events].map((e) => e.type)).toEqual(["task_created", "task_restarted"]);
+      expect(events[1]).toEqual({
+        type: "task_restarted",
+        inbox_id: assignment?.id,
+        data: {
+          title: "Fix auth v2",
+          description: "desc",
+          experimental_flags: ["NEW"],
+          superseded_round_ids: [],
+        },
+      });
+    });
+
+    it("rolls back a re-delegation when its task_restarted insert fails", async () => {
+      const { id: taskId } = await assignLinear({ session: "sess-1" });
+      await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-old' WHERE id = ${taskId}`);
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'task_restarted')`,
+      );
+      try {
+        await expect(assignLinear({ session: "sess-2", title: "Fix auth v2" })).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      const task = await repo.getById(taskId);
+      expect({ title: task?.title, sandboxId: task?.sandboxId }).toEqual({
+        title: "Fix auth",
+        sandboxId: "sb-old",
+      });
+      const [assignment] = await db.execute<{ reply_targets: unknown }>(
+        sql`SELECT reply_targets FROM inbox WHERE kind = 'assignment'`,
+      );
+      expect(assignment?.reply_targets).toEqual([linearTarget("sess-1")]);
+      const events = await db.execute(sql`SELECT type FROM task_events`);
+      expect([...events]).toEqual([{ type: "task_created" }]);
     });
 
     it("stamps task_id/task_key on the assignment payload from the task row", async () => {
@@ -277,6 +319,7 @@ describe("TaskRepository", () => {
         taskId,
         inboxPayload: { ...assignmentContent, title: "Fix auth v2" },
         inboxReplyTargets: [linearTarget("sess-2")],
+        flags: [],
       });
       const restarted = await db.execute<{ payload: unknown }>(
         sql`SELECT payload FROM inbox WHERE task_id = ${taskId}`,
@@ -321,6 +364,7 @@ describe("TaskRepository", () => {
         taskId,
         inboxPayload: assignmentContent,
         inboxReplyTargets: [linearTarget("sess-2")],
+        flags: [],
       });
 
       // The preempted sandbox is returned for the caller to kill.
@@ -768,7 +812,7 @@ describe("TaskRepository", () => {
         sql`SELECT task_id, origin, type, inbox_id, seq::int AS seq, data FROM task_events ORDER BY id`,
       );
 
-    it("advances the cursor; owner-guarded + monotonic-guarded (Linear: logs nothing)", async () => {
+    it("advances the cursor; owner-guarded + monotonic-guarded (Linear: logs the event)", async () => {
       const t = await insertTask({ ownerId: "pod-a", lastObservedEventSeq: 2 });
       expect(
         await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-x", event: ev(5) }),
@@ -781,7 +825,17 @@ describe("TaskRepository", () => {
       ).toEqual([]);
       const [row] = await db.select().from(schema.tasks);
       expect(row?.lastObservedEventSeq).toBe(5);
-      expect(await events()).toEqual([]);
+      // Only the advance is logged: not the call without the lease, nor the replay.
+      expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "daemon",
+          type: "agent_action",
+          inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+          seq: 5,
+          data: ev(5),
+        },
+      ]);
     });
 
     it("renews the lease with each advance", async () => {
@@ -843,10 +897,11 @@ describe("TaskRepository", () => {
     it("after a restart the old owner writes nothing and the new run's seq 1 is logged", async () => {
       const t = await insertTask({ source: "api", ownerId: "pod-a", lastObservedEventSeq: 5 });
       await insertInboxRow(t.id, { status: "delivered" });
-      await repo.restartTaskWithInbox({
+      const { assignmentId } = await repo.restartTaskWithInbox({
         taskId: t.id,
         inboxPayload: { title: "t", description: null, external_url: "u", target_id: t.id },
         inboxReplyTargets: [{ id: t.id, spec: { kind: "api_session" } }],
+        flags: [],
       });
       expect(
         await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(6) }),
@@ -854,6 +909,19 @@ describe("TaskRepository", () => {
       await db.execute(sql`UPDATE tasks SET owner_id = 'pod-b' WHERE id = ${t.id}`);
       await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-b", event: ev(1) });
       expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "control_plane",
+          type: "task_restarted",
+          inbox_id: assignmentId,
+          seq: null,
+          data: {
+            title: "t",
+            description: null,
+            experimental_flags: [],
+            superseded_round_ids: [],
+          },
+        },
         {
           task_id: t.id,
           origin: "daemon",
@@ -870,7 +938,7 @@ describe("TaskRepository", () => {
     it("pages by id after the cursor, ascending", async () => {
       const t = await insertTask({ source: "api" });
       for (const type of ["a", "b", "c"]) {
-        await insertCpEventIfApi(db, {
+        await insertCpEvent(db, {
           taskId: t.id,
           type: "round_failed",
           inboxId: null,
@@ -1272,7 +1340,7 @@ describe("TaskRepository", () => {
       ]);
     });
 
-    it("a lost lease or a Linear task logs nothing", async () => {
+    it("a lost lease logs nothing; a Linear task logs like any other", async () => {
       const api = await insertTask({ source: "api", ownerId: "pod-b" });
       const lin = await insertTask({ ownerId: "pod-a" });
       await repo.attachSandboxResources({
@@ -1287,7 +1355,41 @@ describe("TaskRepository", () => {
         sandboxId: "s",
         pvcName: "p",
       });
-      expect([...(await events())]).toEqual([]);
+      await repo.setSandboxId({ taskId: lin.id, ownerId: "pod-a", sandboxId: "s2" });
+      const rows = await db.execute(
+        sql`SELECT task_id, type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...rows]).toEqual([
+        { task_id: lin.id, type: "sandbox_started", inbox_id: null, data: { mode: "fresh" } },
+        { task_id: lin.id, type: "sandbox_started", inbox_id: null, data: { mode: "resume" } },
+      ]);
+    });
+
+    it("rolls back the sandbox stamp when the event insert fails", async () => {
+      const lin = await insertTask({ ownerId: "pod-a" });
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'sandbox_started')`,
+      );
+      try {
+        await expect(
+          repo.attachSandboxResources({
+            taskId: lin.id,
+            ownerId: "pod-a",
+            sandboxId: "s",
+            pvcName: "p",
+          }),
+        ).rejects.toThrow();
+        await expect(
+          repo.setSandboxId({ taskId: lin.id, ownerId: "pod-a", sandboxId: "s2" }),
+        ).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      const task = await repo.getById(lin.id);
+      expect({ sandboxId: task?.sandboxId, pvcName: task?.pvcName }).toEqual({
+        sandboxId: null,
+        pvcName: null,
+      });
     });
   });
 });

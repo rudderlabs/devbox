@@ -145,8 +145,17 @@ describe("TaskService", () => {
           reply_targets: [session("sess-1")],
         },
       ]);
-      // task_events is API-only.
-      expect(await db.execute(sql`SELECT 1 FROM task_events`)).toHaveLength(0);
+      // A Linear task is logged like any other, from its assignment round.
+      const [round] = await db.execute<{ id: string }>(sql`SELECT id FROM inbox`);
+      const events = await db.execute(sql`SELECT task_id, type, inbox_id, data FROM task_events`);
+      expect([...events]).toEqual([
+        {
+          task_id: res.taskId,
+          type: "task_created",
+          inbox_id: round?.id,
+          data: { title: "Fix auth", description: "desc", experimental_flags: ["FOO"] },
+        },
+      ]);
     });
 
     it("a hint another task holds, in any case, fails the assign", async () => {
@@ -367,8 +376,15 @@ describe("TaskService", () => {
       expect(
         await github.enqueueRound({ task, ...ghComment("555"), targets: [ghTarget("555")] }),
       ).toEqual({ dropped: "duplicate" });
-      // A GitHub round on an API task writes nothing to the log.
-      expect(await db.execute(sql`SELECT 1 FROM task_events`)).toHaveLength(0);
+      // A GitHub round is logged once, with the comment's text; the redelivery adds nothing.
+      const events = await db.execute(sql`SELECT type, inbox_id, data FROM task_events`);
+      expect([...events]).toEqual([
+        {
+          type: "message_queued",
+          inbox_id: row?.id,
+          data: { source: "github", kind: "comment", body: "@bot fix" },
+        },
+      ]);
     });
 
     it("a review whose id equals a stored comment id is a duplicate while the old index exists", async () => {
@@ -406,9 +422,10 @@ describe("TaskService", () => {
         }),
       ).toEqual({ dropped: "stale" });
       expect(await db.execute(sql`SELECT 1 FROM inbox`)).toHaveLength(0);
+      expect(await db.execute(sql`SELECT 1 FROM task_events`)).toHaveLength(0);
     });
 
-    it("writes message_queued for an inserted API message only", async () => {
+    it("writes message_queued for an inserted API message", async () => {
       const task = await insertTask({ key: "DBX-API-1" });
       const message: RoundDraft & { externalId: string } = {
         kind: "comment",
@@ -425,9 +442,70 @@ describe("TaskService", () => {
         {
           type: "message_queued",
           inbox_id: (first as { roundId: string }).roundId,
-          data: { body: "more" },
+          data: { source: "api", kind: "comment", body: "more" },
         },
       ]);
+    });
+
+    it("message_queued carries every round's source and kind, and only a comment's body", async () => {
+      const task = await insertTask({ key: "DBX-API-1", prs: [PR] });
+      const rounds = [
+        await linear.enqueueRound({
+          task,
+          kind: "comment",
+          externalId: "activity-1",
+          payload: { target_id: "activity-1", body: "and the tests", pr: null, created_at: "" },
+          targets: [session("activity-1")],
+        }),
+        await github.enqueueRound({
+          task,
+          kind: "review",
+          externalId: "900",
+          payload: {
+            review_body: { target_id: "900", body: "needs work" },
+            inline_comments: [],
+            pr: { repo: "r", pr_url: PR },
+            created_at: "",
+          },
+          targets: [
+            {
+              id: "900",
+              spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 7, reviewId: 900 },
+            },
+          ],
+        }),
+        await github.enqueueRound({ task, ...ciResult(1), targets: [ghTarget("1")] }),
+      ].map((r) => (r as { roundId: string }).roundId);
+      const events = await db.execute(
+        sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...events]).toEqual([
+        {
+          type: "message_queued",
+          inbox_id: rounds[0],
+          data: { source: "linear", kind: "comment", body: "and the tests" },
+        },
+        {
+          type: "message_queued",
+          inbox_id: rounds[1],
+          data: { source: "github", kind: "review" },
+        },
+        {
+          type: "message_queued",
+          inbox_id: rounds[2],
+          data: { source: "github", kind: "ci_result" },
+        },
+      ]);
+    });
+
+    it("a round dropped at the limit logs nothing", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      await github.enqueueRound({ task, ...ciResult(1), targets: [ghTarget("1")], limit: 1 });
+      expect(
+        await github.enqueueRound({ task, ...ciResult(2), targets: [ghTarget("2")], limit: 1 }),
+      ).toEqual({ dropped: "limit", count: 1 });
+      const events = await db.execute(sql`SELECT type FROM task_events`);
+      expect([...events]).toEqual([{ type: "message_queued" }]);
     });
 
     // GitHub's CI loop breaker: at most 20 ci_result rounds per task.
@@ -568,14 +646,18 @@ describe("TaskService", () => {
       expect(row).toEqual({ title: "t" });
     });
 
-    it("replaces the definition, delegates through the target and kills the old sandbox", async () => {
-      const { taskId } = await assignLinear(session("sess-1"), { flags: ["OLD"] });
+    it("replaces the definition, keeps the requester, delegates through the target and kills the old sandbox", async () => {
+      const ann = { id: "u-1", displayName: "Ann", codeHost: "unlinked" as const };
+      const { taskId } = await assignLinear(session("sess-1"), { flags: ["OLD"], requester: ann });
       await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-old' WHERE id = ${taskId}`);
       await linear.restart(taskId, { ...def(session("sess-9")), flags: ["NEW"] });
-      const [task] = await db.execute(sql`SELECT title, metadata, sandbox_id FROM tasks`);
+      const [task] = await db.execute(
+        sql`SELECT title, external_url, metadata, sandbox_id FROM tasks`,
+      );
       expect(task).toEqual({
         title: "T2",
-        metadata: { experimentalFlags: ["NEW"] },
+        external_url: "https://linear.app/x/issue/ISS-1",
+        metadata: { experimentalFlags: ["NEW"], requester: ann },
         sandbox_id: null,
       });
       const [round] = await db.execute(sql`SELECT status, payload, reply_targets FROM inbox`);
@@ -593,6 +675,23 @@ describe("TaskService", () => {
       });
       expect(killSandbox).toHaveBeenCalledWith("sb-old");
       expect(track).toHaveBeenCalledWith(taskId, "killSandbox", expect.any(Promise));
+      // Every source's restart is logged, on the new run.
+      const [assignment] = await db.execute<{ id: string }>(sql`SELECT id FROM inbox`);
+      const events = await db.execute(
+        sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...events].slice(1)).toEqual([
+        {
+          type: "task_restarted",
+          inbox_id: assignment?.id,
+          data: {
+            title: "T2",
+            description: null,
+            experimental_flags: ["NEW"],
+            superseded_round_ids: [],
+          },
+        },
+      ]);
     });
   });
 

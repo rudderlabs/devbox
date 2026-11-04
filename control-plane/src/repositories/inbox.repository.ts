@@ -4,12 +4,11 @@ import type { Task } from "../db/schema";
 import { logger } from "../logger";
 import type {
   AssignmentPayload,
-  CommentPayload,
   InboxKind,
   InboxMessage,
   TaskIdentity,
 } from "../types/inboxMessage";
-import { insertCpEventIfApi, type SqlExecutor, type Tx } from "./taskEvent.repository";
+import { insertCpEvent, type SqlExecutor, type Tx } from "./taskEvent.repository";
 
 // Re-export contract types so existing repo-import sites stay valid without
 // reaching into types/ directly.
@@ -157,14 +156,15 @@ export class InboxRepository {
   // before inbox, and task_events ids handed out in commit order per task.
   // Drops the round when `prUrl` is no longer one of the task's PRs (a restart
   // cleared it) or when the task already has `limit` rounds of this source and
-  // kind, and as a duplicate when the round is already stored. message_queued
-  // is written for an inserted API message.
+  // kind, and as a duplicate when the round is already stored. An inserted
+  // round gets message_queued: its source and kind, and `body` when given.
   async appendFollowUp(p: {
     taskId: string;
     message: NewInboxMessage;
     replyTargets: ReplyTarget[];
     prUrl?: string;
     limit?: number;
+    body?: string; // a comment round's text, for message_queued
   }): Promise<
     { roundId: string } | { dropped: "duplicate" | "stale" } | { dropped: "limit"; count: number }
   > {
@@ -208,14 +208,13 @@ export class InboxRepository {
         tx,
       );
       if (!row) return { dropped: "duplicate" };
-      if (message.source === "api" && message.kind === "comment") {
-        await insertCpEventIfApi(tx, {
-          taskId: p.taskId,
-          type: "message_queued",
-          inboxId: row.id,
-          data: { body: (message.payload as CommentPayload).body },
-        });
-      }
+      await insertCpEvent(tx, {
+        taskId: p.taskId,
+        type: "message_queued",
+        inboxId: row.id,
+        // An undefined body is left out of the JSON.
+        data: { source: message.source, kind: message.kind, body: p.body },
+      });
       return { roundId: row.id };
     });
   }
@@ -330,7 +329,7 @@ export class InboxRepository {
       const failed = asRows<RawInboxRow>(result).map(mapRow);
       // Write one round_failed event per failed row in the same transaction.
       for (const row of failed) {
-        await insertCpEventIfApi(tx, {
+        await insertCpEvent(tx, {
           taskId: params.taskId,
           type: "round_failed",
           inboxId: row.id,
@@ -373,7 +372,7 @@ export class InboxRepository {
       `);
       const rows = asRows<{ id: string; task_id: string }>(result);
       for (const row of rows) {
-        await insertCpEventIfApi(tx, {
+        await insertCpEvent(tx, {
           taskId: row.task_id,
           type: "round_failed",
           inboxId: row.id,

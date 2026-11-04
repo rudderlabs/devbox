@@ -614,16 +614,56 @@ describe("InboxRepository", () => {
       );
     });
 
-    it("failTaskInbox on a Linear task writes nothing", async () => {
+    it("failTaskInbox on a Linear task writes round_failed too", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      await insertRow(task.id, { source: "linear", kind: "assignment", status: "delivered" });
+      const a = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
       await repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "x" });
-      expect([...(await events())]).toEqual([]);
+      expect([...(await events())]).toEqual([
+        {
+          origin: "control_plane",
+          type: "round_failed",
+          inbox_id: a.id,
+          seq: null,
+          data: { reason: "x" },
+        },
+      ]);
     });
 
-    it("markFailed writes round_failed with the user-facing message", async () => {
-      const task = await insertTask({ ownerId: "pod-a", source: "api" });
-      const r = await insertRow(task.id, { source: "api", kind: "comment", status: "pending" });
+    it("rolls back the failed rows when the event insert fails", async () => {
+      const task = await insertTask({ ownerId: "pod-a" });
+      const a = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
+      const c = await insertRow(task.id, { source: "linear", kind: "comment", status: "pending" });
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'round_failed')`,
+      );
+      try {
+        await expect(
+          repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "x" }),
+        ).rejects.toThrow();
+        await expect(
+          repo.markFailed({ inboxId: c.id, ownerId: "pod-a", reason: "r", userMessage: "m" }),
+        ).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      const rows = await db.execute(sql`SELECT id, status FROM inbox ORDER BY created_at`);
+      expect([...rows]).toEqual([
+        { id: a.id, status: "delivered" },
+        { id: c.id, status: "pending" },
+      ]);
+    });
+
+    it("markFailed writes round_failed with the user-facing message, for any source", async () => {
+      const task = await insertTask({ ownerId: "pod-a" });
+      const r = await insertRow(task.id, { source: "github", kind: "comment", status: "pending" });
       await repo.markFailed({
         inboxId: r.id,
         ownerId: "pod-a",
@@ -648,6 +688,91 @@ describe("InboxRepository", () => {
         [],
       );
       expect([...(await events())]).toEqual([]);
+    });
+  });
+
+  describe("appendFollowUp message_queued", () => {
+    const events = () =>
+      db.execute<Record<string, unknown>>(
+        sql`SELECT task_id, origin, type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+    const follow = (
+      taskId: string,
+      o: { source: string; kind: "comment" | "review" | "ci_result"; id: string; body?: string },
+    ) =>
+      repo.appendFollowUp({
+        taskId,
+        message: { source: o.source, kind: o.kind, external_id: o.id, payload: {} },
+        replyTargets: [],
+        body: o.body,
+      });
+
+    it("logs every inserted round of any source and kind; a body only when given", async () => {
+      const task = await insertTask();
+      const lin = await follow(task.id, {
+        source: "linear",
+        kind: "comment",
+        id: "activity-1",
+        body: "and the tests",
+      });
+      const rev = await follow(task.id, { source: "github", kind: "review", id: "900" });
+      const id = (r: unknown) => (r as { roundId: string }).roundId;
+      expect([...(await events())]).toEqual([
+        {
+          task_id: task.id,
+          origin: "control_plane",
+          type: "message_queued",
+          inbox_id: id(lin),
+          data: { source: "linear", kind: "comment", body: "and the tests" },
+        },
+        {
+          task_id: task.id,
+          origin: "control_plane",
+          type: "message_queued",
+          inbox_id: id(rev),
+          data: { source: "github", kind: "review" },
+        },
+      ]);
+    });
+
+    it("a duplicate or stale round logs nothing", async () => {
+      const task = await insertTask();
+      const first = await follow(task.id, {
+        source: "github",
+        kind: "comment",
+        id: "555",
+        body: "x",
+      });
+      expect(
+        await follow(task.id, { source: "github", kind: "comment", id: "555", body: "x" }),
+      ).toEqual({ dropped: "duplicate" });
+      expect(
+        await repo.appendFollowUp({
+          taskId: task.id,
+          message: { source: "github", kind: "comment", external_id: "556", payload: {} },
+          replyTargets: [],
+          prUrl: "https://github.com/o/r/pull/1",
+          body: "y",
+        }),
+      ).toEqual({ dropped: "stale" });
+      expect([...(await events())].map((e) => e.inbox_id)).toEqual([
+        (first as { roundId: string }).roundId,
+      ]);
+    });
+
+    it("rolls back the round when the event insert fails", async () => {
+      const task = await insertTask();
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'message_queued')`,
+      );
+      try {
+        await expect(
+          follow(task.id, { source: "github", kind: "comment", id: "555", body: "x" }),
+        ).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      expect(await db.execute(sql`SELECT 1 FROM inbox`)).toHaveLength(0);
     });
   });
 });

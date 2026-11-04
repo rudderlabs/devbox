@@ -49,8 +49,9 @@ export interface TaskService {
     previousTargetId?: string; // a restart's replaced delegation id
   }>;
 
-  // Replaces the task's title, description and flags and restarts it from a
-  // clean slate, delegated through `target`. Only this source's tasks.
+  // Replaces the task's title, description and flags (its requester stays)
+  // and restarts it from a clean slate, delegated through `target`. Only this
+  // source's tasks.
   restart(
     taskId: string,
     def: { title: string; description: string | null; flags: string[]; target: ReplyTarget },
@@ -140,7 +141,7 @@ export class BoundTaskService implements TaskService {
         target_id: def.target.id,
       },
       inboxReplyTargets: [def.target],
-      api: { title: def.title, description: def.description, experimentalFlags: def.flags },
+      flags: def.flags,
     });
     this.killPreempted(taskId, prevSandboxId, "restart");
   }
@@ -165,6 +166,8 @@ export class BoundTaskService implements TaskService {
       replyTargets: targets,
       prUrl: p.prUrl,
       limit: p.limit,
+      // From the typed draft: the log never reads a stored payload.
+      body: p.kind === "comment" ? p.payload.body : undefined,
     });
   }
 
