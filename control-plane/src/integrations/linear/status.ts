@@ -1,15 +1,13 @@
 import type { Logger } from "../types";
 import type { LinearTokenProvider } from "./tokenProvider";
 
-export type LinearStatus =
-  | { configured: false }
-  | {
-      configured: true;
-      workspace: { id: string; name: string; urlKey: string } | null;
-      appUser: { id: string; name: string } | null;
-      lastWebhookAt: string | null;
-      lastTokenError: string | null;
-    };
+export type LinearStatus = {
+  configured: true;
+  workspace: { id: string; name: string; urlKey: string } | null;
+  appUser: { id: string; name: string } | null;
+  lastWebhookAt: string | null;
+  lastTokenError: string | null;
+};
 
 type Identity = {
   workspace: { id: string; name: string; urlKey: string };
@@ -31,9 +29,10 @@ export class LinearStatusService {
   private lastWebhookAt: Date | null = null;
 
   constructor(
-    private readonly provider:
-      | Pick<LinearTokenProvider, "getAuthorizedLinearClient" | "lastTokenError">
-      | undefined,
+    private readonly provider: Pick<
+      LinearTokenProvider,
+      "getAuthorizedLinearClient" | "lastTokenError"
+    >,
     private readonly log?: Pick<Logger, "warn">,
   ) {}
 
@@ -42,23 +41,19 @@ export class LinearStatusService {
   }
 
   async status(): Promise<LinearStatus> {
-    const provider = this.provider;
-    if (!provider) return { configured: false };
-    if (!this.identity) this.identity = await this.fetchIdentity(provider);
+    if (!this.identity) this.identity = await this.fetchIdentity();
     return {
       configured: true,
       workspace: this.identity?.workspace ?? null,
       appUser: this.identity?.appUser ?? null,
       lastWebhookAt: this.lastWebhookAt?.toISOString() ?? null,
-      lastTokenError: provider.lastTokenError,
+      lastTokenError: this.provider.lastTokenError,
     };
   }
 
-  private async fetchIdentity(
-    provider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
-  ): Promise<Identity | null> {
+  private async fetchIdentity(): Promise<Identity | null> {
     try {
-      const client = await provider.getAuthorizedLinearClient();
+      const client = await this.provider.getAuthorizedLinearClient();
       const { data } = await client.client.rawRequest<IdentityData, Record<string, never>>(
         IDENTITY_QUERY,
       );

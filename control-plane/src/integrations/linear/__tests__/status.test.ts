@@ -25,10 +25,6 @@ afterEach(() => {
 });
 
 describe("LinearStatusService", () => {
-  it("reports not configured", async () => {
-    expect(await new LinearStatusService(undefined).status()).toEqual({ configured: false });
-  });
-
   it("reports workspace, app user, last webhook and token error", async () => {
     const { service } = setup(async () => ({ data: IDENTITY }), "boom");
     service.recordWebhook(new Date("2026-10-16T07:55:25.031Z"));

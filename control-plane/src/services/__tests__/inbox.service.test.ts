@@ -182,7 +182,7 @@ describe("InboxService", () => {
 
     linear = new LinearIntegration(
       linearTokenProvider,
-      { status: async () => ({ configured: false }) },
+      { status: async () => ({}) as never },
       NO_WEBHOOK,
     );
     const defs = fakeDefinitions({

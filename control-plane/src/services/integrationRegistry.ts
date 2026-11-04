@@ -63,7 +63,8 @@ export type WrappedIntegration = {
     meta: Record<string, unknown>,
   ): Promise<DeliverResult>;
   // A fresh provision, on every attempt, before the sandbox is created.
-  onTaskStarted(task: Task, assignment: Round): Promise<void>;
+  // runId is the assignment's id and target its first reply target.
+  onTaskStarted(task: Task, runId: string, target: ReplyTarget): Promise<void>;
   // pr_opened, after appendPrUrl; the dispatcher holds a RetryableError.
   onPrOpened(task: Task, runId: string | null, pr: PrRef, firstTime: boolean): Promise<void>;
   // In BackgroundWork, so it never blocks the caller.
@@ -141,10 +142,8 @@ export class IntegrationRegistry {
   for(name: string): WrappedIntegration {
     return {
       deliver: (round, target, message, meta) => this.deliver(round, target, message, meta),
-      onTaskStarted: async (task, assignment) => {
-        const target = assignment.reply_targets[0];
-        if (!target) return;
-        await this.hook(name, "onTaskStarted", task, assignment.id, (ctx, i) =>
+      onTaskStarted: async (task, runId, target) => {
+        await this.hook(name, "onTaskStarted", task, runId, (ctx, i) =>
           i.onTaskStarted?.(ctx, task, target),
         );
       },

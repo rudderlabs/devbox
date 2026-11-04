@@ -306,14 +306,15 @@ export class TaskProcessorService {
     // and the `created` path always inserts one) — a missing target means the
     // row was deleted out from under us, which is a hard invariant break.
     const assignment = await this.inboxRepo.getAssignment(task.id);
-    if (!assignment?.reply_targets[0]) {
+    const target = assignment?.reply_targets[0];
+    if (!assignment || !target) {
       throw new Error(`runTask: assignment inbox row missing reply target for task ${task.id}`);
     }
 
     // The owner integration's onTaskStarted (Linear: issue state and the
-    // Provisioning action), on every fresh-provision attempt. Never throws. API
-    // tasks' logs get sandbox_started from attachSandboxResources.
-    await this.registry.for(task.source).onTaskStarted(task, assignment);
+    // Provisioning action), on every fresh-provision attempt. Never throws.
+    // Every task's log gets sandbox_started from attachSandboxResources.
+    await this.registry.for(task.source).onTaskStarted(task, assignment.id, target);
 
     // WORKSPACE is the only task-specific input passed at creation; the daemon
     // derives its .harness dir from it and reads everything else from the inbox file

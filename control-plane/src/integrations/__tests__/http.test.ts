@@ -188,7 +188,7 @@ describe("GitHub client", () => {
 describe("Linear deliver: token failures", () => {
   const target: ReplyTarget = { id: "sess-1", spec: { kind: "linear_session" } };
   const reply = { type: "reply", body: "hi" } as const;
-  const status = { status: async () => ({ configured: false as const }) };
+  const status = { status: async () => ({}) as never };
   const deliverWith = (provider: ConstructorParameters<typeof LinearIntegration>[0]) =>
     new LinearIntegration(provider, status, NO_WEBHOOK)
       .deliver({ signal: new AbortController().signal, log: logger }, target, reply)
@@ -314,7 +314,7 @@ describe("Linear deliver: SDK failures", () => {
         getAuthorizedLinearClient: (signal?: AbortSignal) =>
           Promise.resolve(new LinearClient({ accessToken: "t", apiUrl, signal })),
       },
-      { status: async () => ({ configured: false }) },
+      { status: async () => ({}) as never },
       NO_WEBHOOK,
     );
   const deliverTo = (apiUrl: string, signal = new AbortController().signal) =>

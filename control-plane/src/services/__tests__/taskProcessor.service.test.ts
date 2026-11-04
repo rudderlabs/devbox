@@ -298,7 +298,7 @@ describe("TaskProcessorService", () => {
     integrations = {
       linear: new LinearIntegration(
         linearTokenProvider,
-        { status: async () => ({ configured: false }) },
+        { status: async () => ({}) as never },
         NO_WEBHOOK,
       ),
       api: new ApiIntegration(),

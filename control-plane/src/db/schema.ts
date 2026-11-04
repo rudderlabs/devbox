@@ -97,9 +97,9 @@ export const inbox = pgTable(
       .references(() => tasks.id, { onDelete: "cascade" }),
     // Upstream system's id; paired with `source` for idempotency.
     externalId: text("external_id").notNull(),
-    // 'linear' | 'github'.
+    // The name of the integration that created the round.
     source: text("source").notNull(),
-    // 'assignment' | 'comment' | 'review'.
+    // 'assignment' | 'comment' | 'review' | 'ci_result'.
     kind: text("kind").notNull(),
     // kind-discriminated work content (prompt body, titles, etc).
     payload: jsonb("payload").notNull(),

@@ -15,7 +15,7 @@ const STOP_NOT_SUPPORTED_BODY = "Stop is not supported yet — work will continu
 
 // A Linear reply target's spec. Every Linear round replies on its agent
 // session, whose id is the target's id. The JSON is stored with the round.
-export type LinearSpec = { kind: "linear_session" };
+type LinearSpec = { kind: "linear_session" };
 
 export function isLinearSpec(spec: unknown): spec is LinearSpec {
   return (spec as { kind?: unknown } | null)?.kind === "linear_session";

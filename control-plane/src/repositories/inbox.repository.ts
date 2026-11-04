@@ -8,7 +8,7 @@ import type {
   InboxMessage,
   TaskIdentity,
 } from "../types/inboxMessage";
-import { insertCpEvent, type SqlExecutor, type Tx } from "./taskEvent.repository";
+import { insertCpEvent, type Tx } from "./taskEvent.repository";
 
 // Re-export contract types so existing repo-import sites stay valid without
 // reaching into types/ directly.
@@ -40,7 +40,7 @@ export type ReplyTarget = {
 };
 
 // A row to insert: the wire message without its id.
-export type NewInboxMessage = Omit<InboxMessage, "id">;
+type NewInboxMessage = Omit<InboxMessage, "id">;
 
 // A Postgres unique violation (23505) on `constraint`. drizzle wraps the
 // driver's error in `cause`.
@@ -115,15 +115,15 @@ function asRows<T>(result: unknown): T[] {
 export class InboxRepository {
   // INSERT (synthetic uuid PK auto-generated). Idempotent on
   // (source, kind, external_id) via the unique index. Returns the synthetic id
-  // on insert, null on conflict. Given a transaction, it inserts in a
-  // savepoint, so a unique violation leaves that transaction usable.
+  // on insert, null on conflict. It inserts in a savepoint of `tx`, so a
+  // unique violation leaves that transaction usable.
   async appendInbox(
     params: {
       taskId: string;
       message: NewInboxMessage;
       replyTargets: ReplyTarget[];
     },
-    tx?: Tx,
+    tx: Tx,
   ): Promise<{ id: string } | null> {
     const { source, kind, external_id, payload } = params.message;
     // bun-sql JSON-encodes a JS string param, so `${jsonStr}::jsonb` would
@@ -131,16 +131,16 @@ export class InboxRepository {
     // `::text::jsonb` forces PG to parse the raw text into proper jsonb.
     const payloadJson = JSON.stringify(payload);
     const replyTargetsJson = JSON.stringify(params.replyTargets ?? []);
-    const insert = (ex: SqlExecutor) =>
-      ex.execute<{ id: string }>(sql`
-        INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
-             VALUES (${params.taskId}, ${source}, ${kind}, ${external_id},
-                     ${payloadJson}::text::jsonb, ${replyTargetsJson}::text::jsonb)
-        ON CONFLICT (source, kind, external_id) DO NOTHING
-        RETURNING id;
-      `);
     try {
-      const result = await (tx ? tx.transaction(insert) : insert(db));
+      const result = await tx.transaction((savepoint) =>
+        savepoint.execute<{ id: string }>(sql`
+          INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
+               VALUES (${params.taskId}, ${source}, ${kind}, ${external_id},
+                       ${payloadJson}::text::jsonb, ${replyTargetsJson}::text::jsonb)
+          ON CONFLICT (source, kind, external_id) DO NOTHING
+          RETURNING id;
+        `),
+      );
       return asRows<{ id: string }>(result)[0] ?? null;
     } catch (err) {
       // Until a later release drops it, the old (source, external_id) index

@@ -411,7 +411,7 @@ describe("IntegrationRegistry.for: hooks", () => {
         const off = r.for(name);
         expect(await off.assignee(task, {})).toBeUndefined();
         expect(await off.onPrOpened(task, "a-1", pr, true)).toBeUndefined();
-        expect(await off.onTaskStarted(task, row("a-1"))).toBeUndefined();
+        expect(await off.onTaskStarted(task, "a-1", target)).toBeUndefined();
         off.onRoundFinished(task, row("a-1"), "a-1", "completed", true);
       }
       await background.drain(Promise.resolve());
@@ -436,7 +436,7 @@ describe("IntegrationRegistry.for: hooks", () => {
       const linear = r.for("linear");
       await expect(linear.deliver(row("a-1"), target, reply, {})).rejects.toThrow("429");
       await expect(linear.onPrOpened(task, "a-1", pr, true)).rejects.toThrow("429");
-      expect(await linear.onTaskStarted(task, row("a-1"))).toBeUndefined();
+      expect(await linear.onTaskStarted(task, "a-1", target)).toBeUndefined();
       expect(await linear.assignee(task, {})).toBeUndefined();
       linear.onRoundFinished(task, row("a-1"), "a-1", null, true);
       await background.drain(sleep(500));
@@ -469,7 +469,7 @@ describe("IntegrationRegistry.for: hooks", () => {
       );
       const linear = r.for("linear");
       expect(await linear.deliver(row("a-1"), target, reply, {})).toBe("timed_out");
-      expect(await linear.onTaskStarted(task, row("a-1"))).toBeUndefined();
+      expect(await linear.onTaskStarted(task, "a-1", target)).toBeUndefined();
       expect(await linear.onPrOpened(task, "a-1", pr, true)).toBeUndefined();
       expect(await linear.assignee(task, {})).toBeUndefined();
       linear.onRoundFinished(task, row("a-1"), "a-1", null, true);
@@ -500,7 +500,7 @@ describe("IntegrationRegistry.for: hooks", () => {
     });
     const linear = r.for("linear");
     await linear.deliver(row("a-1"), target, reply, {});
-    await linear.onTaskStarted(task, row("a-1"));
+    await linear.onTaskStarted(task, "a-1", target);
     await linear.onPrOpened(task, "a-1", pr, true);
     await linear.assignee(task, {});
     linear.onRoundFinished(task, row("c-1", "comment"), "a-1", null, true);
@@ -570,7 +570,7 @@ describe("IntegrationRegistry.for: hooks", () => {
     expect(inboxRepo.getAssignment).toHaveBeenCalledTimes(2);
   });
 
-  it("onTaskStarted runs on each fresh-provision attempt, with the assignment's first target and run", async () => {
+  it("onTaskStarted runs on each fresh-provision attempt, with the given target and run", async () => {
     const calls: [HookCtx, ReplyTarget][] = [];
     const { r, inboxRepo } = wrapped({
       async onTaskStarted(ctx, _task, t) {
@@ -578,10 +578,10 @@ describe("IntegrationRegistry.for: hooks", () => {
       },
     });
     // A deferred provision retries the same assignment.
-    await r.for("linear").onTaskStarted(task, row("a-1"));
-    await r.for("linear").onTaskStarted(task, row("a-1"));
+    await r.for("linear").onTaskStarted(task, "a-1", target);
+    await r.for("linear").onTaskStarted(task, "a-1", target);
     expect(calls.map(([, t]) => t)).toEqual([target, target]);
-    // The caller hands in the assignment row: no lookup of its own.
+    // The caller hands in the assignment's id and target: no lookup of its own.
     expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
     // Its run is that assignment.
     expect(await calls[0]?.[0].isCurrent()).toBe(true);

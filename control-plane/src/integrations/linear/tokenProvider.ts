@@ -10,8 +10,6 @@ import type { Logger } from "../types";
 // Renew a cached token once less than this much of its lifetime remains.
 const RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;
 
-const NOT_CONFIGURED = "Linear is not configured";
-
 type CachedToken = { token: string; expiresAt: number };
 
 // Is this error from LinearGraphQLClient.request an authentication failure?
@@ -30,7 +28,7 @@ function isAuthFailure(err: unknown): boolean {
 // and renewed early when Linear rejects it. Construction never calls Linear, so
 // a bad secret surfaces through `lastTokenError` instead of failing boot.
 export class LinearTokenProvider {
-  private readonly creds: LinearCredentials | undefined;
+  private readonly creds: LinearCredentials;
   private readonly requestToken: (c: LinearCredentials) => Promise<ClientCredentialsToken>;
   private readonly now: () => number;
   private readonly apiUrl: string | undefined;
@@ -42,7 +40,7 @@ export class LinearTokenProvider {
   private lastError: string | null = null;
 
   constructor(deps: {
-    creds: LinearCredentials | undefined;
+    creds: LinearCredentials;
     requestToken?: (c: LinearCredentials) => Promise<ClientCredentialsToken>;
     now?: () => number;
     apiUrl?: string;
@@ -62,12 +60,11 @@ export class LinearTokenProvider {
 
   // A valid access token. `force` skips the cache (Linear rejected the token).
   async getAccessToken(force = false): Promise<string> {
-    const creds = this.requireCreds();
     if (!force && this.cached && this.cached.expiresAt - this.now() >= RENEW_BEFORE_MS) {
       return this.cached.token;
     }
     if (this.inFlight) return this.inFlight;
-    this.inFlight = this.fetchToken(creds).finally(() => {
+    this.inFlight = this.fetchToken().finally(() => {
       this.inFlight = null;
     });
     return this.inFlight;
@@ -111,14 +108,9 @@ export class LinearTokenProvider {
     return this.getAccessToken(true);
   }
 
-  private requireCreds(): LinearCredentials {
-    if (!this.creds) throw new Error(NOT_CONFIGURED);
-    return this.creds;
-  }
-
-  private async fetchToken(creds: LinearCredentials): Promise<string> {
+  private async fetchToken(): Promise<string> {
     try {
-      const { accessToken, expiresAt } = await this.requestToken(creds);
+      const { accessToken, expiresAt } = await this.requestToken(this.creds);
       this.cached = { token: accessToken, expiresAt: expiresAt.getTime() };
       this.lastError = null;
       return accessToken;

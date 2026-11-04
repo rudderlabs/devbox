@@ -13,6 +13,9 @@ const { InboxRepository } = await import("../inbox.repository");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
 const repo = new InboxRepository();
+// Every caller runs appendInbox inside its own transaction.
+const appendInbox = (p: Parameters<typeof repo.appendInbox>[0]) =>
+  db.transaction((tx) => repo.appendInbox(p, tx));
 
 const linearTarget = (targetId: string) => ({
   id: targetId,
@@ -74,7 +77,7 @@ describe("InboxRepository", () => {
     it("inserts a row and returns the synthetic id", async () => {
       const task = await insertTask();
 
-      const result = await repo.appendInbox({
+      const result = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -90,7 +93,7 @@ describe("InboxRepository", () => {
 
     it("is idempotent on (source, external_id) — returns null on conflict", async () => {
       const task = await insertTask();
-      await repo.appendInbox({
+      await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -101,7 +104,7 @@ describe("InboxRepository", () => {
         replyTargets: [linearTarget("sess-1")],
       });
 
-      const second = await repo.appendInbox({
+      const second = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -133,7 +136,7 @@ describe("InboxRepository", () => {
 
     it("a redelivered comment adds nothing, even after its round finished", async () => {
       const task = await insertTask();
-      const first = await repo.appendInbox({
+      const first = await appendInbox({
         taskId: task.id,
         message: ghComment("555"),
         replyTargets: [],
@@ -141,7 +144,7 @@ describe("InboxRepository", () => {
       await db.execute(sql`UPDATE inbox SET status = 'responded'`);
 
       expect(
-        await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] }),
+        await appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] }),
       ).toBeNull();
       const rows = await db.execute<{ id: string; status: string }>(
         sql`SELECT id, status FROM inbox`,
@@ -154,9 +157,9 @@ describe("InboxRepository", () => {
       // (source, kind, external_id) index allows this row, but the old
       // (source, external_id) one still rejects it.
       const task = await insertTask();
-      await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
+      await appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
 
-      const review = await repo.appendInbox({
+      const review = await appendInbox({
         taskId: task.id,
         message: {
           source: "github",
@@ -219,7 +222,7 @@ describe("InboxRepository", () => {
 
       // failTaskInbox is whole-task — dead-letter the `failed` row while it is
       // the only non-terminal row, before the others are inserted.
-      const failed = await repo.appendInbox({
+      const failed = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -232,7 +235,7 @@ describe("InboxRepository", () => {
       if (!failed) throw new Error("insert failed");
       await repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "pvc missing" });
 
-      const delivered = await repo.appendInbox({
+      const delivered = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -245,7 +248,7 @@ describe("InboxRepository", () => {
       if (!delivered) throw new Error("insert failed");
       await repo.markDelivered({ inboxId: delivered.id, ownerId: "pod-a" });
 
-      const pending = await repo.appendInbox({
+      const pending = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -265,7 +268,7 @@ describe("InboxRepository", () => {
   describe("markDelivered", () => {
     it("pending → delivered; owner-guarded", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -290,7 +293,7 @@ describe("InboxRepository", () => {
   describe("failTaskInbox", () => {
     it("fails every non-terminal row (pending + delivered); owner-guarded", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const pendingRow = await repo.appendInbox({
+      const pendingRow = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -300,7 +303,7 @@ describe("InboxRepository", () => {
         },
         replyTargets: [],
       });
-      const deliveredRow = await repo.appendInbox({
+      const deliveredRow = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -339,7 +342,7 @@ describe("InboxRepository", () => {
       const task = await insertTask({ ownerId: "pod-a" });
       const ids: string[] = [];
       for (const external_id of ["first", "second"]) {
-        const row = await repo.appendInbox({
+        const row = await appendInbox({
           taskId: task.id,
           message: {
             source: "linear",
@@ -361,7 +364,7 @@ describe("InboxRepository", () => {
 
     it("does not touch an already-responded row", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -384,7 +387,7 @@ describe("InboxRepository", () => {
   describe("getByIdForTask", () => {
     it("returns the row when it belongs to the task", async () => {
       const task = await insertTask();
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -425,7 +428,7 @@ describe("InboxRepository", () => {
     it("returns null when the row belongs to a different task (confused deputy)", async () => {
       const taskA = await insertTask({ externalId: "task-a" });
       const taskB = await insertTask({ externalId: "task-b" });
-      const rowA = await repo.appendInbox({
+      const rowA = await appendInbox({
         taskId: taskA.id,
         message: {
           source: "linear",
@@ -463,7 +466,7 @@ describe("InboxRepository", () => {
   describe("markResponded", () => {
     it("owner match → status 'responded' + 1 row; owner mismatch / re-fire → 0 rows", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -496,7 +499,7 @@ describe("InboxRepository", () => {
 
     it("stores the completed event's status as outcome", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const r = await repo.appendInbox({
+      const r = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -518,7 +521,7 @@ describe("InboxRepository", () => {
   describe("markFailed", () => {
     it("owner match → status 'failed' + reason; owner mismatch / terminal → 0 rows", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "github",

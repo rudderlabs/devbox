@@ -252,13 +252,4 @@ describe("LinearTokenProvider", () => {
     expect(requestToken).toHaveBeenCalledTimes(2);
     expect(seen).toEqual(["Bearer t1", "Bearer t2"]);
   });
-
-  it("throws when Linear is not configured", async () => {
-    const requestToken = tokens();
-    const p = new LinearTokenProvider({ creds: undefined, requestToken, log: silentLog });
-
-    await expect(p.getAccessToken()).rejects.toThrow("Linear is not configured");
-    await expect(p.getAuthorizedLinearClient()).rejects.toThrow("Linear is not configured");
-    expect(requestToken).not.toHaveBeenCalled();
-  });
 });
