@@ -410,8 +410,8 @@ describe("followTask until done, from a cursor", () => {
   });
 });
 
-// A status-less `completed` with no other round event isn't a work
-// round.
+// A status-less `completed` with no round event but its `message_queued`
+// isn't a work round.
 describe("followTask past a round that did no work", () => {
   it("reports the last work round", async () => {
     const stub = createStub();
@@ -419,7 +419,8 @@ describe("followTask past a round that did no work", () => {
       created,
       response,
       completed("partial_failure", 5, "round-1"),
-      envelope(6, "completed", {}, "round-2"),
+      envelope(6, "message_queued", { source: "github", kind: "review" }, "round-2"),
+      envelope(7, "completed", {}, "round-2"),
     ]);
     serveStream(stub, REF, [() => sse([stateFrame("idle")], "hang")]);
     const r = await run(stub, { ref: REF, from: "latest", untilDone: true });

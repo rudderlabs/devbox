@@ -100,8 +100,10 @@ class RoundTracker {
   private readonly responses = new Map<string, ApiEventEnvelope>();
   private readonly errors = new Map<string, string>();
   private readonly ended = new Map<string, RoundEnd>();
-  // Rounds that have had a round event other than `completed`.
+  // Rounds that have had a round event other than `completed` or
+  // `message_queued`, and the last of them.
   private readonly worked = new Set<string>();
+  private lastWorked: string | null = null;
 
   observe(e: ApiEventEnvelope): void {
     const data = (e.data ?? {}) as Record<string, unknown>;
@@ -110,10 +112,17 @@ class RoundTracker {
     }
     if (e.round_id === null || !ROUND_EVENTS.has(e.type)) return;
     const round = e.round_id;
-    // A status-less `completed` for a round with no other round event did no
-    // work. Such a `completed` neither moves the latest round nor ends one.
-    if (e.type === "completed" && round !== this.fixed && !this.worked.has(round)) return;
-    if (e.type !== "completed") this.worked.add(round);
+    // A status-less `completed` for a round with no other round event but its
+    // `message_queued` did no work. Such a `completed` ends no round, and the
+    // latest round goes back to the last one that worked.
+    if (e.type === "completed" && !data.status && round !== this.fixed && !this.worked.has(round)) {
+      if (this.latest === round) this.latest = this.lastWorked;
+      return;
+    }
+    if (e.type !== "message_queued") {
+      this.worked.add(round);
+      this.lastWorked = round;
+    }
     if (e.type === "task_created" || e.type === "task_restarted") {
       const previous = this.assignment;
       if (
