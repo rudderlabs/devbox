@@ -272,7 +272,7 @@ const row = (id: string, kind = "assignment", source = "linear") =>
   }) as unknown as Round;
 const target: ReplyTarget = { id: "sess-1", spec: { kind: "linear_session" } };
 const reply = { type: "reply", body: "hi" } as const;
-const pr = { url: "u", repo: "r", branch: "b" };
+const pr = { url: "u", repo: "r", branch: "b", github: null };
 const noop: Integration = integration();
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const HOOKS = ["onTaskStarted", "onPrOpened", "onRoundFinished", "assignee"] as const;

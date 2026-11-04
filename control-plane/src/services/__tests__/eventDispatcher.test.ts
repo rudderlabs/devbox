@@ -81,6 +81,7 @@ mock.module("../../clients/github", () => ({
 }));
 
 const { EventDispatcher } = await import("../eventDispatcher");
+const { CodeHost } = await import("../codeHost.service");
 const { LinearIntegration } = await import("../../integrations/linear");
 const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
@@ -205,16 +206,22 @@ describe("EventDispatcher", () => {
           )
         : null,
     });
-  const withGithubOff = () =>
+  // A dispatcher over this registry, its code host over the same one.
+  const dispatcherOver = (
+    registry: InstanceType<typeof IntegrationRegistry>,
+    replyHolds: InstanceType<typeof ReplyHolds> = holds,
+  ) =>
     new EventDispatcher(
       taskRepo,
       inboxRepo,
       sandboxManager,
       slackNotifier,
-      makeRegistry(false),
-      holds,
+      registry,
+      new CodeHost(registry, background),
+      replyHolds,
       background,
     );
+  const withGithubOff = () => dispatcherOver(makeRegistry(false));
 
   beforeEach(() => {
     for (const m of [
@@ -268,15 +275,7 @@ describe("EventDispatcher", () => {
 
     holds = new ReplyHolds();
     background = new BackgroundWork();
-    dispatcher = new EventDispatcher(
-      taskRepo,
-      inboxRepo,
-      sandboxManager,
-      slackNotifier,
-      makeRegistry(true),
-      holds,
-      background,
-    );
+    dispatcher = dispatcherOver(makeRegistry(true));
   });
 
   describe("API tasks", () => {
@@ -669,14 +668,9 @@ describe("EventDispatcher", () => {
           delivered.push([name, target, message]);
         },
       });
-      const d = new EventDispatcher(
-        taskRepo,
-        inboxRepo,
-        sandboxManager,
-        slackNotifier,
+      const d = dispatcherOver(
         registryOf({ linear: record("linear"), api: record("api"), github: record("github") }),
         new ReplyHolds(),
-        background,
       );
       const assignment = linearRow();
       const ghComment = {
@@ -742,11 +736,7 @@ describe("EventDispatcher", () => {
   describe("pr_opened", () => {
     it("onPrOpened's isCurrent() compares the run read with the row to the task's assignment", async () => {
       let ctx: HookCtx | undefined;
-      const d = new EventDispatcher(
-        taskRepo,
-        inboxRepo,
-        sandboxManager,
-        slackNotifier,
+      const d = dispatcherOver(
         registryOf({
           linear: {
             status: async () => ({}),
@@ -756,8 +746,6 @@ describe("EventDispatcher", () => {
             },
           },
         }),
-        holds,
-        background,
       );
       await d.handle(prEvent(), makeTask());
       expect(await ctx?.isCurrent()).toBe(true);
@@ -840,10 +828,21 @@ describe("EventDispatcher", () => {
       );
     });
 
-    it("posts no onboarding comment when GitHub webhooks are off", async () => {
+    it("posts no onboarding comment while no integration sets prMentionLogin, but still mirrors the assignee", async () => {
+      getIssueHumanAssignee.mockResolvedValue({
+        id: "usr-1",
+        name: "Ada Lovelace",
+        displayName: "ada",
+        email: "ada@acme.com",
+        gitHubUserId: "octocat",
+      });
+      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
+      // GitHub, the integration that takes @-mentions, is off.
       const result = await withGithubOff().handle(prEvent(), makeTask());
+      await flushMicrotasks();
       expect(result).toBe("ok");
       expect(postIssueComment).not.toHaveBeenCalled();
+      expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
     });
 
     describe("linear assignee mirror", () => {

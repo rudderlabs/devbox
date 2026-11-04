@@ -17,6 +17,7 @@ import { createWebhookRoutes } from "./routes/webhook";
 import { ApiAuthService } from "./services/apiAuth.service";
 import { ApiTaskService } from "./services/apiTask.service";
 import { BackgroundWork } from "./services/backgroundWork";
+import { CodeHost } from "./services/codeHost.service";
 import { EventDispatcher } from "./services/eventDispatcher";
 import { InboxService } from "./services/inbox.service";
 import { IntegrationRegistry } from "./services/integrationRegistry";
@@ -96,6 +97,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     sandboxManager,
     slackNotifier,
     registry,
+    new CodeHost(registry, background),
     replyHolds,
     background,
   );
