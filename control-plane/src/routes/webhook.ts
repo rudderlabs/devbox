@@ -1,8 +1,8 @@
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import type { TaskIntake } from "../integrations/intake";
 import type { Integration } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
+import type { TaskIntake } from "../services/task.service";
 
 // POST /webhook/<name> is registered only for an enabled integration that has
 // a webhook; any other name answers 404.

@@ -9,11 +9,11 @@ mock.module("../../config", () => ({ config: { databaseUrl: TEST_DATABASE_URL } 
 const { db } = await import("../../db");
 const { TaskRepository } = await import("../../repositories/task.repository");
 const { InboxRepository, isUniqueViolation } = await import("../../repositories/inbox.repository");
-const { Intake } = await import("../intake");
+const { Intake } = await import("../task.service");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
 import type { ReplyTarget } from "../../repositories/inbox.repository";
-import type { InboxMessageDraft, TaskIntake } from "../intake";
+import type { InboxMessageDraft, TaskIntake } from "../task.service";
 
 const session = (id: string, order?: number): ReplyTarget => ({
   id,

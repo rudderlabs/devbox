@@ -8,11 +8,11 @@ import {
   getUserIdByLogin,
 } from "../clients/github";
 import { config } from "../config";
-import type { TaskIntake } from "../integrations/intake";
 import type { GithubWebhooksConfig } from "../integrationsConfig";
 import { logger } from "../logger";
 import type { ReplyTargetSpec } from "../repositories/inbox.repository";
 import type { InboxService } from "../services/inbox.service";
+import type { TaskIntake } from "../services/task.service";
 
 // ──── Parsed event surface ────
 //

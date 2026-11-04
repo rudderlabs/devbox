@@ -1,9 +1,9 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import type { Context } from "hono";
-import type { TaskIntake } from "../integrations/intake";
 import type { IntegrationName } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
 import { createWebhookRoutes as createRoutes } from "../routes/webhook";
+import type { TaskIntake } from "../services/task.service";
 
 const intake = {} as TaskIntake;
 

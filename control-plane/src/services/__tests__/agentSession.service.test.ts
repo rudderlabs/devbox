@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
-import type { TaskIntake, TaskRef } from "../../integrations/intake";
 import type { ReplyTarget } from "../../repositories/inbox.repository";
+import type { TaskIntake, TaskRef } from "../../services/task.service";
 import type { AgentSessionCreated, AgentSessionPrompted } from "../../types/agentSession";
 import type { InboxService } from "../inbox.service";
 import type { LinearTokenProvider } from "../linearTokenProvider";

@@ -1,7 +1,6 @@
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { deliverToRound } from "../integrations/http";
-import type { TaskIntake } from "../integrations/intake";
 import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type {
@@ -13,6 +12,7 @@ import type {
 import type { InboxMessage } from "../types/inboxMessage";
 import type { IntegrationHooks } from "./integrationHooks";
 import type { SandboxManager } from "./sandboxManager.service";
+import type { TaskIntake } from "./task.service";
 
 // InboxService builds the GitHub and Linear follow-up rounds (comment, review,
 // CI result, Linear comment) and queues them through TaskIntake.followUp; it

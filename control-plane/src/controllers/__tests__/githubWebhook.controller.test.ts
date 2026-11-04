@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Hono } from "hono";
 import type { Task } from "../../db/schema";
-import type { TaskIntake } from "../../integrations/intake";
 import { logger } from "../../logger";
 import type { InboxService } from "../../services/inbox.service";
+import type { TaskIntake } from "../../services/task.service";
 
 const WEBHOOK_SECRET = "gh-test-secret";
 

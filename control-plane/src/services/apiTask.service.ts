@@ -1,5 +1,4 @@
 import { ApiError } from "../errors";
-import type { TaskIntake } from "../integrations/intake";
 import type { TaskSource } from "../integrations/types";
 import type { ApiTaskRecord, ApiTaskRepository } from "../repositories/apiTask.repository";
 import { apiSessionTarget } from "../repositories/inbox.repository";
@@ -15,6 +14,7 @@ import type {
   SseStateData,
 } from "../types/api";
 import { extractExperimentalFlags } from "./experimentalFlags";
+import type { TaskIntake } from "./task.service";
 
 export type Principal = { tokenId: string; name: string };
 export type CreateTaskInput = {

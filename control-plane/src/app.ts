@@ -10,7 +10,6 @@ import { db } from "./db";
 import { taskSource } from "./db/schema";
 import { ApiIntegration } from "./integrations/api";
 import { GithubIntegration } from "./integrations/github";
-import { Intake } from "./integrations/intake";
 import { LinearIntegration } from "./integrations/linear";
 import type { Integration, IntegrationName } from "./integrations/types";
 import { logger } from "./logger";
@@ -34,6 +33,7 @@ import { LinearTokenProvider } from "./services/linearTokenProvider";
 import { ReplyHolds } from "./services/replyHolds";
 import { SandboxManager } from "./services/sandboxManager.service";
 import { SlackNotifierService } from "./services/slackNotifier.service";
+import { Intake } from "./services/task.service";
 import { TaskProcessorService } from "./services/taskProcessor.service";
 
 export type AppBundle = {

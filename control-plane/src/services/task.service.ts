@@ -1,4 +1,5 @@
 import type { Task } from "../db/schema";
+import type { IntegrationName, Person, TaskSource } from "../integrations/types";
 import { logger } from "../logger";
 import {
   apiSessionTarget,
@@ -9,10 +10,9 @@ import {
   taskIdentity,
 } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
-import type { IntegrationHooks } from "../services/integrationHooks";
-import type { SandboxManager } from "../services/sandboxManager.service";
 import type { InboxMessage, TaskIdentity } from "../types/inboxMessage";
-import type { IntegrationName, Person, TaskSource } from "./types";
+import type { IntegrationHooks } from "./integrationHooks";
+import type { SandboxManager } from "./sandboxManager.service";
 
 // The only way modules create work.
 

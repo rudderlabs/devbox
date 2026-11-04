@@ -2,9 +2,9 @@ import type { Context } from "hono";
 import type { Task, taskSource } from "../db/schema";
 import type { logger } from "../logger";
 import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
+import type { TaskIntake } from "../services/task.service";
 import type { ApiTaskSource } from "../types/api";
 import type { InboxSource } from "../types/inboxMessage";
-import type { TaskIntake } from "./intake";
 import type { Outbound, SendCtx } from "./outbound";
 
 type Logger = typeof logger;

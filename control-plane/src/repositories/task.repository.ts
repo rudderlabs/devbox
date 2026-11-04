@@ -1,9 +1,9 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "../db";
 import type { Task } from "../db/schema";
-import type { TaskRef } from "../integrations/intake";
 import type { Person, TaskSource } from "../integrations/types";
 import { logger } from "../logger";
+import type { TaskRef } from "../services/task.service";
 import type { HarnessEvent } from "../types/harnessEvent";
 import type { AssignmentPayload } from "../types/inboxMessage";
 import {
