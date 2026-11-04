@@ -20,7 +20,7 @@ import type { ReplyHolds } from "./replyHolds";
 import { BoundTaskService } from "./task.service";
 
 // Upper bound on one call into an integration.
-const TIMEOUT_MS = {
+export const TIMEOUT_MS = {
   deliver: SEND_TIMEOUT_MS,
   onTaskStarted: 20_000,
   onPrOpened: 30_000,
@@ -88,8 +88,9 @@ export class IntegrationRegistry {
   // creates tasks, on or off, so a disabled integration's open tasks keep
   // running.
   readonly taskSources: string[];
-  // The enabled integrations by name.
-  readonly live: Readonly<Record<string, Integration>>;
+  // The enabled integrations by name. Core reaches them only through for(),
+  // webhooks(), status() and prMentionLogin().
+  private readonly live: Readonly<Record<string, Integration>>;
   private readonly definitions = new Map<string, IntegrationDefinition>();
   private readonly taskServices = new Map<string, TaskService>();
   private readonly holds: Pick<ReplyHolds, "of">;

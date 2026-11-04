@@ -1,14 +1,17 @@
 import { logger } from "../logger";
 
+// What tracked work is, as its logs name it (the `hook` field at shutdown).
+type Work = "onRoundFinished" | "assignee" | "killSandbox" | "slack";
+
 // Work that goes on after its caller returned: an integration's
 // onRoundFinished, the PR assignee mirror, a Slack post, a restart's sandbox
 // kill. TaskProcessor.stop() drains it before the process exits.
 export class BackgroundWork {
-  private readonly running = new Map<Promise<void>, { taskId: string; what: string }>();
+  private readonly running = new Map<Promise<void>, { taskId: string; what: Work }>();
 
-  // `what` names the work in the logs. A rejection is logged here; work that
-  // wants its own message catches first.
-  track(taskId: string, what: string, work: Promise<unknown>): void {
+  // A rejection is logged here; work that wants its own message catches
+  // first.
+  track(taskId: string, what: Work, work: Promise<unknown>): void {
     const p: Promise<void> = work
       .then(
         () => {},

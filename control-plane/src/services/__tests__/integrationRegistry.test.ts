@@ -15,7 +15,9 @@ import type { TaskRepository } from "../../repositories/task.repository";
 // The real definitions reach the GitHub client, which reads config at import.
 mock.module("../../config", () => ({ config: {} }));
 
-const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
+const { IntegrationRegistry, parseIntegrationConfigs, TIMEOUT_MS } = await import(
+  "../integrationRegistry"
+);
 const { ReplyHolds } = await import("../replyHolds");
 const { RetryableError } = await import("../../integrations/outbound");
 const { definitions } = await import("../../integrations");
@@ -74,13 +76,24 @@ describe("IntegrationRegistry", () => {
     setSystemTime();
   });
 
-  it("creates only enabled integrations", () => {
+  it("creates only enabled integrations", async () => {
     const a = definition("a");
     const b = definition("b");
     const r = registry([a, b], { b: "on" });
-    expect(Object.keys(r.live)).toEqual(["b"]);
+    expect(await r.status("a")).toEqual({ off: "a", holds: none });
+    expect(await r.status("b")).toEqual({ name: "b", holds: none });
     expect(a.created).toHaveLength(0);
     expect(b.created).toHaveLength(1);
+  });
+
+  it("bounds each call by default: deliver 20 s, onTaskStarted 20 s, onPrOpened 30 s, onRoundFinished 120 s, assignee 15 s", () => {
+    expect(TIMEOUT_MS).toEqual({
+      deliver: 20_000,
+      onTaskStarted: 20_000,
+      onPrOpened: 30_000,
+      onRoundFinished: 120_000,
+      assignee: 15_000,
+    });
   });
 
   it("builds one TaskService per integration, bound to its name, and hands it to that integration", () => {
@@ -222,7 +235,7 @@ describe("the integrations this build has", () => {
     expect(assigned).toHaveLength(2);
   });
 
-  it("are on from their own settings", () => {
+  it("are on from their own settings", async () => {
     const env = {
       LINEAR_ENABLED: "true",
       LINEAR_CLIENT_ID: "cid",
@@ -235,10 +248,14 @@ describe("the integrations this build has", () => {
       GITHUB_TRUSTED_USERS: "alice",
       API_ENABLED: "true",
     };
+    // Linear and GitHub take webhooks only while on; the API has none, so its
+    // status tells.
     const r = registry([...definitions], env);
-    expect(Object.keys(r.live)).toEqual(["linear", "github", "api"]);
     expect(r.webhooks().map((w) => w.name)).toEqual(["linear", "github"]);
-    expect(Object.keys(registry([...definitions], { API_ENABLED: "true" }).live)).toEqual(["api"]);
+    expect(await r.status("api")).toEqual({ enabled: true, holds: none });
+    const apiOnly = registry([...definitions], { API_ENABLED: "true" });
+    expect(apiOnly.webhooks()).toEqual([]);
+    expect(await apiOnly.status("api")).toEqual({ enabled: true, holds: none });
   });
 });
 
