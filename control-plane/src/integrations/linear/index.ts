@@ -1,6 +1,5 @@
 import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
 import type { Context } from "hono";
-import { getUserById } from "../../clients/github";
 import {
   attachUrlToIssue,
   emitAction,
@@ -163,21 +162,20 @@ export class LinearIntegration implements Integration {
     });
   }
 
-  // The issue's human assignee. Identity comes from Linear's own user↔GitHub
-  // mapping (User.gitHubUserId, set when a member connects GitHub under Linear
-  // Settings → Connected accounts), never email matching.
+  // The issue's human assignee, with the GitHub account Linear links to them
+  // (User.gitHubUserId, set when a member connects GitHub under Linear
+  // Settings → Connected accounts), never matched by email. One Linear query:
+  // the code host resolves the account.
   async assignee(ctx: HookCtx, task: Task): Promise<Person | null> {
     const client = await this.client(ctx.signal);
     const human = await getIssueHumanAssignee(client, task.externalId);
     if (!human) return null;
-    const person = { id: human.id, displayName: human.displayName, email: human.email };
-    if (!human.gitHubUserId) return { ...person, codeHost: "unlinked" };
-    // Defensive about the field's format: numeric → GitHub account id
-    // (resolve to the current login), anything else → already a login.
-    const githubLogin = /^\d+$/.test(human.gitHubUserId)
-      ? (await getUserById(human.gitHubUserId, ctx.signal)).login
-      : human.gitHubUserId;
-    return { ...person, codeHost: { githubLogin } };
+    return {
+      id: human.id,
+      displayName: human.displayName,
+      email: human.email,
+      githubAccount: human.gitHubUserId || null,
+    };
   }
 
   // A per-call client: the signal bounds this send's requests only. Nothing

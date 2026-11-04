@@ -1,4 +1,4 @@
-import { addPrAssignees, parsePrUrl, postIssueComment } from "../clients/github";
+import { addPrAssignees, getUserById, parsePrUrl, postIssueComment } from "../clients/github";
 import type { Task } from "../db/schema";
 import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import type { PrRef } from "../integrations/types";
@@ -29,7 +29,8 @@ export class CodeHost {
     // while an enabled integration turns @-mentions on PRs into rounds.
     private registry: Pick<IntegrationRegistry, "for" | "prMentionLogin">,
     private background: Pick<BackgroundWork, "track">,
-    // Bounds the onboarding comment, awaited inside the tick like a send.
+    // Bounds each GitHub call it waits for: the onboarding comment, awaited
+    // inside the tick like a send, and the account id lookup.
     private sendTimeoutMs = SEND_TIMEOUT_MS,
   ) {}
 
@@ -66,8 +67,8 @@ export class CodeHost {
     ).catch((err) => logErr("onboarding comment post failed", err));
   }
 
-  // Mirrors the task's assignee (the owner integration's assignee()) onto the
-  // GitHub PR as assignee. Assignee is the right primitive here: harness PRs
+  // Assigns the PR to the task's person, through the GitHub account their
+  // platform links to them. Assignee is the right primitive here: harness PRs
   // open as DRAFTS and GitHub rejects requested_reviewers on drafts.
   //
   // Best-effort by contract: never rejects, a failure must not block dispatch
@@ -88,34 +89,40 @@ export class CodeHost {
       });
       return;
     }
-    if (typeof person.codeHost !== "object") {
-      // Linear's fix path: the member connects GitHub in Linear Settings →
-      // Connected accounts. Log the account id, not the name or email.
+    const account = person.githubAccount;
+    if (account === undefined || account === null) {
+      // null: the person can link an account on their platform but hasn't
+      // (Linear: Settings → Connected accounts). Log the platform's account
+      // id, not the name or email.
       logger.info("PR assignee mirror skipped", {
         event: "pr_assignee.result",
         status: "skipped",
-        reason: person.codeHost === "unlinked" ? "no_github_mapping" : "unsupported",
+        reason: account === null ? "no_github_mapping" : "unsupported",
         taskId: task.id,
         prUrl: pr.url,
-        linearUserId: person.id,
-      });
-      return;
-    }
-    const login = person.codeHost.githubLogin;
-    if (!login) {
-      // getUserById normalizes a malformed 2xx body to login: "" — don't POST
-      // an empty assignee and misreport it as no_push_access.
-      logger.warn("PR assignee mirror skipped", {
-        event: "pr_assignee.result",
-        status: "skipped",
-        reason: "unresolved_login",
-        taskId: task.id,
-        prUrl: pr.url,
-        linearUserId: person.id,
+        personId: person.id,
       });
       return;
     }
     try {
+      // Digits are an account id (ids survive renames): resolve the current
+      // login. Anything else is already a login.
+      const login = /^\d+$/.test(account)
+        ? (await withTimeout(this.sendTimeoutMs, (signal) => getUserById(account, signal))).login
+        : account;
+      if (!login) {
+        // getUserById normalizes a malformed 2xx body to login: "" — don't
+        // POST an empty assignee and misreport it as no_push_access.
+        logger.warn("PR assignee mirror skipped", {
+          event: "pr_assignee.result",
+          status: "skipped",
+          reason: "unresolved_login",
+          taskId: task.id,
+          prUrl: pr.url,
+          personId: person.id,
+        });
+        return;
+      }
       const { assigned } = await addPrAssignees(gh.owner, gh.repo, gh.prNumber, [login]);
       // GitHub logins are case-insensitive but the response echoes canonical
       // casing — compare case-folded so a cased mapping isn't a false drop.

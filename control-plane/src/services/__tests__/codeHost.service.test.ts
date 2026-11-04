@@ -48,24 +48,30 @@ describe("CodeHost", () => {
       background,
       sendTimeoutMs,
     );
-  const person = (githubLogin: string): Person => ({
+  const person = (githubAccount?: string | null): Person => ({
     id: "usr-1",
     displayName: "ada",
     email: "ada@acme.com",
-    codeHost: { githubLogin },
+    ...(githubAccount === undefined ? {} : { githubAccount }),
   });
   // The PR opened, the mirror included.
   const prOpened = async (host = codeHost()) => {
     await host.prOpened(task, host.prRef({ pr_url: PR_URL, repo: "r", branch: "b" }));
     await background.drain(sleep(500));
   };
+  // The mirror's pr_assignee.result log lines.
+  const results = () =>
+    [...info.mock.calls, ...warn.mock.calls]
+      .map(([, meta]) => meta as Record<string, unknown> | undefined)
+      .filter((meta) => meta?.event === "pr_assignee.result");
+  const logged = { event: "pr_assignee.result", taskId: "task-1", prUrl: PR_URL };
 
   beforeEach(() => {
     for (const m of [postIssueComment, addPrAssignees, getUserById]) m.mockReset();
     postIssueComment.mockResolvedValue({ id: 1, url: "u" });
     addPrAssignees.mockResolvedValue({ assigned: [] });
     getUserById.mockResolvedValue({ login: "", id: 0 });
-    assignee = mock(() => Promise.resolve(null));
+    assignee = mock(() => Promise.resolve(person(null)));
     background = new BackgroundWork();
     info = spyOn(logger, "info").mockImplementation(() => logger);
     warn = spyOn(logger, "warn").mockImplementation(() => logger);
@@ -97,5 +103,66 @@ describe("CodeHost", () => {
     await prOpened(codeHost("bot", 20));
     expect(postIssueComment).toHaveBeenCalledTimes(1);
     expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
+  });
+
+  it("an integration that can't link accounts → skip as unsupported", async () => {
+    assignee.mockResolvedValue(person());
+    await prOpened();
+    expect(addPrAssignees).not.toHaveBeenCalled();
+    expect(results()).toEqual([
+      { ...logged, status: "skipped", reason: "unsupported", personId: "usr-1" },
+    ]);
+  });
+
+  describe("account id to login", () => {
+    it("numeric account → resolves the login via getUserById and assigns it", async () => {
+      assignee.mockResolvedValue(person("583231"));
+      getUserById.mockResolvedValue({ login: "octocat", id: 583231 });
+      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
+
+      await prOpened();
+
+      expect(assignee).toHaveBeenCalledWith(task, { prUrl: PR_URL });
+      expect(getUserById).toHaveBeenCalledWith("583231", expect.any(AbortSignal));
+      expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
+      expect(results()).toEqual([
+        { ...logged, status: "assigned", requested: "octocat", assigned: ["octocat"] },
+      ]);
+    });
+
+    it("non-numeric account is treated as a login directly (no getUserById)", async () => {
+      assignee.mockResolvedValue(person("octocat"));
+      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
+
+      await prOpened();
+
+      expect(getUserById).not.toHaveBeenCalled();
+      expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
+    });
+
+    it("empty login from a malformed getUserById response → skip, no assignees POST", async () => {
+      assignee.mockResolvedValue(person("583231"));
+      getUserById.mockResolvedValue({ login: "", id: 0 });
+
+      await prOpened();
+
+      expect(addPrAssignees).not.toHaveBeenCalled();
+      expect(results()).toEqual([
+        { ...logged, status: "skipped", reason: "unresolved_login", personId: "usr-1" },
+      ]);
+    });
+
+    it("getUserById rejection is swallowed: no throw, no assignees POST", async () => {
+      assignee.mockResolvedValue(person("583231"));
+      getUserById.mockRejectedValue(new Error("github down"));
+
+      await prOpened();
+
+      expect(addPrAssignees).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        "PR assignee mirror failed",
+        expect.objectContaining({ taskId: "task-1", prUrl: PR_URL, message: "github down" }),
+      );
+    });
   });
 });

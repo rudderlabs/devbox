@@ -47,8 +47,8 @@ export class SlackNotifierService {
     const t = fresh ?? task;
     const prUrls = parsePrUrls(t.prUrls);
     // Nudge shown alongside PR links when the ticket's human assignee hasn't
-    // connected GitHub in Linear — the PR couldn't be assigned to them
-    // (eventDispatcher's pr_opened mirror skipped with no_github_mapping) and
+    // connected GitHub in Linear — the PR couldn't be assigned to them (the
+    // code host's assignee mirror skipped with no_github_mapping) and
     // self-service is the only fix. Re-checked lazily here so a user who
     // connected mid-run isn't nagged. Skipped for no_action, whose message
     // renders no PR section for the nudge to ride on.
@@ -61,11 +61,13 @@ export class SlackNotifierService {
     );
   }
 
-  // "" when there is nothing to nag about: no human assignee, already mapped,
-  // or the lookup failed (the registry logs it; never blocks the post).
+  // "" when there is nothing to nag about: no human assignee, already linked,
+  // or the lookup failed (the registry logs it; never blocks the post). Only
+  // whether an account is linked matters, so this is one Linear query and no
+  // GitHub call.
   private async connectGitHubNote(task: Task): Promise<string> {
     const person = await this.assignee(task, { purpose: "slack_nudge" });
-    if (person?.codeHost !== "unlinked") return "";
+    if (person?.githubAccount !== null) return "";
     // @-mention the assignee so the nudge notifies them (Slack only pings
     // members of the channel — a non-member renders un-notified). Linear and
     // Slack share the org email, so lookupByEmail is reliable here (it's only

@@ -111,7 +111,7 @@ describe("TaskService", () => {
 
   describe("assign", () => {
     it("creates the task and its assignment round; the platform id is the round's external id", async () => {
-      const requester = { id: "u-1", displayName: "Ann", codeHost: "unlinked" as const };
+      const requester = { id: "u-1", displayName: "Ann", githubAccount: null };
       const res = await assignLinear(session("sess-1"), { flags: ["FOO"], requester });
       expect(res).toEqual({ taskId: expect.any(String), key: "ISS-1", result: "created" });
 
@@ -258,7 +258,7 @@ describe("TaskService", () => {
     });
 
     it("kills the preempted sandbox when a re-delegation restarts a live run", async () => {
-      const ann = { id: "u-1", displayName: "Ann", codeHost: "unlinked" as const };
+      const ann = { id: "u-1", displayName: "Ann", githubAccount: null };
       const { taskId } = await assignLinear(session("sess-1"), { flags: ["OLD"], requester: ann });
       await db.execute(
         sql`UPDATE tasks SET sandbox_id = 'sb-old', pvc_name = 'pvc-old' WHERE id = ${taskId}`,
@@ -647,7 +647,7 @@ describe("TaskService", () => {
     });
 
     it("replaces the definition, keeps the requester, delegates through the target and kills the old sandbox", async () => {
-      const ann = { id: "u-1", displayName: "Ann", codeHost: "unlinked" as const };
+      const ann = { id: "u-1", displayName: "Ann", githubAccount: null };
       const { taskId } = await assignLinear(session("sess-1"), { flags: ["OLD"], requester: ann });
       await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-old' WHERE id = ${taskId}`);
       await linear.restart(taskId, { ...def(session("sess-9")), flags: ["NEW"] });

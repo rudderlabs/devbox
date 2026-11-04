@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
 // Type-only import — erased at link time, so it can't collide with the
 // mock.module barrel factories below, and it pins the real contract.
@@ -845,7 +845,8 @@ describe("EventDispatcher", () => {
       expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
     });
 
-    describe("linear assignee mirror", () => {
+    // Resolving an account id to a login: codeHost.service.test.ts.
+    describe("PR assignee mirror", () => {
       const human = (gitHubUserId: string | null): LinearHumanUser => ({
         id: "usr-1",
         name: "Ada Lovelace",
@@ -853,20 +854,26 @@ describe("EventDispatcher", () => {
         email: "ada@acme.com",
         gitHubUserId,
       });
-
-      it("numeric gitHubUserId → resolves the login via getUserById and assigns it", async () => {
-        getIssueHumanAssignee.mockResolvedValue(human("583231"));
-        getUserById.mockResolvedValue({ login: "octocat", id: 583231 });
-        addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
-
-        const result = await dispatcher.handle(prEvent(), makeTask());
-        await flushMicrotasks();
-
-        expect(result).toBe("ok");
-        expect(getIssueHumanAssignee).toHaveBeenCalledWith(expect.anything(), "issue-1");
-        expect(getUserById).toHaveBeenCalledWith("583231", expect.any(AbortSignal));
-        expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
+      // The mirror's pr_assignee.result log lines.
+      let info: ReturnType<typeof spyOn>;
+      let warn: ReturnType<typeof spyOn>;
+      beforeEach(() => {
+        info = spyOn(logger, "info").mockImplementation(() => logger);
+        warn = spyOn(logger, "warn").mockImplementation(() => logger);
       });
+      afterEach(() => {
+        info.mockRestore();
+        warn.mockRestore();
+      });
+      const results = () =>
+        [...info.mock.calls, ...warn.mock.calls]
+          .map(([, meta]) => meta as Record<string, unknown> | undefined)
+          .filter((meta) => meta?.event === "pr_assignee.result");
+      const logged = {
+        event: "pr_assignee.result",
+        taskId: "task-1",
+        prUrl: "https://github.com/o/r/pull/1",
+      };
 
       it("runs in BackgroundWork, so shutdown waits for it", async () => {
         getIssueHumanAssignee.mockResolvedValue(human("octocat"));
@@ -884,17 +891,6 @@ describe("EventDispatcher", () => {
         expect(assigned).toBe(true);
       });
 
-      it("non-numeric gitHubUserId is treated as a login directly (no getUserById)", async () => {
-        getIssueHumanAssignee.mockResolvedValue(human("octocat"));
-        addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
-
-        await dispatcher.handle(prEvent(), makeTask());
-        await flushMicrotasks();
-
-        expect(getUserById).not.toHaveBeenCalled();
-        expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
-      });
-
       it("no human assignee → no GitHub calls, still ok", async () => {
         getIssueHumanAssignee.mockResolvedValue(null);
         const result = await dispatcher.handle(prEvent(), makeTask());
@@ -902,6 +898,7 @@ describe("EventDispatcher", () => {
         expect(result).toBe("ok");
         expect(getUserById).not.toHaveBeenCalled();
         expect(addPrAssignees).not.toHaveBeenCalled();
+        expect(results()).toEqual([{ ...logged, status: "skipped", reason: "no_human_assignee" }]);
       });
 
       it("assignee without a Linear↔GitHub connection (gitHubUserId null) → skip", async () => {
@@ -909,24 +906,12 @@ describe("EventDispatcher", () => {
         const result = await dispatcher.handle(prEvent(), makeTask());
         await flushMicrotasks();
         expect(result).toBe("ok");
+        expect(getIssueHumanAssignee).toHaveBeenCalledWith(expect.anything(), "issue-1");
         expect(addPrAssignees).not.toHaveBeenCalled();
-      });
-
-      it("empty login from a malformed getUserById response → skip, no assignees POST", async () => {
-        getIssueHumanAssignee.mockResolvedValue(human("583231"));
-        getUserById.mockResolvedValue({ login: "", id: 0 });
-        await dispatcher.handle(prEvent(), makeTask());
-        await flushMicrotasks();
-        expect(addPrAssignees).not.toHaveBeenCalled();
-      });
-
-      it("getUserById rejection is swallowed: result ok, no assignees POST", async () => {
-        getIssueHumanAssignee.mockResolvedValue(human("583231"));
-        getUserById.mockRejectedValue(new Error("github down"));
-        const result = await dispatcher.handle(prEvent(), makeTask());
-        await flushMicrotasks();
-        expect(result).toBe("ok");
-        expect(addPrAssignees).not.toHaveBeenCalled();
+        // The Linear account id, never the name or email.
+        expect(results()).toEqual([
+          { ...logged, status: "skipped", reason: "no_github_mapping", personId: "usr-1" },
+        ]);
       });
 
       it("case-folded comparison: canonical-cased response is not a false drop", async () => {
@@ -936,6 +921,9 @@ describe("EventDispatcher", () => {
         await flushMicrotasks();
         expect(result).toBe("ok");
         expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["OctoCat"]);
+        expect(results()).toEqual([
+          { ...logged, status: "assigned", requested: "OctoCat", assigned: ["octocat"] },
+        ]);
       });
 
       it("non-github PR url → mirror skips without any lookup", async () => {
@@ -965,6 +953,15 @@ describe("EventDispatcher", () => {
         const result = await dispatcher.handle(prEvent(), makeTask());
         await flushMicrotasks();
         expect(result).toBe("ok");
+        expect(results()).toEqual([
+          {
+            ...logged,
+            status: "silently_dropped",
+            reason: "no_push_access",
+            requested: "octocat",
+            assigned: [],
+          },
+        ]);
       });
     });
 

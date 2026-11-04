@@ -77,7 +77,10 @@ export type Person = {
   id: string; // the platform account id: logs carry it, never the name or email
   displayName: string;
   email?: string;
-  codeHost: { githubLogin: string } | "unlinked" | "unsupported";
+  // The GitHub account the platform links to this person: a numeric account
+  // id or a login. null: the platform links accounts but this person hasn't.
+  // Absent: the platform can't link accounts. The code host resolves it.
+  githubAccount?: string | null;
 };
 export type PrRef = {
   url: string;
