@@ -2,9 +2,7 @@ import type { SandboxInfo } from "@alibaba-group/opensandbox";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
-import { deliverToRound } from "../integrations/http";
 import type { Outbound } from "../integrations/outbound";
-import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
@@ -12,7 +10,7 @@ import type { BackgroundWork } from "./backgroundWork";
 import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { IntegrationRegistry } from "./integrationRegistry";
 import type { ReplyHolds } from "./replyHolds";
 import { type PodStatus, SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
@@ -47,12 +45,11 @@ export class TaskProcessorService {
   private readonly eventDispatcher: EventDispatcher;
   private readonly inboxService: InboxService;
   private readonly slackNotifier: Pick<SlackNotifierService, "notifyTerminal">;
-  private readonly integrations: Readonly<Record<string, Integration>>;
+  private readonly registry: Pick<IntegrationRegistry, "for">;
   private readonly holds: ReplyHolds;
   // Sources this build has an integration for; claimNext and
   // listInFlightOwnedBy see only these tasks.
   private readonly taskSources: Task["source"][];
-  private readonly hooks: IntegrationHooks;
   private readonly background: BackgroundWork;
 
   constructor(
@@ -62,10 +59,9 @@ export class TaskProcessorService {
     eventDispatcher: EventDispatcher,
     inboxService: InboxService,
     slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
-    integrations: Readonly<Record<string, Integration>>,
+    registry: Pick<IntegrationRegistry, "for">,
     holds: ReplyHolds,
     taskSources: Task["source"][],
-    hooks: IntegrationHooks,
     background: BackgroundWork,
   ) {
     this.taskRepo = taskRepo;
@@ -74,10 +70,9 @@ export class TaskProcessorService {
     this.eventDispatcher = eventDispatcher;
     this.inboxService = inboxService;
     this.slackNotifier = slackNotifier;
-    this.integrations = integrations;
+    this.registry = registry;
     this.holds = holds;
     this.taskSources = taskSources;
-    this.hooks = hooks;
     this.background = background;
   }
 
@@ -318,7 +313,7 @@ export class TaskProcessorService {
     // The owner integration's onTaskStarted (Linear: issue state and the
     // Provisioning action), on every fresh-provision attempt. Never throws. API
     // tasks' logs get sandbox_started from attachSandboxResources.
-    await this.hooks.taskStarted(task, assignment);
+    await this.registry.for(task.source).onTaskStarted(task, assignment);
 
     // WORKSPACE is the only task-specific input passed at creation; the daemon
     // derives its .harness dir from it and reads everything else from the inbox file
@@ -846,14 +841,19 @@ export class TaskProcessorService {
         };
         // At most once: there is no cursor to hold, so a RetryableError is
         // dropped too.
-        await deliverToRound(this.integrations, row, t, notice, { taskId: task.id }).catch((e) =>
-          logErr(`failTask: notice to target ${t.id} dropped`, e),
-        );
+        await this.registry
+          .for(row.source)
+          .deliver(row, t, notice, { taskId: task.id })
+          .catch((e) => logErr(`failTask: notice to target ${t.id} dropped`, e));
       }
     }
 
     // The assignment's integration finishes its round as failed (detached).
-    if (assignment) this.hooks.roundFinished(task, assignment, "failed", true);
+    if (assignment) {
+      this.registry
+        .for(assignment.source)
+        .onRoundFinished(task, assignment, assignment.id, "failed", true);
+    }
 
     // Kill the sandbox the task ACTUALLY holds, read from the DB — NOT the
     // dispatch-time `task` closure, whose sandbox_id can be stale (a recreate

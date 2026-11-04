@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it, mock, setSystemTime } from "bun:test";
+import { afterEach, describe, expect, it, mock, setSystemTime, spyOn } from "bun:test";
+import type { Task } from "../../db/schema";
+import { fakeDefinitions } from "../../integrations/__tests__/fakeIntegrations";
 import type {
+  HookCtx,
   Integration,
   IntegrationDefinition,
   ReplyTarget,
+  Round,
   TaskService,
 } from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
@@ -15,6 +19,8 @@ const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integr
 const { ReplyHolds } = await import("../replyHolds");
 const { RetryableError } = await import("../../integrations/outbound");
 const { definitions } = await import("../../integrations");
+const { BackgroundWork } = await import("../backgroundWork");
+const { logger } = await import("../../logger");
 
 const none = { heldTasks: 0, oldestHoldAgeMs: 0 };
 const integration = (status: object = {}): Integration => ({
@@ -115,6 +121,16 @@ describe("IntegrationRegistry", () => {
     const hooks = r.webhooks();
     expect(hooks.map((w) => w.name)).toEqual(["a"]);
     expect(await (await (hooks[0] as (typeof hooks)[0]).webhook({} as never)).text()).toBe("a");
+  });
+
+  it("prMentionLogin is the login of an enabled integration that takes @-mentions", () => {
+    const mentions = definition("b", {
+      create: () => ({ ...integration(), prMentionLogin: "bot" }),
+    });
+    expect(registry([definition("a"), mentions], { a: "on", b: "on" }).prMentionLogin()).toBe(
+      "bot",
+    );
+    expect(registry([definition("a"), mentions], { a: "on" }).prMentionLogin()).toBeUndefined();
   });
 
   it("status adds held sends; disabled ones answer disabledStatus(); unknown names have none", async () => {
@@ -223,5 +239,355 @@ describe("the integrations this build has", () => {
     expect(Object.keys(r.live)).toEqual(["linear", "github", "api"]);
     expect(r.webhooks().map((w) => w.name)).toEqual(["linear", "github"]);
     expect(Object.keys(registry([...definitions], { API_ENABLED: "true" }).live)).toEqual(["api"]);
+  });
+});
+
+// The wrapped integrations core calls through for(), over enabled linear and
+// github integrations built from these parts, or with linear off when
+// `linear` is null.
+const task = { id: "task-1", source: "linear" } as Task;
+const row = (id: string, kind = "assignment", source = "linear") =>
+  ({
+    id,
+    kind,
+    source,
+    reply_targets: [{ id: "sess-1", spec: { kind: "linear_session" } }],
+  }) as unknown as Round;
+const target: ReplyTarget = { id: "sess-1", spec: { kind: "linear_session" } };
+const reply = { type: "reply", body: "hi" } as const;
+const pr = { url: "u", repo: "r", branch: "b" };
+const noop: Integration = integration();
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const HOOKS = ["onTaskStarted", "onPrOpened", "onRoundFinished", "assignee"] as const;
+
+function wrapped(
+  linear: Partial<Integration> | null,
+  github: Partial<Integration> = {},
+  timeoutMs?: number,
+) {
+  const inboxRepo = { getAssignment: mock(() => Promise.resolve(row("a-1"))) };
+  const background = new BackgroundWork();
+  const defs = fakeDefinitions({
+    linear: linear && { ...noop, ...linear },
+    github: { ...noop, ...github },
+  });
+  const t = timeoutMs;
+  const r = new IntegrationRegistry(
+    defs,
+    parseIntegrationConfigs(defs, {}),
+    {
+      taskRepo,
+      inboxRepo: inboxRepo as unknown as InboxRepository,
+      sandboxManager: {} as never,
+      background,
+      holds: new ReplyHolds(),
+    },
+    t === undefined
+      ? {}
+      : { deliver: t, onTaskStarted: t, onPrOpened: t, onRoundFinished: t, assignee: t },
+  );
+  return { r, inboxRepo, background };
+}
+
+describe("IntegrationRegistry.for: deliver", () => {
+  it("hands the message to the integration with an abort signal: ok", async () => {
+    const deliver = mock((_ctx: unknown, _target: unknown, _message: unknown) => Promise.resolve());
+    const { r } = wrapped({ deliver });
+    expect(await r.for("linear").deliver(row("a-1"), target, reply, { taskId: "task-1" })).toBe(
+      "ok",
+    );
+    expect(deliver).toHaveBeenCalledWith(
+      { signal: expect.any(AbortSignal), log: logger },
+      target,
+      reply,
+    );
+  });
+
+  it("an unknown or disabled integration's send is skipped, logged, and counts as sent", async () => {
+    const info = spyOn(logger, "info").mockImplementation(() => logger);
+    try {
+      const { r } = wrapped(null);
+      const meta = { taskId: "task-1" };
+      expect(await r.for("linear").deliver(row("a-1"), target, reply, meta)).toBe("ok");
+      expect(await r.for("jira").deliver(row("j-1", "comment", "jira"), target, reply, meta)).toBe(
+        "ok",
+      );
+      expect(info.mock.calls).toEqual([
+        [
+          "reply skipped: integration unknown or disabled",
+          { taskId: "task-1", inboxId: "a-1", source: "linear", targetId: "sess-1" },
+        ],
+        [
+          "reply skipped: integration unknown or disabled",
+          { taskId: "task-1", inboxId: "j-1", source: "jira", targetId: "sess-1" },
+        ],
+      ]);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("any other failure is logged and dropped; a RetryableError is rethrown", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => logger);
+    try {
+      const meta = { taskId: "task-1", eventType: "agent_response" };
+      const failing = wrapped({ deliver: () => Promise.reject(new Error("HTTP 500")) });
+      expect(await failing.r.for("linear").deliver(row("a-1"), target, reply, meta)).toBe(
+        "dropped",
+      );
+      expect(error.mock.calls).toEqual([
+        [
+          "deliver reply failed",
+          {
+            ...meta,
+            inboxId: "a-1",
+            source: "linear",
+            targetId: "sess-1",
+            message: "HTTP 500",
+            stack: expect.any(String),
+          },
+        ],
+      ]);
+
+      const held = wrapped({ deliver: () => Promise.reject(new RetryableError("HTTP 429")) });
+      await expect(held.r.for("linear").deliver(row("a-1"), target, reply, meta)).rejects.toThrow(
+        "HTTP 429",
+      );
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
+describe("IntegrationRegistry.for: hooks", () => {
+  it("never throws: a failing hook is logged and yields undefined", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => logger);
+    try {
+      const { r } = wrapped({
+        assignee: () => Promise.reject(new RetryableError("token fetch failed")),
+      });
+      expect(await r.for("linear").assignee(task, { prUrl: "u" })).toBeUndefined();
+      expect(error).toHaveBeenCalledWith(
+        "assignee hook failed",
+        expect.objectContaining({ prUrl: "u", taskId: "task-1", integration: "linear" }),
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("skips a disabled or unknown integration's hooks as it does a missing hook: no lookup, no log, never held", async () => {
+    const logs = (["info", "warn", "error"] as const).map((level) =>
+      spyOn(logger, level).mockImplementation(() => logger),
+    );
+    try {
+      const { r, inboxRepo, background } = wrapped(null);
+      for (const name of ["linear", "jira"]) {
+        const off = r.for(name);
+        expect(await off.assignee(task, {})).toBeUndefined();
+        expect(await off.onPrOpened(task, "a-1", pr, true)).toBeUndefined();
+        expect(await off.onTaskStarted(task, row("a-1"))).toBeUndefined();
+        off.onRoundFinished(task, row("a-1"), "a-1", "completed", true);
+      }
+      await background.drain(Promise.resolve());
+      expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
+      for (const log of logs) expect(log).not.toHaveBeenCalled();
+    } finally {
+      for (const log of logs) log.mockRestore();
+    }
+  });
+
+  it("only deliver and onPrOpened let a RetryableError escape, so only they hold", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => logger);
+    try {
+      const retry = () => Promise.reject(new RetryableError("429"));
+      const { r, background } = wrapped({
+        deliver: retry,
+        onTaskStarted: retry,
+        onPrOpened: retry,
+        onRoundFinished: retry,
+        assignee: retry,
+      });
+      const linear = r.for("linear");
+      await expect(linear.deliver(row("a-1"), target, reply, {})).rejects.toThrow("429");
+      await expect(linear.onPrOpened(task, "a-1", pr, true)).rejects.toThrow("429");
+      expect(await linear.onTaskStarted(task, row("a-1"))).toBeUndefined();
+      expect(await linear.assignee(task, {})).toBeUndefined();
+      linear.onRoundFinished(task, row("a-1"), "a-1", null, true);
+      await background.drain(sleep(500));
+      expect(error.mock.calls.map(([msg]) => msg)).toEqual([
+        "onTaskStarted hook failed",
+        "assignee hook failed",
+        "onRoundFinished hook failed",
+      ]);
+
+      // Any other onPrOpened failure is logged and the event goes on.
+      const other = wrapped({ onPrOpened: () => Promise.reject(new Error("HTTP 500")) });
+      expect(await other.r.for("linear").onPrOpened(task, "a-1", pr, true)).toBeUndefined();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("cuts a hung call at its timeout: the call resolves, the send drops and the signal aborts", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => logger);
+    try {
+      const signals: Record<string, AbortSignal> = {};
+      const hang = (name: string) => (ctx: { signal: AbortSignal }) => {
+        signals[name] = ctx.signal;
+        return new Promise<never>(() => {});
+      };
+      const { r, background } = wrapped(
+        Object.fromEntries(["deliver", ...HOOKS].map((name) => [name, hang(name)])),
+        {},
+        20,
+      );
+      const linear = r.for("linear");
+      expect(await linear.deliver(row("a-1"), target, reply, {})).toBe("dropped");
+      expect(await linear.onTaskStarted(task, row("a-1"))).toBeUndefined();
+      expect(await linear.onPrOpened(task, "a-1", pr, true)).toBeUndefined();
+      expect(await linear.assignee(task, {})).toBeUndefined();
+      linear.onRoundFinished(task, row("a-1"), "a-1", null, true);
+      await background.drain(sleep(500));
+
+      expect(Object.keys(signals).sort()).toEqual(["deliver", ...HOOKS].sort());
+      for (const signal of Object.values(signals)) expect(signal.aborted).toBe(true);
+      expect(
+        error.mock.calls.map(([msg, meta]) => [msg, (meta as { message: string }).message]),
+      ).toEqual([
+        ["deliver reply failed", "timed out after 20 ms"],
+        ["onTaskStarted hook failed", "timed out after 20 ms"],
+        ["onPrOpened hook failed", "timed out after 20 ms"],
+        ["assignee hook failed", "timed out after 20 ms"],
+        ["onRoundFinished hook failed", "timed out after 20 ms"],
+      ]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("no inbox query unless isCurrent() is called", async () => {
+    const { r, inboxRepo, background } = wrapped({
+      onTaskStarted: async () => {},
+      onPrOpened: async () => {},
+      onRoundFinished: async () => {},
+      assignee: async () => null,
+    });
+    const linear = r.for("linear");
+    await linear.deliver(row("a-1"), target, reply, {});
+    await linear.onTaskStarted(task, row("a-1"));
+    await linear.onPrOpened(task, "a-1", pr, true);
+    await linear.assignee(task, {});
+    linear.onRoundFinished(task, row("c-1", "comment"), "a-1", null, true);
+    await background.drain(sleep(500));
+    expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
+  });
+
+  it("isCurrent() is false when its lookup fails", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => logger);
+    try {
+      let ctx: HookCtx | undefined;
+      const { r, inboxRepo } = wrapped({
+        async onPrOpened(c) {
+          ctx = c;
+        },
+      });
+      inboxRepo.getAssignment.mockRejectedValue(new Error("connection reset"));
+      await r.for("linear").onPrOpened(task, "a-1", pr, true);
+      expect(await ctx?.isCurrent()).toBe(false);
+      expect(error).toHaveBeenCalledWith(
+        "onPrOpened: assignment lookup failed; isCurrent() is false",
+        expect.objectContaining({
+          taskId: "task-1",
+          integration: "linear",
+          message: "connection reset",
+        }),
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("isCurrent() is false without a run, and reads nothing", async () => {
+    const ctxs: HookCtx[] = [];
+    const { r, inboxRepo } = wrapped({
+      async onPrOpened(c) {
+        ctxs.push(c);
+      },
+      async assignee(c) {
+        ctxs.push(c);
+        return null;
+      },
+    });
+    // An event without an inbox row, and assignee(), which belongs to no run.
+    await r.for("linear").onPrOpened(task, null, pr, true);
+    await r.for("linear").assignee(task, {});
+    expect(await Promise.all(ctxs.map((c) => c.isCurrent()))).toEqual([false, false]);
+    expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
+  });
+
+  it("isCurrent() reads the task's assignment id on each call: false once a restart rotated it", async () => {
+    let ctx: HookCtx | undefined;
+    const { r, inboxRepo, background } = wrapped(
+      {},
+      {
+        async onRoundFinished(c) {
+          ctx = c;
+        },
+      },
+    );
+    // A GitHub review round of the run whose assignment is a-1.
+    r.for("github").onRoundFinished(task, row("gh-1", "review", "github"), "a-1", null, true);
+    await background.drain(sleep(500));
+    expect(await ctx?.isCurrent()).toBe(true);
+    inboxRepo.getAssignment.mockResolvedValue(row("a-2"));
+    expect(await ctx?.isCurrent()).toBe(false);
+    expect(inboxRepo.getAssignment).toHaveBeenCalledTimes(2);
+  });
+
+  it("onTaskStarted runs on each fresh-provision attempt, with the assignment's first target and run", async () => {
+    const calls: [HookCtx, ReplyTarget][] = [];
+    const { r, inboxRepo } = wrapped({
+      async onTaskStarted(ctx, _task, t) {
+        calls.push([ctx, t]);
+      },
+    });
+    // A deferred provision retries the same assignment.
+    await r.for("linear").onTaskStarted(task, row("a-1"));
+    await r.for("linear").onTaskStarted(task, row("a-1"));
+    expect(calls.map(([, t]) => t)).toEqual([target, target]);
+    // The caller hands in the assignment row: no lookup of its own.
+    expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
+    // Its run is that assignment.
+    expect(await calls[0]?.[0].isCurrent()).toBe(true);
+  });
+
+  it("onRoundFinished runs in BackgroundWork; drain logs hook_abandoned for what is still running", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => logger);
+    try {
+      const finished: string[] = [];
+      const record = async (_ctx: unknown, _task: Task, round: Round) => {
+        finished.push(round.id);
+      };
+      const { r, background } = wrapped(
+        // Outlives the drain deadline below.
+        { onRoundFinished: (ctx, t, round) => sleep(200).then(() => record(ctx, t, round)) },
+        { onRoundFinished: record },
+      );
+      r.for("github").onRoundFinished(task, row("gh-1", "review", "github"), "a-1", null, true);
+      r.for("linear").onRoundFinished(task, row("a-1"), "a-1", "failed", true);
+      await background.drain(sleep(50));
+
+      expect(finished).toEqual(["gh-1"]);
+      expect(warn.mock.calls).toEqual([
+        [
+          "hook abandoned at shutdown",
+          { event: "hook_abandoned", taskId: "task-1", hook: "onRoundFinished" },
+        ],
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

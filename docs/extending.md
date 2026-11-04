@@ -88,13 +88,16 @@ discussion to a follow-up only for `github` rounds
   round, and queues follow-up rounds. A round's kind and payload are what the
   harness reads (`InboxMessage` in `control-plane/src/types/inboxMessage.ts`).
 - **The `Integration`.** `create` returns it: an optional webhook, `deliver`
-  for the harness's answers, optional lifecycle hooks, and its status.
+  for the harness's answers, optional lifecycle hooks, and its status. The
+  control plane calls it only through the registry
+  (`control-plane/src/services/integrationRegistry.ts`), which skips a
+  disabled integration, bounds each call with a timeout and an abort signal,
+  and logs a failure. `onTaskStarted` runs before every fresh-provision
+  attempt, so it must be safe to repeat.
 - **Reply targets.** Each round carries reply targets that say where the
   harness's answers go, each with a `spec` in the integration's own shape. The
   control plane stores the spec and hands it back to the `deliver` of the
-  round's integration (`deliverToRound` in
-  `control-plane/src/integrations/http.ts`), which checks it and refuses
-  anything else.
+  round's integration, which checks it and refuses anything else.
 - **The boundary.** A file in the folder imports only its own folder, the
   shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), the
   API clients in `control-plane/src/clients/`, the experimental-flag parser,

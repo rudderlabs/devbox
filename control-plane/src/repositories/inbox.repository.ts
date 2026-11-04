@@ -251,13 +251,24 @@ export class InboxRepository {
   // Task-scoped lookup. The dispatcher resolves event.inbox_id (a value
   // written by the sandbox) — a plain getById would happily return a row
   // belonging to a different task (confused-deputy). Filtering on task_id
-  // makes a cross-task inbox_id resolve to null instead.
-  async getByIdForTask(id: string, taskId: string): Promise<InboxRow | null> {
-    const result = await db.execute<RawInboxRow>(sql`
-      SELECT * FROM inbox WHERE id = ${id} AND task_id = ${taskId} LIMIT 1;
+  // makes a cross-task inbox_id resolve to null instead. The same query reads
+  // the task's assignment id, which the row's hooks compare against when they
+  // ask whether their run is still the current one.
+  async getByIdForTask(
+    id: string,
+    taskId: string,
+  ): Promise<(InboxRow & { task_assignment_id: string | null }) | null> {
+    type Raw = RawInboxRow & { task_assignment_id: string | null };
+    const result = await db.execute<Raw>(sql`
+      SELECT i.*,
+             (SELECT a.id FROM inbox a
+               WHERE a.task_id = i.task_id AND a.kind = 'assignment' LIMIT 1) AS task_assignment_id
+        FROM inbox i
+       WHERE i.id = ${id} AND i.task_id = ${taskId}
+       LIMIT 1;
     `);
-    const row = asRows<RawInboxRow>(result)[0];
-    return row ? mapRow(row) : null;
+    const row = asRows<Raw>(result)[0];
+    return row ? { ...mapRow(row), task_assignment_id: row.task_assignment_id } : null;
   }
 
   // The task's assignment row. A restart re-pends it under a new id, which is

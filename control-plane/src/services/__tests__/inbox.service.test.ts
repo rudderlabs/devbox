@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
-import { fakeIntegrations, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
+import { fakeDefinitions, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
 import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
 import type { SandboxManager } from "../sandboxManager.service";
@@ -73,8 +73,9 @@ const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound"
 const { LinearIntegration } = await import("../../integrations/linear");
 const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
-const { IntegrationHooks } = await import("../integrationHooks");
+const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
 const { BackgroundWork } = await import("../backgroundWork");
+const { ReplyHolds } = await import("../replyHolds");
 const { LinearTokenError } = await import("../../clients/linearOauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
@@ -184,7 +185,7 @@ describe("InboxService", () => {
       { status: async () => ({ configured: false }) },
       NO_WEBHOOK,
     );
-    const integrations = fakeIntegrations({
+    const defs = fakeDefinitions({
       linear,
       api: new ApiIntegration(),
       github: new GithubIntegration(
@@ -193,12 +194,14 @@ describe("InboxService", () => {
         NO_WEBHOOK,
       ),
     });
-    service = new InboxService(
+    const registry = new IntegrationRegistry(defs, parseIntegrationConfigs(defs, {}), {
+      taskRepo: {} as never,
       inboxRepo,
       sandboxManager,
-      integrations,
-      new IntegrationHooks(integrations, inboxRepo, new BackgroundWork()),
-    );
+      background: new BackgroundWork(),
+      holds: new ReplyHolds(),
+    });
+    service = new InboxService(inboxRepo, sandboxManager, registry);
   });
 
   describe("sweepUndelivered", () => {

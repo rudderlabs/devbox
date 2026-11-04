@@ -50,7 +50,7 @@ describe("SlackNotifierService", () => {
       taskRepo,
       botToken,
       channel,
-      { assignee } as unknown as Ctor[3],
+      assignee as unknown as Ctor[3],
       post as unknown as Ctor[4],
       lookupSlackUser as unknown as Ctor[5],
     );
@@ -187,11 +187,9 @@ describe("SlackNotifierService", () => {
       assignee.mockResolvedValue(unmapped);
       await make().notifyTerminal(makeTask(), "completed");
       const text = postedText();
-      expect(assignee).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "task-1" }),
-        null,
-        expect.anything(),
-      );
+      expect(assignee).toHaveBeenCalledWith(expect.objectContaining({ id: "task-1" }), {
+        purpose: "slack_nudge",
+      });
       expect(text).toContain("⚠️ ada: I couldn't assign the PR to you");
       expect(text).toContain("*Linear → Settings → Connected accounts*");
       // The nudge rides directly under the PR list.
@@ -220,7 +218,7 @@ describe("SlackNotifierService", () => {
     });
 
     it("still posts (without the nudge) when the assignee lookup fails", async () => {
-      // IntegrationHooks.assignee logs the failure and yields undefined.
+      // The registry's assignee() logs the failure and yields undefined.
       assignee.mockResolvedValue(undefined);
       await make().notifyTerminal(makeTask(), "completed");
       expect(post).toHaveBeenCalledTimes(1);

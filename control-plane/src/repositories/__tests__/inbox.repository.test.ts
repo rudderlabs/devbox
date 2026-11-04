@@ -398,6 +398,26 @@ describe("InboxRepository", () => {
 
       const found = await repo.getByIdForTask(row.id, task.id);
       expect(found?.id).toBe(row.id);
+      expect(found?.task_assignment_id).toBe(row.id);
+    });
+
+    it("carries the task's assignment id on a follow-up round", async () => {
+      const task = await insertTask();
+      const assignment = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
+      const comment = await insertRow(task.id, {
+        source: "github",
+        kind: "comment",
+        status: "pending",
+      });
+
+      const found = await repo.getByIdForTask(comment.id, task.id);
+      expect(found?.id).toBe(comment.id);
+      expect(found?.kind).toBe("comment");
+      expect(found?.task_assignment_id).toBe(assignment.id);
     });
 
     it("returns null when the row belongs to a different task (confused deputy)", async () => {

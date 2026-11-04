@@ -81,7 +81,7 @@ describe("harness contract", () => {
       });
     const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
     // The sweep never reaches the integrations or hooks.
-    const inbox = new InboxService(inboxRepo, sandboxManager, {} as never, {} as never);
+    const inbox = new InboxService(inboxRepo, sandboxManager, {} as never);
     // The webhook acks are fire-and-forget; a client that never arrives keeps
     // them from running.
     const linear = new AgentSessionService(

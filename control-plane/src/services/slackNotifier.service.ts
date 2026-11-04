@@ -2,7 +2,7 @@ import { lookupSlackUserIdByEmail, postSlackMessage } from "../clients/slack";
 import type { Task } from "../db/schema";
 import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import type { TaskRepository } from "../repositories/task.repository";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { WrappedIntegration } from "./integrationRegistry";
 
 // Terminal-state granularity. `completed | partial_failure | no_action` come
 // from the sandbox `completed` event's status field; `failed` is used by both
@@ -28,8 +28,8 @@ export class SlackNotifierService {
     private readonly botToken: string,
     // config.slack.channel in production. Empty ⇒ Slack disabled (no-op).
     private readonly channel: string,
-    // The owner integration's assignee(), for the connect-GitHub nudge.
-    private readonly hooks: Pick<IntegrationHooks, "assignee">,
+    // The task's own integration's assignee(), for the connect-GitHub nudge.
+    private readonly assignee: WrappedIntegration["assignee"],
     // Injected for testability; default to the real implementations.
     private readonly post: typeof postSlackMessage = postSlackMessage,
     private readonly lookupSlackUser: typeof lookupSlackUserIdByEmail = lookupSlackUserIdByEmail,
@@ -62,9 +62,9 @@ export class SlackNotifierService {
   }
 
   // "" when there is nothing to nag about: no human assignee, already mapped,
-  // or the lookup failed (IntegrationHooks logs it; never blocks the post).
+  // or the lookup failed (the registry logs it; never blocks the post).
   private async connectGitHubNote(task: Task): Promise<string> {
-    const person = await this.hooks.assignee(task, null, { purpose: "slack_nudge" });
+    const person = await this.assignee(task, { purpose: "slack_nudge" });
     if (person?.codeHost !== "unlinked") return "";
     // @-mention the assignee so the nudge notifies them (Slack only pings
     // members of the channel — a non-member renders un-notified). Linear and

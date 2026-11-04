@@ -1,15 +1,14 @@
 import { addPrAssignees, parsePrUrl, postIssueComment } from "../clients/github";
 import { config } from "../config";
 import type { Task } from "../db/schema";
-import { deliverToRound, SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
+import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import { type Outbound, RetryableError } from "../integrations/outbound";
-import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
 import type { AgentEmit, HarnessEvent } from "../types/harnessEvent";
 import type { BackgroundWork } from "./backgroundWork";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { IntegrationRegistry } from "./integrationRegistry";
 import type { ReplyHolds } from "./replyHolds";
 import type { SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
@@ -62,10 +61,10 @@ export class EventDispatcher {
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
     private slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
-    private integrations: Readonly<Record<string, Integration>>,
+    private registry: Pick<IntegrationRegistry, "for" | "prMentionLogin">,
     private holds: ReplyHolds,
-    private hooks: IntegrationHooks,
     private background: Pick<BackgroundWork, "track">,
+    // Bounds the onboarding comment; the registry bounds sends and hooks.
     private sendTimeoutMs = SEND_TIMEOUT_MS,
   ) {}
 
@@ -93,9 +92,12 @@ export class EventDispatcher {
     // Pair this record with `crossed_sandbox_binding` using taskId and sandboxId
     // to determine how the streams crossed.
     let inboxRow: InboxRow | null = null;
+    // The assignment id of the run this event belongs to, read with the row:
+    // its hooks' isCurrent() compares the task's assignment id with it.
+    let runId: string | null = null;
     if (event.inbox_id) {
-      inboxRow = await this.inboxRepo.getByIdForTask(event.inbox_id, task.id);
-      if (!inboxRow) {
+      const found = await this.inboxRepo.getByIdForTask(event.inbox_id, task.id);
+      if (!found) {
         logger.error("cross_task_leak_detected: event.inbox_id does not belong to this task", {
           event: "cross_task_leak_detected",
           taskId: task.id,
@@ -112,6 +114,9 @@ export class EventDispatcher {
         });
         return "abort";
       }
+      const { task_assignment_id, ...row } = found;
+      inboxRow = row;
+      runId = task_assignment_id;
     }
     switch (event.type) {
       // Agent emits → labelled, then delivered by the round's integration
@@ -154,17 +159,19 @@ export class EventDispatcher {
           // stall tick() toward the lease window — the same hazard
           // reconcileFilesTimeoutMs exists for. Nothing downstream reads the
           // result, and the method never rejects (see its contract).
-          this.background.track(task.id, "assignee", this.mirrorPrAssignee(event, task, inboxRow));
+          this.background.track(task.id, "assignee", this.mirrorPrAssignee(event, task));
         }
         // The owner's onPrOpened (Linear: attach the PR to the issue) runs on
         // every dispatch and is idempotent. Unlike other hooks, its
         // RetryableError escapes to handle(), which holds pr_opened.
-        await this.hooks.prOpened(
-          task,
-          inboxRow,
-          { url: event.pr_url, repo: event.repo, branch: event.branch },
-          appended.firstTime,
-        );
+        await this.registry
+          .for(task.source)
+          .onPrOpened(
+            task,
+            runId,
+            { url: event.pr_url, repo: event.repo, branch: event.branch },
+            appended.firstTime,
+          );
         break;
       }
 
@@ -183,9 +190,11 @@ export class EventDispatcher {
         // command (~tens of seconds), run only if the hook asks for it while
         // the sandbox is still alive (it lives until the idle reaper).
         const sandboxId = task.sandboxId;
-        this.hooks.roundFinished(task, inboxRow, outcome, marked, async () =>
-          sandboxId ? this.sandboxManager.extractArchive(sandboxId) : null,
-        );
+        this.registry
+          .for(inboxRow.source)
+          .onRoundFinished(task, inboxRow, runId, outcome, marked, async () =>
+            sandboxId ? this.sandboxManager.extractArchive(sandboxId) : null,
+          );
         // Slack completion update to the configured channel.
         // Assignment-only (the top-level task, not comment/review rounds) and
         // gated on the first inbox transition so a cursor-replay can't double-
@@ -220,9 +229,9 @@ export class EventDispatcher {
   // row's reply_targets[] by target_id, labels the emit, and hands both to the
   // round's integration, which decides where (or whether) it shows up. Core
   // never checks what an integration can show. A disabled integration's send
-  // is skipped and counts as sent. The send runs under sendTimeoutMs
-  // (SEND_TIMEOUT_MS). A RetryableError (nothing was sent) holds the event on
-  // the round's integration; a timeout or any other failure is logged and the
+  // is skipped and counts as sent. The send runs under the registry's send
+  // timeout. A RetryableError (nothing was sent) holds the event on the
+  // round's integration; a timeout or any other failure is logged and the
   // event dropped.
   private async deliver(
     event: AgentEmit,
@@ -247,14 +256,12 @@ export class EventDispatcher {
     }
 
     try {
-      return await deliverToRound(
-        this.integrations,
-        inboxRow,
-        target,
-        labelAgentEmit(event, inboxRow),
-        { taskId: task.id, eventType: event.type },
-        this.sendTimeoutMs,
-      );
+      return await this.registry
+        .for(inboxRow.source)
+        .deliver(inboxRow, target, labelAgentEmit(event, inboxRow), {
+          taskId: task.id,
+          eventType: event.type,
+        });
     } catch (err) {
       // Nothing was sent: the event holds on the round's integration.
       if (!(err instanceof RetryableError)) throw err;
@@ -308,7 +315,7 @@ export class EventDispatcher {
   ): Promise<void> {
     // The comment explains @-mentions, which only work while an enabled
     // integration takes them (GitHub's webhooks).
-    const botLogin = Object.values(this.integrations).find((i) => i.prMentionLogin)?.prMentionLogin;
+    const botLogin = this.registry.prMentionLogin();
     if (!botLogin) return;
     const pr = parsePrUrl(event.pr_url);
     if (!pr) return; // not a github.com PR URL — skip
@@ -333,12 +340,11 @@ export class EventDispatcher {
   private async mirrorPrAssignee(
     event: Extract<HarnessEvent, { type: "pr_opened" }>,
     task: Task,
-    round: InboxRow | null,
   ): Promise<void> {
     const pr = parsePrUrl(event.pr_url);
     if (!pr) return; // not a github.com PR URL — skip
     // undefined: no assignee() (API tasks), or the lookup failed (logged).
-    const person = await this.hooks.assignee(task, round, { prUrl: event.pr_url });
+    const person = await this.registry.for(task.source).assignee(task, { prUrl: event.pr_url });
     if (person === undefined) return;
     if (!person) {
       logger.info("PR assignee mirror skipped", {

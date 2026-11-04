@@ -4,7 +4,7 @@ import { SandboxApiException } from "@alibaba-group/opensandbox";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../../errors";
-import { fakeIntegrations, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
+import { fakeDefinitions, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
 import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { Integration } from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
@@ -98,7 +98,7 @@ const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
-const { IntegrationHooks } = await import("../integrationHooks");
+const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
 const { BackgroundWork } = await import("../backgroundWork");
 const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
 const { InboxService: RealInboxService } = await import("../inbox.service");
@@ -193,10 +193,10 @@ describe("TaskProcessorService", () => {
   let notifyTerminal: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
   let holds: InstanceType<typeof ReplyHolds>;
+  // The enabled integrations the registry is built from.
   let integrations: Record<string, Integration> & {
     linear: InstanceType<typeof LinearIntegration>;
   };
-  let hooks: InstanceType<typeof IntegrationHooks>;
   let background: InstanceType<typeof BackgroundWork>;
   let service: InstanceType<typeof TaskProcessorService>;
 
@@ -294,7 +294,7 @@ describe("TaskProcessorService", () => {
     slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
-    integrations = fakeIntegrations({
+    integrations = {
       linear: new LinearIntegration(
         linearTokenProvider,
         { status: async () => ({ configured: false }) },
@@ -306,9 +306,8 @@ describe("TaskProcessorService", () => {
         { status: () => ({}) as never },
         NO_WEBHOOK,
       ),
-    });
+    };
     background = new BackgroundWork();
-    hooks = new IntegrationHooks(integrations, inboxRepo, background);
     service = new TaskProcessorService(
       taskRepo,
       inboxRepo,
@@ -316,13 +315,27 @@ describe("TaskProcessorService", () => {
       eventDispatcher,
       inboxService,
       slackNotifier,
-      integrations,
+      registryOf(integrations),
       holds,
       ["linear", "api"],
-      hooks,
       background,
     );
   });
+
+  // A registry of these integrations (null: off), with shorter timeouts when
+  // given.
+  const registryOf = (
+    instances: Record<string, Integration | null>,
+    timeoutsMs: { deliver?: number } = {},
+  ) => {
+    const defs = fakeDefinitions(instances);
+    return new IntegrationRegistry(
+      defs,
+      parseIntegrationConfigs(defs, {}),
+      { taskRepo, inboxRepo, sandboxManager, background, holds },
+      timeoutsMs,
+    );
+  };
 
   // failTask broadcasts to the reply targets of the rows failTaskInbox
   // dead-letters — stub one with a Linear session target so the user-facing
@@ -728,7 +741,6 @@ describe("TaskProcessorService", () => {
     });
 
     it("a row whose integration is disabled gets no notice; it is still failed and the lease released", async () => {
-      delete integrations.github;
       const row = {
         ...survivingNonTerminalRow(),
         id: "gc",
@@ -746,7 +758,11 @@ describe("TaskProcessorService", () => {
       Object.assign(inboxRepo, { getById: mock(() => Promise.resolve(row)), markFailed });
       // The real dead-letter path in place of the stub.
       Object.assign(service, {
-        inboxService: new RealInboxService(inboxRepo, sandboxManager, integrations, hooks),
+        inboxService: new RealInboxService(
+          inboxRepo,
+          sandboxManager,
+          registryOf({ ...integrations, github: null }),
+        ),
       });
 
       await (
@@ -967,7 +983,7 @@ describe("TaskProcessorService", () => {
     });
 
     it("a row whose integration is disabled gets no notice; it is still dead-lettered and the lease released", async () => {
-      delete integrations.github;
+      Object.assign(service, { registry: registryOf({ ...integrations, github: null }) });
       failTaskInbox.mockResolvedValue([
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
@@ -1348,14 +1364,12 @@ describe("TaskProcessorService", () => {
           { getByIdForTask: mock(() => Promise.resolve(round)) } as unknown as InboxRepository,
           sandboxManager,
           slackNotifier,
-          {
-            ...integrations,
-            github: { status: async () => ({}), deliver },
-          },
+          registryOf(
+            { ...integrations, github: { status: async () => ({}), deliver } },
+            { deliver: 20 }, // send timeout (ms)
+          ),
           holds,
-          hooks,
           background,
-          20, // send timeout (ms)
         );
         service = new TaskProcessorService(
           taskRepo,
@@ -1364,10 +1378,9 @@ describe("TaskProcessorService", () => {
           dispatcher,
           inboxService,
           slackNotifier,
-          integrations,
+          registryOf(integrations),
           holds,
           ["linear", "api"],
-          hooks,
           background,
         );
         const thought = (seq: number) => ({

@@ -45,8 +45,8 @@ export interface Integration {
   // whether) it shows up. Throws RetryableError only before anything was sent.
   deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void>;
 
-  // Lifecycle hooks. Core runs each through IntegrationHooks (catch, log,
-  // timeout, abort signal); see services/integrationHooks.ts for where and how.
+  // Lifecycle hooks. Core calls each through the registry, which applies its
+  // timeout and abort signal and logs a failure (services/integrationRegistry.ts).
   // Before each fresh-provision attempt: a deferred provision calls it again,
   // so it must be safe to repeat.
   onTaskStarted?(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void>;
@@ -68,7 +68,9 @@ export interface Integration {
   status(): Promise<object>;
 }
 
-// isCurrent() is false once a restart rotated the task's assignment id.
+// isCurrent() is false once a restart rotated the task's assignment id, when
+// that id can't be read, and in assignee(), which belongs to no run. It reads
+// the id on each call.
 export type HookCtx = { signal: AbortSignal; log: Logger; isCurrent(): Promise<boolean> };
 export type Person = {
   id: string; // the platform account id: logs carry it, never the name or email

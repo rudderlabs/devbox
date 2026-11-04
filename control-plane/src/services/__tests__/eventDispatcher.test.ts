@@ -4,7 +4,7 @@ import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/
 // mock.module barrel factories below, and it pins the real contract.
 import type { LinearHumanUser } from "../../clients/linearApi";
 import type { Task } from "../../db/schema";
-import { fakeIntegrations, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
+import { fakeDefinitions, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
 import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { Integration } from "../../integrations/types";
 import type { InboxRepository, InboxRow, InboxStatus } from "../../repositories/inbox.repository";
@@ -86,7 +86,7 @@ const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
 const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
-const { IntegrationHooks } = await import("../integrationHooks");
+const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
 const { BackgroundWork } = await import("../backgroundWork");
 const { LinearTokenError } = await import("../../clients/linearOauth");
 const { logger } = await import("../../logger");
@@ -175,38 +175,45 @@ describe("EventDispatcher", () => {
   let dispatcher: InstanceType<typeof EventDispatcher>;
   let background: InstanceType<typeof BackgroundWork>;
 
-  // The registry's enabled integrations, with GitHub's webhooks (and so its
-  // integration) on or off.
-  const makeIntegrations = (githubEnabled: boolean): Record<string, Integration> => ({
-    linear: new LinearIntegration(
-      linearTokenProvider,
-      { status: async () => ({ configured: false }) },
-      NO_WEBHOOK,
-    ),
-    api: new ApiIntegration(),
-    ...(githubEnabled
-      ? {
-          github: new GithubIntegration(
+  // A registry of these integrations (null: off).
+  const registryOf = (instances: Record<string, Integration | null>) => {
+    const defs = fakeDefinitions(instances);
+    return new IntegrationRegistry(defs, parseIntegrationConfigs(defs, {}), {
+      taskRepo,
+      inboxRepo,
+      sandboxManager,
+      background,
+      holds,
+    });
+  };
+  // The registry over the real integrations, with GitHub's webhooks (and so
+  // its integration) on or off.
+  const makeRegistry = (githubEnabled: boolean) =>
+    registryOf({
+      linear: new LinearIntegration(
+        linearTokenProvider,
+        { status: async () => ({ configured: false }) },
+        NO_WEBHOOK,
+      ),
+      api: new ApiIntegration(),
+      github: githubEnabled
+        ? new GithubIntegration(
             { botLogin: "harness" },
             { status: () => ({}) as never },
             NO_WEBHOOK,
-          ),
-        }
-      : {}),
-  });
-  const withGithubOff = () => {
-    const integrations = makeIntegrations(false);
-    return new EventDispatcher(
+          )
+        : null,
+    });
+  const withGithubOff = () =>
+    new EventDispatcher(
       taskRepo,
       inboxRepo,
       sandboxManager,
       slackNotifier,
-      integrations,
+      makeRegistry(false),
       holds,
-      new IntegrationHooks(integrations, inboxRepo, background),
       background,
     );
-  };
 
   beforeEach(() => {
     for (const m of [
@@ -256,15 +263,13 @@ describe("EventDispatcher", () => {
 
     holds = new ReplyHolds();
     background = new BackgroundWork();
-    const integrations = makeIntegrations(true);
     dispatcher = new EventDispatcher(
       taskRepo,
       inboxRepo,
       sandboxManager,
       slackNotifier,
-      integrations,
+      makeRegistry(true),
       holds,
-      new IntegrationHooks(integrations, inboxRepo, background),
       background,
     );
   });
@@ -659,19 +664,13 @@ describe("EventDispatcher", () => {
           delivered.push([name, target, message]);
         },
       });
-      const integrations = fakeIntegrations({
-        linear: record("linear"),
-        api: record("api"),
-        github: record("github"),
-      });
       const d = new EventDispatcher(
         taskRepo,
         inboxRepo,
         sandboxManager,
         slackNotifier,
-        integrations,
+        registryOf({ linear: record("linear"), api: record("api"), github: record("github") }),
         new ReplyHolds(),
-        new IntegrationHooks(integrations, inboxRepo, background),
         background,
       );
       const assignment = linearRow();

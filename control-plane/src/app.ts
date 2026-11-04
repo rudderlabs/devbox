@@ -19,7 +19,6 @@ import { ApiTaskService } from "./services/apiTask.service";
 import { BackgroundWork } from "./services/backgroundWork";
 import { EventDispatcher } from "./services/eventDispatcher";
 import { InboxService } from "./services/inbox.service";
-import { IntegrationHooks } from "./services/integrationHooks";
 import { IntegrationRegistry } from "./services/integrationRegistry";
 import { ReplyHolds } from "./services/replyHolds";
 import { SandboxManager } from "./services/sandboxManager.service";
@@ -81,18 +80,14 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
   // Only these sources are claimed and reconciled, so an older image never
   // works a task whose source it doesn't know.
   const taskSources = registry.taskSources;
-  // The enabled integrations, for sends and hooks.
-  const integrations = registry.live;
-  // Integrations' lifecycle hooks.
-  const hooks = new IntegrationHooks(integrations, inboxRepository, background);
 
-  const inboxService = new InboxService(inboxRepository, sandboxManager, integrations, hooks);
+  const inboxService = new InboxService(inboxRepository, sandboxManager, registry);
 
   const slackNotifier = new SlackNotifierService(
     taskRepository,
     config.slack?.botToken ?? "",
     config.slack?.channel ?? "",
-    hooks,
+    (task, meta) => registry.for(task.source).assignee(task, meta),
   );
 
   const eventDispatcher = new EventDispatcher(
@@ -100,9 +95,8 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     inboxRepository,
     sandboxManager,
     slackNotifier,
-    integrations,
+    registry,
     replyHolds,
-    hooks,
     background,
   );
 
@@ -113,10 +107,9 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     eventDispatcher,
     inboxService,
     slackNotifier,
-    integrations,
+    registry,
     replyHolds,
     taskSources,
-    hooks,
     background,
   );
 

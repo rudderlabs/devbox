@@ -1,12 +1,10 @@
 import { config } from "../config";
 import type { Task } from "../db/schema";
-import { deliverToRound } from "../integrations/http";
 import { WORKSPACE_MISSING_MESSAGE } from "../integrations/outbound";
-import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { InboxMessage } from "../types/inboxMessage";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { IntegrationRegistry } from "./integrationRegistry";
 import type { SandboxManager } from "./sandboxManager.service";
 
 // InboxService owns the sweep that delivers pending rows to the sandbox
@@ -17,8 +15,7 @@ export class InboxService {
   constructor(
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private integrations: Readonly<Record<string, Integration>>,
-    private hooks: IntegrationHooks,
+    private registry: Pick<IntegrationRegistry, "for">,
   ) {}
 
   // ──── Sweep ────
@@ -98,23 +95,27 @@ export class InboxService {
         return [];
       });
     if (marked.length === 0) return;
-    if (entry.kind === "assignment") this.hooks.roundFinished(task, entry, "failed", true);
+    if (entry.kind === "assignment") {
+      this.registry.for(entry.source).onRoundFinished(task, entry, entry.id, "failed", true);
+    }
     const target = entry.reply_targets[0];
     if (!target) return;
     // A row whose integration is unknown or disabled gets no notice; it is
     // still failed. No cursor to hold, so a RetryableError is dropped too.
-    await deliverToRound(
-      this.integrations,
-      entry,
-      target,
-      {
-        type: "failure",
-        cause: "workspace_missing",
-        round: entry,
-        summary: WORKSPACE_MISSING_MESSAGE,
-      },
-      { taskId: task.id },
-    ).catch((err) => logErr(`workspace_missing notice for inbox ${entry.id} dropped`, err));
+    await this.registry
+      .for(entry.source)
+      .deliver(
+        entry,
+        target,
+        {
+          type: "failure",
+          cause: "workspace_missing",
+          round: entry,
+          summary: WORKSPACE_MISSING_MESSAGE,
+        },
+        { taskId: task.id },
+      )
+      .catch((err) => logErr(`workspace_missing notice for inbox ${entry.id} dropped`, err));
   }
 }
 
