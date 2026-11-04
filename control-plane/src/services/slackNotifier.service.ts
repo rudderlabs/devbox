@@ -63,7 +63,7 @@ export class SlackNotifierService {
 
   // "" when there is nothing to nag about: no human assignee, already linked,
   // or the lookup failed (the registry logs it; never blocks the post). Only
-  // whether an account is linked matters, so this is one Linear query and no
+  // whether an account is linked matters, so this is one Linear lookup and no
   // GitHub call.
   private async connectGitHubNote(task: Task): Promise<string> {
     const person = await this.assignee(task, { purpose: "slack_nudge" });

@@ -1,9 +1,6 @@
-import { afterAll, afterEach, expect, it, mock, setSystemTime } from "bun:test";
+import { afterAll, afterEach, expect, it, setSystemTime } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Hono } from "hono";
-
-// The GitHub client (for assignees) reads config at import.
-mock.module("../../../config", () => ({ config: {} }));
 
 const { linear } = await import("..");
 const { logger } = await import("../../../logger");

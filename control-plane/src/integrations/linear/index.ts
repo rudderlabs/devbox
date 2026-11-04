@@ -164,7 +164,7 @@ export class LinearIntegration implements Integration {
 
   // The issue's human assignee, with the GitHub account Linear links to them
   // (User.gitHubUserId, set when a member connects GitHub under Linear
-  // Settings → Connected accounts), never matched by email. One Linear query:
+  // Settings → Connected accounts), never matched by email. One Linear lookup:
   // the code host resolves the account.
   async assignee(ctx: HookCtx, task: Task): Promise<Person | null> {
     const client = await this.client(ctx.signal);

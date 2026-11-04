@@ -29,8 +29,9 @@ export class CodeHost {
     // while an enabled integration turns @-mentions on PRs into rounds.
     private registry: Pick<IntegrationRegistry, "for" | "prMentionLogin">,
     private background: Pick<BackgroundWork, "track">,
-    // Bounds each GitHub call it waits for: the onboarding comment, awaited
-    // inside the tick like a send, and the account id lookup.
+    // Bounds the onboarding comment, awaited inside the tick like a send, and
+    // the account id lookup. Assigning the PR has no limit of its own: it runs
+    // in BackgroundWork, which shutdown drains until a deadline.
     private sendTimeoutMs = SEND_TIMEOUT_MS,
   ) {}
 
