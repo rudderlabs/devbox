@@ -1,6 +1,6 @@
 // Option definitions and value parsers shared by the command modules.
 import { type Command, InvalidArgumentError } from "commander";
-import type { ApiTaskSource, ApiTaskState } from "../../control-plane/src/types/api";
+import type { ApiTaskState } from "../../control-plane/src/types/api";
 import { MAX_TIMEOUT_MS } from "../core/limits";
 import { type CommonArgs, type FollowFlags, type TextSource, UsageError } from "./command";
 import { parseDuration } from "./duration";
@@ -11,7 +11,7 @@ export type Opts = {
   token?: string;
   profile?: string;
   json?: boolean;
-  source?: ApiTaskSource;
+  source?: string;
   mine?: boolean;
   state?: ApiTaskState;
   limit?: number;

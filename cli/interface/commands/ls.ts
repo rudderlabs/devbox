@@ -1,6 +1,6 @@
 // devbox ls: list tasks, newest first.
 import { Option } from "commander";
-import type { ApiTask, ApiTaskSource, ApiTaskState } from "../../../control-plane/src/types/api";
+import type { ApiTask, ApiTaskState } from "../../../control-plane/src/types/api";
 import type { CoreOps } from "../../core/ops";
 import type { CommandModule, CommonArgs } from "../command";
 import { age, oneLine, paint, STATE_TONE, type Tone } from "../format";
@@ -8,15 +8,13 @@ import { colorEnabled, type Io } from "../io";
 import { common, commonArgs, integer, type Opts } from "../options";
 
 export type LsArgs = CommonArgs & {
-  source?: ApiTaskSource;
+  source?: string;
   mine: boolean;
   state?: ApiTaskState;
   limit?: number;
 };
 
 const HEADER = ["KEY", "STATE", "TITLE", "DESCRIPTION", "CREATOR", "AGE"];
-// Every task source; the compiler fails here until a new one is listed.
-const SOURCES = Object.keys({ api: true, linear: true } satisfies Record<ApiTaskSource, true>);
 
 export function render(
   tasks: ApiTask[],
@@ -74,9 +72,8 @@ export const ls: CommandModule = {
       program
         .command("ls")
         .description("List tasks, newest first")
-        .addOption(
-          new Option("--source <source>", "only tasks from this source").choices(SOURCES),
-        )
+        // The server knows the sources and answers 400 for any other.
+        .option("--source <source>", "only tasks from this source")
         .option("--mine", "only tasks created with your token")
         .addOption(
           new Option("--state <state>", "only tasks in this state").choices([
