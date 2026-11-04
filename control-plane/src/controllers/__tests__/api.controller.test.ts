@@ -39,7 +39,7 @@ function setup(opts: { authEnabled: boolean; allowedHosts?: string[] }) {
     events: mock(() =>
       Promise.resolve({ events: [], next_after: 0, logging: "available" as const }),
     ),
-    streamTarget: mock(() => Promise.resolve({ id: ID, source: "api" as const })),
+    streamTarget: mock(() => Promise.resolve(ID)),
     streamState: mock(() => Promise.resolve({ state: "queued" as const, sandbox_live: false })),
     eventsAfter: mock(() => Promise.resolve([])),
   };

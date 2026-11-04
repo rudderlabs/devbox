@@ -103,9 +103,9 @@ export class ApiTaskService {
     return { round_id: result.roundId };
   }
 
-  // Same restart as a re-delegation, plus the full new definition and
-  // task_restarted. The input replaces the current title/description/flags;
-  // nothing is merged. The previous sandbox is killed afterwards.
+  // Same restart as a re-delegation, task_restarted included. The input
+  // replaces the current title/description/flags; nothing is merged. The
+  // previous sandbox is killed afterwards.
   async restart(ref: string, input: CreateTaskInput): Promise<ApiTask> {
     const task = await this.resolveApiTask(ref);
     await this.tasks.restart(task.id, {
@@ -117,16 +117,16 @@ export class ApiTaskService {
     return this.get(task.id);
   }
 
+  // Every task has a log, whatever its source.
   async events(ref: string, after: number, limit: number): Promise<ListEventsResponse> {
     const task = await this.resolve(ref);
-    if (task.source !== "api") return { events: [], next_after: 0, logging: "unavailable" };
     const events = await this.eventsAfter(task.id, after, limit);
     return { events, next_after: events[events.length - 1]?.id ?? after, logging: "available" };
   }
 
-  async streamTarget(ref: string): Promise<{ id: string; source: string }> {
-    const task = await this.resolve(ref);
-    return { id: task.id, source: task.source };
+  // The id of the task whose log a stream follows.
+  async streamTarget(ref: string): Promise<string> {
+    return (await this.resolve(ref)).id;
   }
 
   async streamState(taskId: string): Promise<SseStateData> {

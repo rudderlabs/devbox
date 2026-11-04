@@ -269,6 +269,32 @@ describe("ApiTaskService", () => {
     expect(queued).toHaveLength(2);
   });
 
+  it("sendMessage and restart log the round starts devbox send and restart follow", async () => {
+    await service.create(null, { title: "T", description: null, experimentalFlags: [] });
+    const { round_id } = await service.sendMessage("DBX-API-1", "more");
+    const restarted = await service.restart("DBX-API-1", {
+      title: "T2",
+      description: null,
+      experimentalFlags: [],
+    });
+    const assignment = restarted.rounds.find((r) => r.kind === "assignment");
+    if (!assignment) throw new Error("no assignment round");
+    const { events } = await service.events("DBX-API-1", 0, 200);
+    // send follows its round's message_queued; restart the last task_restarted.
+    expect(
+      events.filter((e) => e.type === "message_queued").map((e) => [e.round_id, e.data]),
+    ).toEqual([[round_id, { source: "api", kind: "comment", body: "more" }]]);
+    expect(events.filter((e) => e.type === "task_restarted").map((e) => e.round_id)).toEqual([
+      assignment.id,
+    ]);
+    expect(events.at(-1)?.data).toEqual({
+      title: "T2",
+      description: null,
+      experimental_flags: [],
+      superseded_round_ids: [round_id],
+    });
+  });
+
   it("restart with no previous sandbox kills nothing", async () => {
     await service.create(null, { title: "T", description: null, experimentalFlags: [] });
     await service.restart("DBX-API-1", { title: "T2", description: null, experimentalFlags: [] });
@@ -294,7 +320,7 @@ describe("ApiTaskService", () => {
     expect((await service.list(null, { createdBy: "me", limit: 20 })).tasks).toEqual([]);
   });
 
-  it("events: envelopes after the cursor; Linear tasks report logging unavailable", async () => {
+  it("events: envelopes after the cursor; a Linear task's log is available too", async () => {
     const { id } = await service.create(null, {
       title: "T",
       description: null,
@@ -322,12 +348,35 @@ describe("ApiTaskService", () => {
       next_after: 1,
       logging: "available",
     });
-    await db.execute(sql`INSERT INTO tasks (source, external_id, key, title, external_url)
-                         VALUES ('linear', 'i', 'ABC-1', 'l', 'https://linear.app/x/issue/ABC-1')`);
+    const [lin] = await db.execute<{ id: string }>(sql`
+      INSERT INTO tasks (source, external_id, key, title, external_url)
+           VALUES ('linear', 'i', 'ABC-1', 'l', 'https://linear.app/x/issue/ABC-1')
+      RETURNING id`);
+    const linId = (lin as { id: string }).id;
     expect(await service.events("ABC-1", 0, 200)).toEqual({
       events: [],
       next_after: 0,
-      logging: "unavailable",
+      logging: "available",
     });
+    await db.execute(sql`
+      INSERT INTO task_events (task_id, origin, type, inbox_id, seq, data, created_at)
+           VALUES (${linId}, 'daemon', 'agent_response', NULL, 3, '{"body":"done"}'::jsonb, ${T0})`);
+    expect(await service.events("abc-1", 0, 200)).toEqual({
+      events: [
+        {
+          id: 2,
+          task_id: linId,
+          origin: "daemon",
+          type: "agent_response",
+          round_id: null,
+          seq: 3,
+          created_at: T0,
+          data: { body: "done" },
+        },
+      ],
+      next_after: 2,
+      logging: "available",
+    });
+    expect(await service.streamTarget("ABC-1")).toBe(linId);
   });
 });
