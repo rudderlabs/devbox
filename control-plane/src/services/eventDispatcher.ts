@@ -14,9 +14,11 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 
 // Outcome of dispatching a single event.
 // - `ok`: handled; reconcileOne advances the cursor and goes on.
-// - `dropped`: the event's send timed out or failed for good. reconcileOne
-//   advances past it, then stops this task's events for the tick, so a slow
-//   or failing platform can't eat the tick.
+// - `dropped`: the event's send failed for good. reconcileOne advances past
+//   it and goes on.
+// - `timed_out`: the event's send ran out of time. reconcileOne advances past
+//   it, then stops this task's events for the tick, so a slow platform can't
+//   eat the tick.
 // - `hold`: a send (or the owner's onPrOpened) failed before anything went out
 //   (RetryableError); the hold is recorded in ReplyHolds. reconcileOne stops
 //   this task's events BEFORE advancing the cursor, so the event is retried
@@ -30,7 +32,7 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 //   advancing the cursor and WITHOUT applying the side effect. We deliberately
 //   stop-and-alarm rather than skip-and-continue, so a foreign event is visible
 //   and cannot trigger a side effect.
-export type DispatchResult = "ok" | "dropped" | "hold" | "self_evict" | "abort";
+export type DispatchResult = "ok" | "dropped" | "timed_out" | "hold" | "self_evict" | "abort";
 
 // Replaces taskState.service.ts + taskStateHandlers.ts. Flat switch on
 // event.type — each case applies a side effect the same way the old handlers

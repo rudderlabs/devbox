@@ -426,6 +426,7 @@ export class TaskProcessorService {
       switch (result) {
         case "ok":
         case "dropped":
+        case "timed_out":
           break;
         case "hold":
           // A send failed before anything went out. Stop BEFORE advancing the
@@ -479,9 +480,9 @@ export class TaskProcessorService {
       }
       // The cursor is past any held event now.
       this.holds.release(currentTask.id);
-      // A dropped send (timed out or failed for good) ends this task's events
-      // for the tick, so a slow or failing platform can't eat the tick.
-      if (result === "dropped") break;
+      // A timed-out send ends this task's events for the tick, so a slow
+      // platform can't eat the tick. One that failed fast goes on.
+      if (result === "timed_out") break;
 
       // Re-fetch (owner-scoped) to pick up dispatcher mutations (pr_urls
       // append, etc.). An owner-scoped fetch returns null on a takeover in the

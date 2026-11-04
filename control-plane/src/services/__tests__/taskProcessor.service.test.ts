@@ -1355,7 +1355,7 @@ describe("TaskProcessorService", () => {
       expect(requeueForRetry).not.toHaveBeenCalled();
     });
 
-    it("a hung send is cut at the send timeout: dropped, cursor advanced, the task stops, the tick goes on", async () => {
+    it("a hung send is cut at the send timeout: cursor advanced, the task stops, the tick goes on", async () => {
       const error = spyOn(logger, "error").mockImplementation(() => logger);
       try {
         const deliver = mock(() => new Promise<void>(() => {}));
@@ -1410,7 +1410,7 @@ describe("TaskProcessorService", () => {
         await waitFor(() => recordEventCursor.mock.calls.length >= 2);
         await service.stop();
 
-        // task-1's seq 2 is never sent: the drop ended task-1's events; task-2 ran.
+        // task-1's seq 2 is never sent: the timeout ended task-1's events; task-2 ran.
         const cursors = recordEventCursor.mock.calls.map((c: unknown[]) => {
           const p = c[0] as { taskId: string; event: { seq: number } };
           return [p.taskId, p.event.seq];
@@ -1492,7 +1492,7 @@ describe("TaskProcessorService", () => {
       expect(holds.of("github").heldTasks).toBe(1);
     });
 
-    it("a dropped send advances the cursor, then ends this task's events for the tick", async () => {
+    it("a timed-out send advances the cursor, then ends this task's events for the tick", async () => {
       const task = makeTask({ sandboxId: "sbx-1" });
       listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
       readEvents
@@ -1501,7 +1501,7 @@ describe("TaskProcessorService", () => {
           { seq: 2, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "y" },
         ] as HarnessEvent[])
         .mockResolvedValue([]);
-      dispatcherHandle.mockResolvedValueOnce("dropped");
+      dispatcherHandle.mockResolvedValueOnce("timed_out");
 
       service.start();
       await waitFor(() => recordEventCursor.mock.calls.length >= 1);
@@ -1513,6 +1513,29 @@ describe("TaskProcessorService", () => {
         (c: unknown[]) => (c[0] as { event: { seq: number } }).event.seq,
       );
       expect(seqs).toEqual([1]);
+    });
+
+    it("a send that failed fast advances the cursor and the task's next event goes on", async () => {
+      const task = makeTask({ sandboxId: "sbx-1" });
+      listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
+      readEvents
+        .mockResolvedValueOnce([
+          { seq: 1, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "x" },
+          { seq: 2, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "y" },
+        ] as HarnessEvent[])
+        .mockResolvedValue([]);
+      dispatcherHandle.mockResolvedValueOnce("dropped");
+
+      service.start();
+      await waitFor(() => recordEventCursor.mock.calls.length >= 2);
+      await service.stop();
+
+      // Only the first tick reconciles the task, so both events ran in it.
+      expect(dispatcherHandle).toHaveBeenCalledTimes(2);
+      const seqs = recordEventCursor.mock.calls.map(
+        (c: unknown[]) => (c[0] as { event: { seq: number } }).event.seq,
+      );
+      expect(seqs).toEqual([1, 2]);
     });
 
     it("drops a hold once the cursor moves past its event, or once the task leaves this pod", async () => {
