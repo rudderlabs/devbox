@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
 // Type-only import — erased at link time, so it can't collide with the
 // mock.module barrel factories below, and it pins the real contract.
@@ -10,6 +10,7 @@ import type { Integration } from "../../integrations/types";
 import type { InboxRepository, InboxRow, InboxStatus } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
+import type { ReviewPayload } from "../../types/inboxMessage";
 import type { SandboxManager } from "../sandboxManager.service";
 import type { SlackNotifierService } from "../slackNotifier.service";
 
@@ -87,6 +88,7 @@ const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
 const { LinearTokenError } = await import("../../clients/linearOauth");
+const { logger } = await import("../../logger");
 
 // What the token provider throws when Linear's token endpoint can't be reached
 // (no answer, so no status): a later request may succeed.
@@ -1037,6 +1039,32 @@ describe("EventDispatcher", () => {
       expect(postIssueComment).toHaveBeenCalledTimes(2);
     });
 
+    it("Linear and GitHub refuse a target that isn't theirs: logged and dropped", async () => {
+      const error = spyOn(logger, "error").mockImplementation(() => logger);
+      try {
+        // A Linear round carrying a GitHub thread, and a GitHub round carrying
+        // a Linear session.
+        getByIdForTask.mockResolvedValueOnce({ ...ghCommentRow(), source: "linear" });
+        expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("dropped");
+        const row = ghCommentRow();
+        row.reply_targets = [{ id: "555", spec: { kind: "linear_session" } }];
+        getByIdForTask.mockResolvedValueOnce(row);
+        expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("dropped");
+
+        expect(
+          error.mock.calls.map(([msg, meta]) => [msg, (meta as { message?: string }).message]),
+        ).toEqual([
+          ["deliver reply failed", "not a Linear agent session target"],
+          ["deliver reply failed", "not a GitHub PR thread target"],
+        ]);
+      } finally {
+        error.mockRestore();
+      }
+      expect(linearTokenProvider.getAuthorizedLinearClient).not.toHaveBeenCalled();
+      expect(emitResponse).not.toHaveBeenCalled();
+      expect(postIssueComment).not.toHaveBeenCalled();
+    });
+
     it("skips GitHub replies when GitHub webhooks are off: not posted, not held", async () => {
       getByIdForTask.mockResolvedValue(ghCommentRow());
       expect(await withGithubOff().handle(responseEvent("555"), makeTask())).toBe("ok");
@@ -1117,9 +1145,8 @@ describe("EventDispatcher", () => {
       status: "completed",
     });
 
-    const ghReviewRow = (
-      overrides: Partial<Extract<InboxRow, { kind: "review" }>> = {},
-    ): Extract<InboxRow, { kind: "review" }> => ({
+    type ReviewRow = InboxRow & { payload: ReviewPayload };
+    const ghReviewRow = (overrides: Partial<ReviewRow> = {}): ReviewRow => ({
       id: "inbox-1",
       task_id: "task-1",
       source: "github",

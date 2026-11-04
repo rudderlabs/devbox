@@ -13,6 +13,18 @@ const RESTARTED_BODY = [
 
 const STOP_NOT_SUPPORTED_BODY = "Stop is not supported yet — work will continue.";
 
+// A Linear reply target's spec. Every Linear round replies on its agent
+// session, whose id is the target's id. The JSON is stored with the round.
+export type LinearSpec = { kind: "linear_session" };
+
+export function isLinearSpec(spec: unknown): spec is LinearSpec {
+  return (spec as { kind?: unknown } | null)?.kind === "linear_session";
+}
+
+function sessionTarget(sessionId: string): ReplyTarget {
+  return { id: sessionId, spec: { kind: "linear_session" } satisfies LinearSpec };
+}
+
 export class AgentSessionService {
   private readonly tasks: Pick<TaskService, "assign" | "findTask" | "enqueueRound">;
   private readonly linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
@@ -32,7 +44,7 @@ export class AgentSessionService {
         const { flags, strippedDescription } = parseExperimentalFlags(event.issue.description);
         // The agent session is the delegation id: Linear mints a new one per
         // delegation and redelivers a `created` with the same one.
-        const target: ReplyTarget = { id: event.agentSessionId, spec: { kind: "linear_session" } };
+        const target = sessionTarget(event.agentSessionId);
 
         // One transaction: insert the task and its assignment row, or compare
         // the stored session with this one. The same session is a redelivery
@@ -145,7 +157,7 @@ export class AgentSessionService {
         // source == "github"), so there is no comment timestamp to scope by.
         created_at: "",
       },
-      targets: [{ id: params.agentSessionId, spec: { kind: "linear_session" } }],
+      targets: [sessionTarget(params.agentSessionId)],
     });
   }
 

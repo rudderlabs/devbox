@@ -14,12 +14,7 @@ import {
 import { LinearTokenError } from "../../clients/linearOauth";
 import type { Task } from "../../db/schema";
 import { rateLimitWaitMs, retryable } from "../http";
-import {
-  type Outbound,
-  RetryableError,
-  type SendCtx,
-  WORKSPACE_MISSING_MESSAGE,
-} from "../outbound";
+import { type Outbound, RetryableError, type SendCtx } from "../outbound";
 import type {
   HookCtx,
   Integration,
@@ -29,7 +24,7 @@ import type {
   ReplyTarget,
   Round,
 } from "../types";
-import { AgentSessionService } from "./agentSession";
+import { AgentSessionService, isLinearSpec } from "./agentSession";
 import { type LinearConfig, parseLinearConfig } from "./config";
 import { type LinearStatus, LinearStatusService } from "./status";
 import { LinearTokenProvider } from "./tokenProvider";
@@ -77,9 +72,9 @@ export class LinearIntegration implements Integration {
   }
 
   async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
-    if (target.spec.kind !== "linear_session") {
-      throw new Error(`linear cannot deliver to a ${target.spec.kind} target`);
-    }
+    // Anything else isn't a Linear target (a malformed or foreign row): the
+    // error is logged and the send dropped.
+    if (!isLinearSpec(target.spec)) throw new Error("not a Linear agent session target");
     const client = await this.client(ctx.signal);
     // Each message is one activity (one request), so a retryable failure means
     // nothing was posted.
@@ -99,12 +94,9 @@ export class LinearIntegration implements Integration {
           else await emitError(client, target.id, message.body);
           return;
         case "failure": {
-          // task_failed and a failed assignment carry the summary; a crashed
-          // comment round carries only the detail.
-          const text =
-            message.cause === "workspace_missing"
-              ? WORKSPACE_MISSING_MESSAGE
-              : (message.summary ?? message.detail);
+          // task_failed, a failed assignment and a workspace_missing notice
+          // carry the summary; a crashed comment round carries only the detail.
+          const text = message.summary ?? message.detail;
           if (text) await emitError(client, target.id, text);
           return;
         }

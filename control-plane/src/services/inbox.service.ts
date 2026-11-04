@@ -107,7 +107,12 @@ export class InboxService {
       this.integrations,
       entry,
       target,
-      { type: "failure", cause: "workspace_missing", round: entry },
+      {
+        type: "failure",
+        cause: "workspace_missing",
+        round: entry,
+        summary: WORKSPACE_MISSING_MESSAGE,
+      },
       { taskId: task.id },
     ).catch((err) => logErr(`workspace_missing notice for inbox ${entry.id} dropped`, err));
   }
@@ -132,5 +137,5 @@ function toInboxMessage(row: InboxRow): InboxMessage {
     kind: row.kind,
     external_id: row.external_id,
     payload: row.payload,
-  } as InboxMessage;
+  };
 }

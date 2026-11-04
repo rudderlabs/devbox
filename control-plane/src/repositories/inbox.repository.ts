@@ -4,9 +4,9 @@ import type { Task } from "../db/schema";
 import { logger } from "../logger";
 import type {
   AssignmentPayload,
+  CommentPayload,
   InboxKind,
   InboxMessage,
-  InboxSource,
   TaskIdentity,
 } from "../types/inboxMessage";
 import { insertCpEventIfApi, type SqlExecutor, type Tx } from "./taskEvent.repository";
@@ -19,62 +19,29 @@ export type {
   CommentPayload,
   InboxKind,
   InboxMessage,
-  InboxSource,
   PrScope,
   ReviewPayload,
   ReviewPrScope,
   TaskIdentity,
 } from "../types/inboxMessage";
 
-// ──── Reply-target types — CP-internal routing, NOT part of the wire ────
-// ──── contract. Daemon never sees these.                            ────
-
-// Per-target routing spec — discriminated by `kind` at the target level
-// (distinct from the inbox row's `kind`). Linear emits route to the agent
-// session, not to individual activities — `linear_session` covers both
-// assignment-run progress + completion and comment-reply posts. The session id
-// itself lives in the enclosing ReplyTarget.id; the assignment row's entry is
-// the canonical store, refreshed on re-delegation.
-export type ReplyTargetSpec =
-  | {
-      kind: "issue_comment";
-      owner: string;
-      repo: string;
-      prNumber: number;
-      commentId: number;
-      quotedUser?: string;
-      quotedBody?: string;
-    }
-  | {
-      kind: "review_comment";
-      owner: string;
-      repo: string;
-      prNumber: number;
-      commentId: number;
-      inReplyTo: number;
-      path: string;
-      line: number;
-      startLine?: number;
-    }
-  | { kind: "review_body"; owner: string; repo: string; prNumber: number; reviewId: number }
-  | { kind: "linear_session" }
-  // API tasks: replies are delivered nowhere — the task_events log is the channel.
-  | { kind: "api_session" };
+// ──── Reply targets — CP-internal routing, NOT part of the wire ────
+// ──── contract. Daemon never sees these.                        ────
 
 export type ReplyTarget = {
   // Mirrors the corresponding payload.*.target_id so a targeted agent_response
   // event from the daemon routes to the right thread.
   id: string;
-  spec: ReplyTargetSpec;
+  // Where the reply goes, in the round's integration's own shape. Core stores
+  // it and hands it back to that integration's deliver, which checks it.
+  spec: unknown;
   // An assignment's delegation order, when the platform has one: a delegation
   // whose order is not above the stored one is a duplicate (TaskService.assign).
   order?: number;
 };
 
-// A row to insert: the wire message without its id, per (source, kind) arm so
-// source, kind and payload stay paired.
-type WithoutId<M> = M extends InboxMessage ? Omit<M, "id"> : never;
-export type NewInboxMessage = WithoutId<InboxMessage>;
+// A row to insert: the wire message without its id.
+export type NewInboxMessage = Omit<InboxMessage, "id">;
 
 // A Postgres unique violation (23505) on `constraint`. drizzle wraps the
 // driver's error in `cause`.
@@ -98,9 +65,7 @@ export function taskIdentity(task: Pick<Task, "id" | "key">): TaskIdentity {
 export type InboxStatus = "pending" | "delivered" | "responded" | "failed";
 
 // Persisted row = the wire contract (InboxMessage) plus CP-internal metadata:
-// task ownership, reply routing, delivery state, timestamps. The `& InboxMessage`
-// intersection preserves the (source, kind) tagged union so `row.kind ===
-// "assignment"` still narrows `row.payload` to `AssignmentPayload`.
+// task ownership, reply routing, delivery state, timestamps.
 export type InboxRow = InboxMessage & {
   task_id: string;
   reply_targets: ReplyTarget[];
@@ -131,7 +96,7 @@ function mapRow(raw: RawInboxRow): InboxRow {
   return {
     id: raw.id,
     task_id: raw.task_id,
-    source: raw.source as InboxSource,
+    source: raw.source,
     external_id: raw.external_id,
     kind: raw.kind as InboxKind,
     payload: raw.payload,
@@ -141,7 +106,7 @@ function mapRow(raw: RawInboxRow): InboxRow {
     outcome: raw.outcome,
     created_at: raw.created_at,
     updated_at: raw.updated_at,
-  } as unknown as InboxRow;
+  };
 }
 
 function asRows<T>(result: unknown): T[] {
@@ -248,7 +213,7 @@ export class InboxRepository {
           taskId: p.taskId,
           type: "message_queued",
           inboxId: row.id,
-          data: { body: message.payload.body },
+          data: { body: (message.payload as CommentPayload).body },
         });
       }
       return { roundId: row.id };

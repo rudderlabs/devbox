@@ -12,7 +12,9 @@ export type Outbound =
       type: "failure";
       cause: "round_failed" | "task_failed" | "workspace_missing";
       round: InboxRow;
-      summary?: string; // user-safe text (the harness's "what failed" summary)
+      // User-safe text: the harness's "what failed" summary, or core's
+      // workspace_missing notice (WORKSPACE_MISSING_MESSAGE).
+      summary?: string;
       detail?: string; // raw error text (exception message): never post it on a public channel
     };
 export type SendCtx = { signal: AbortSignal; log: Logger };

@@ -1,8 +1,43 @@
 import type { Task } from "../../db/schema";
-import type { Logger, ReplyTarget, ReplyTargetSpec, TaskService } from "../types";
+import type { Logger, ReplyTarget, TaskService } from "../types";
 
 // GitHub's follow-up rounds (comment, review, CI result), built from its
 // webhooks and queued through GitHub's TaskService.
+
+// A GitHub reply target's spec: the PR thread a reply goes to. The JSON is
+// stored with the round and read back by GitHub's deliver.
+export type GithubSpec =
+  | { kind: "issue_comment"; owner: string; repo: string; prNumber: number; commentId: number }
+  | {
+      kind: "review_comment";
+      owner: string;
+      repo: string;
+      prNumber: number;
+      commentId: number;
+      inReplyTo: number;
+      path: string;
+      line: number;
+      startLine?: number;
+    }
+  | { kind: "review_body"; owner: string; repo: string; prNumber: number; reviewId: number };
+export type CommentSpec = Extract<GithubSpec, { kind: "issue_comment" | "review_comment" }>;
+
+const SPEC_KINDS: readonly unknown[] = [
+  "issue_comment",
+  "review_comment",
+  "review_body",
+] satisfies GithubSpec["kind"][];
+
+// True for a spec GitHub can post to: one of its kinds, on a PR.
+export function isGithubSpec(spec: unknown): spec is GithubSpec {
+  const s = spec as Record<string, unknown> | null;
+  return (
+    SPEC_KINDS.includes(s?.kind) &&
+    typeof s?.owner === "string" &&
+    typeof s.repo === "string" &&
+    typeof s.prNumber === "number"
+  );
+}
 
 // GitHub @harness comment (solo issue_comment or standalone review_comment).
 export async function enqueueComment(
@@ -11,7 +46,7 @@ export async function enqueueComment(
     task: Pick<Task, "id" | "key">;
     commentId: number;
     body: string;
-    spec: Extract<ReplyTargetSpec, { kind: "issue_comment" | "review_comment" }>;
+    spec: CommentSpec;
     // ISO-8601 creation time of the comment; "" when unknown.
     createdAt: string;
   },
@@ -80,7 +115,7 @@ export async function enqueueReview(
     ...params.inlineComments.map((c) => ({
       id: String(c.id),
       spec: {
-        kind: "review_comment" as const,
+        kind: "review_comment",
         owner: params.owner,
         repo: params.repo,
         prNumber: params.prNumber,
@@ -89,17 +124,17 @@ export async function enqueueReview(
         path: c.path,
         line: c.line,
         startLine: c.startLine,
-      },
+      } satisfies GithubSpec,
     })),
     {
       id: reviewIdStr,
       spec: {
-        kind: "review_body" as const,
+        kind: "review_body",
         owner: params.owner,
         repo: params.repo,
         prNumber: params.prNumber,
         reviewId: params.reviewId,
-      },
+      } satisfies GithubSpec,
     },
   ];
 
@@ -167,7 +202,7 @@ export async function enqueueCiResult(
           // commentId: 0 is the sentinel for "post new comment" (no existing
           // comment to reply to — the dispatcher posts a fresh PR comment).
           commentId: 0,
-        },
+        } satisfies GithubSpec,
       },
     ],
     prUrl,

@@ -1,11 +1,9 @@
 import type { Task } from "../db/schema";
-import type { IntegrationName, Person, TaskSource } from "../integrations/types";
+import type { Person, TaskSource } from "../integrations/types";
 import { logger } from "../logger";
 import {
   type InboxRepository,
-  type NewInboxMessage,
   type ReplyTarget,
-  type ReplyTargetSpec,
   taskIdentity,
 } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
@@ -19,8 +17,8 @@ import type { IntegrationHooks } from "./integrationHooks";
 import type { SandboxManager } from "./sandboxManager.service";
 
 // The only way integrations create work. Each instance is bound to one
-// source: the tasks and rounds it creates are that source's, and so are the
-// reply targets they carry.
+// source: the tasks and rounds it creates are that source's, so the reply
+// targets they carry go back only to that source's deliver, which checks them.
 
 export type TaskRef = { id: string; key: string };
 
@@ -76,15 +74,12 @@ export interface TaskService {
   findTaskByPrUrl(prUrl: string): Promise<Task | null>; // any source's task
 }
 
-// Which integration each reply-target kind belongs to. Exists only for the
-// check that a round's targets belong to the round's own integration.
-const TARGET_OWNER: Record<ReplyTargetSpec["kind"], IntegrationName> = {
-  linear_session: "linear",
-  api_session: "api",
-  issue_comment: "github",
-  review_comment: "github",
-  review_body: "github",
-};
+// The follow-up kinds the harness handles; it exits on any other.
+const ROUND_KINDS: readonly string[] = [
+  "comment",
+  "review",
+  "ci_result",
+] satisfies RoundDraft["kind"][];
 
 export class BoundTaskService implements TaskService {
   constructor(
@@ -113,7 +108,6 @@ export class BoundTaskService implements TaskService {
           : { sequencePrefix: p.key.sequence },
       target: (ref) => {
         const target = p.target(ref);
-        checkTargets(this.source, [target]);
         // A NaN order is never "not above" the stored one, so every
         // redelivery would restart the task.
         const { order } = target;
@@ -132,7 +126,6 @@ export class BoundTaskService implements TaskService {
     def: Parameters<TaskService["restart"]>[1],
   ): ReturnType<TaskService["restart"]> {
     this.requireCreatesTasks("restart");
-    checkTargets(this.source, [def.target]);
     const task = await this.deps.taskRepo.getById(taskId);
     if (!task) throw new Error(`restart: task ${taskId} not found`);
     if (task.source !== this.source) {
@@ -156,11 +149,11 @@ export class BoundTaskService implements TaskService {
     p: Parameters<TaskService["enqueueRound"]>[0],
   ): ReturnType<TaskService["enqueueRound"]> {
     const { task, kind, payload, targets } = p;
+    if (!ROUND_KINDS.includes(kind)) throw new Error(`enqueueRound: unknown kind ${kind}`);
     // A review's payload carries one target id per thread instead.
     if ("target_id" in payload && payload.target_id !== targets[0]?.id) {
       throw new Error("enqueueRound: payload.target_id must equal targets[0].id");
     }
-    checkTargets(this.source, targets);
     return this.deps.inboxRepo.appendFollowUp({
       taskId: task.id,
       message: {
@@ -168,7 +161,7 @@ export class BoundTaskService implements TaskService {
         kind,
         external_id: p.externalId,
         payload: { ...payload, ...taskIdentity(task) },
-      } as NewInboxMessage,
+      },
       replyTargets: targets,
       prUrl: p.prUrl,
       limit: p.limit,
@@ -204,13 +197,5 @@ export class BoundTaskService implements TaskService {
         });
       }),
     );
-  }
-}
-
-function checkTargets(source: string, targets: ReplyTarget[]): void {
-  for (const t of targets) {
-    if (TARGET_OWNER[t.spec.kind] !== source) {
-      throw new Error(`a ${source} round can't carry a ${t.spec.kind} reply target`);
-    }
   }
 }

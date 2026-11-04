@@ -7,9 +7,9 @@ import {
   getReviewComments,
   getUserIdByLogin,
 } from "../../clients/github";
-import type { Logger, ReplyTargetSpec, TaskService } from "../types";
+import type { Logger, TaskService } from "../types";
 import type { GithubConfig } from "./config";
-import { enqueueCiResult, enqueueComment, enqueueReview } from "./rounds";
+import { type CommentSpec, enqueueCiResult, enqueueComment, enqueueReview } from "./rounds";
 
 // ──── Parsed event surface ────
 //
@@ -32,7 +32,7 @@ export type ParsedGitHubEvent =
       body: string;
       // ISO-8601 `created_at` of the comment; "" when absent.
       createdAt: string;
-      spec: Extract<ReplyTargetSpec, { kind: "issue_comment" | "review_comment" }>;
+      spec: CommentSpec;
       owner: string;
       repo: string;
       prNumber: number;

@@ -337,10 +337,7 @@ describe("TaskService", () => {
       expect(await db.execute(sql`SELECT 1 FROM tasks`)).toHaveLength(0);
     });
 
-    it("rejects a target of another integration, and a hint without an external id", async () => {
-      await expect(assignLinear({ id: "t", spec: { kind: "api_session" } })).rejects.toThrow(
-        "a linear round can't carry a api_session reply target",
-      );
+    it("rejects a hint without an external id", async () => {
       await expect(assignLinear(session("sess-1"), { externalId: undefined })).rejects.toThrow(
         "a hint key needs externalId",
       );
@@ -490,14 +487,20 @@ describe("TaskService", () => {
       expect(await api.enqueueRound(message("m-2"))).toEqual({ dropped: "limit", count: 1 });
     });
 
-    it("checks payload.target_id against targets[0] (reviews exempt) and target kinds", async () => {
+    it("checks the kind, and payload.target_id against targets[0] (reviews exempt)", async () => {
       const task = await insertTask({ key: "DBX-API-1" });
+      await expect(
+        // Only the types stop a module from passing another kind.
+        github.enqueueRound({
+          task,
+          ...ghComment("555"),
+          kind: "assignment",
+          targets: [ghTarget("555")],
+        } as never),
+      ).rejects.toThrow("enqueueRound: unknown kind assignment");
       await expect(
         github.enqueueRound({ task, ...ghComment("555"), targets: [ghTarget("556")] }),
       ).rejects.toThrow("payload.target_id must equal targets[0].id");
-      await expect(
-        github.enqueueRound({ task, ...ghComment("555"), targets: [session("555")] }),
-      ).rejects.toThrow("a github round can't carry a linear_session reply target");
       // A review's targets[0] is its first inline comment; it has no target_id.
       const review = await github.enqueueRound({
         task,
@@ -512,6 +515,31 @@ describe("TaskService", () => {
         targets: [ghTarget("11")],
       });
       expect(review).toEqual({ roundId: expect.any(String) });
+      expect(await db.execute(sql`SELECT kind FROM inbox`)).toEqual([{ kind: "review" }]);
+    });
+
+    it("a round's source is its TaskService's", async () => {
+      // Core doesn't read targets: each goes back to its round's own deliver,
+      // which checks it.
+      const task = await insertTask({ key: "DBX-API-1" });
+      const target = { id: "t", spec: { kind: "linear_session" } };
+      const comment = (tasks: TaskService, externalId: string) =>
+        tasks.enqueueRound({
+          task,
+          kind: "comment",
+          externalId,
+          payload: { target_id: "t", body: "b", pr: null, created_at: "" },
+          targets: [target],
+        });
+      await comment(github, "c-1");
+      await comment(api, "c-2");
+      const rows = await db.execute(
+        sql`SELECT source, external_id, reply_targets FROM inbox ORDER BY external_id`,
+      );
+      expect([...rows]).toEqual([
+        { source: "github", external_id: "c-1", reply_targets: [target] },
+        { source: "api", external_id: "c-2", reply_targets: [target] },
+      ]);
     });
   });
 
@@ -538,13 +566,6 @@ describe("TaskService", () => {
       ).rejects.toThrow("is not from api");
       const [row] = await db.execute(sql`SELECT title FROM tasks`);
       expect(row).toEqual({ title: "t" });
-    });
-
-    it("rejects a target of another integration", async () => {
-      const task = await insertTask({ key: "DBX-API-1" });
-      await expect(api.restart(task.id, def(session(task.id)))).rejects.toThrow(
-        "a api round can't carry a linear_session reply target",
-      );
     });
 
     it("replaces the definition, delegates through the target and kills the old sandbox", async () => {

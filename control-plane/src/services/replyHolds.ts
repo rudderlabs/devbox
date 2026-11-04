@@ -1,5 +1,4 @@
 import type { RetryableError } from "../integrations/outbound";
-import type { IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type { HarnessEvent } from "../types/harnessEvent";
 
@@ -8,7 +7,7 @@ const WARN_EVERY_MS = 10 * 60 * 1000;
 type Hold = {
   inboxId: string;
   seq: number;
-  integration: IntegrationName;
+  integration: string;
   since: number;
   nextAttemptAt: number;
   warnedAt: number;
@@ -27,7 +26,7 @@ export class ReplyHolds {
   hold(
     taskId: string,
     event: Pick<HarnessEvent, "inbox_id" | "seq">,
-    integration: IntegrationName,
+    integration: string,
     err: RetryableError,
   ): void {
     const now = Date.now();

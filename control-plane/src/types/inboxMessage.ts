@@ -6,8 +6,8 @@
 // receives. CP-internal persistence concerns live in InboxRow (the repository
 // layer), which extends InboxMessage with status/lease/timestamps.
 
+// The daemon exits on any other kind.
 export type InboxKind = "assignment" | "comment" | "review" | "ci_result";
-export type InboxSource = "linear" | "github" | "api";
 
 // Identity CP stamps on every work payload. Both values are tasks columns
 // (tasks.id, tasks.key); nothing is parsed from URLs.
@@ -89,8 +89,8 @@ export type CiResultPayload = TaskIdentity & {
   pr: PrScope;
 };
 
-// The wire contract. Discriminated on (source, kind) together so impossible
-// combos (e.g. linear + review) are unrepresentable at the type level.
+// The wire contract. The payload is one of the per-kind types above; its
+// integration builds it and core only stamps the task identity on it.
 //
 // Field roles:
 //   id          — Synthetic uuidv7 PK assigned by CP at insert. The daemon
@@ -99,9 +99,8 @@ export type CiResultPayload = TaskIdentity & {
 //                 existing assignment row so each fresh run gets a fresh
 //                 daemon-visible identity while the logical task row and
 //                 assignment external_id stay one-per-issue.
-//   source      — Channel the round arrived on. Lets the daemon route final
-//                 replies through the right adapter (Linear API vs GitHub
-//                 REST).
+//   source      — Channel the round arrived on: the name of the integration
+//                 that created it (linear, github, api).
 //   kind        — Round shape; selects the daemon handler (assignment.py,
 //                 comment.py, review.py).
 //   external_id — Upstream identifier (GH comment/review id stringified,
@@ -110,53 +109,10 @@ export type CiResultPayload = TaskIdentity & {
 //                 Drives idempotency at CP's `(source, kind, external_id)` unique
 //                 index AND flows through to event reply-target routing.
 //   payload     — Kind-specific body. See the payload types above.
-export type InboxMessage =
-  | {
-      id: string;
-      source: "linear";
-      kind: "assignment";
-      external_id: string;
-      payload: AssignmentPayload;
-    }
-  | {
-      id: string;
-      source: "linear";
-      kind: "comment";
-      external_id: string;
-      payload: CommentPayload;
-    }
-  | {
-      id: string;
-      source: "api";
-      kind: "assignment";
-      external_id: string;
-      payload: AssignmentPayload;
-    }
-  | {
-      id: string;
-      source: "api";
-      kind: "comment";
-      external_id: string;
-      payload: CommentPayload;
-    }
-  | {
-      id: string;
-      source: "github";
-      kind: "comment";
-      external_id: string;
-      payload: CommentPayload;
-    }
-  | {
-      id: string;
-      source: "github";
-      kind: "review";
-      external_id: string;
-      payload: ReviewPayload;
-    }
-  | {
-      id: string;
-      source: "github";
-      kind: "ci_result";
-      external_id: string;
-      payload: CiResultPayload;
-    };
+export type InboxMessage = {
+  id: string;
+  source: string;
+  kind: InboxKind;
+  external_id: string;
+  payload: unknown;
+};
