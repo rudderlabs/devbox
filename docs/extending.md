@@ -2,10 +2,11 @@
 
 ## Not a stable interface
 
-devbox has no extension or hook interface. This page lists the places in the
-code where hooks would naturally go, so you know where to look if you change
-devbox for your own needs. All of it can change in any commit, without notice
-and without a migration path.
+devbox has no stable extension or hook interface. This page lists the places in
+the code where hooks would naturally go, and the internal interface task
+sources plug into, so you know where to look if you change devbox for your own
+needs. All of it can change in any commit, without notice and without a
+migration path.
 
 ## The repos the agent works on
 
@@ -65,19 +66,38 @@ Follow-up rounds run through `run_followup_round` in
 ## Task sources
 
 The API (`control-plane/src/routes/api.ts`, `control-plane/src/services/apiTask.service.ts`)
-is the documented way to create tasks. A task source:
+is the documented way to create tasks. Every source of tasks and follow-up
+rounds, the API included, is an integration in its own folder under
+`control-plane/src/integrations/`. A new source is one more folder there and
+one entry in the list in `control-plane/src/integrations/index.ts`.
 
-- creates a row in `tasks`, and an `assignment` row in `inbox` for it;
-- adds an `inbox` row for each follow-up;
-- gives each inbox row the reply targets that say where the harness's answers
-  go (`ReplyTargetSpec` in `control-plane/src/repositories/inbox.repository.ts`).
+- **The definition.** The folder exports an `IntegrationDefinition`
+  (`control-plane/src/integrations/types.ts`). Its `name` is stored as the
+  source of its tasks and rounds, and names its routes, `/webhook/<name>` and
+  `/api/integrations/<name>`. `createsTasks` says whether it creates tasks;
+  `parseConfig` reads its settings from the environment, or returns undefined
+  when it is off; `create` builds it once at startup when it is on; and
+  `disabledStatus` is its status while it is off.
+- **`Core`.** `create` gets its own `TaskService`, bound to its name, and the
+  logger. Through the `TaskService` it creates a task with its assignment
+  round, and queues follow-up rounds. A round's kind and payload are what the
+  harness reads (`InboxMessage` in `control-plane/src/types/inboxMessage.ts`).
+- **The `Integration`.** `create` returns it: an optional webhook, `deliver`
+  for the harness's answers, optional lifecycle hooks, and its status.
+- **Reply targets.** Each round carries reply targets that say where the
+  harness's answers go, each with a `spec` in the integration's own shape. The
+  control plane stores the spec and hands it back to the `deliver` of the
+  round's integration (`control-plane/src/services/eventDispatcher.ts`), which
+  checks it and refuses anything else.
+- **The boundary.** A file in the folder imports only its own folder, the
+  shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), the
+  API clients in `control-plane/src/clients/`, the experimental-flag parser,
+  the database row types and packages: never another integration or the rest
+  of the control plane.
+  `control-plane/src/integrations/__tests__/boundary.test.ts` checks this.
 
-The harness sees only the inbox file (`InboxMessage` in
-`control-plane/src/types/inboxMessage.ts`). The control plane routes the
-harness's events back to the source by reply target, in
-`control-plane/src/services/eventDispatcher.ts`. A new source would add a
-`source` value, its routes, and its reply-target kinds. The code has other
-sources, which this repo doesn't document.
+The database and the CLI don't list the sources: `tasks.source` is text, and
+the control plane checks a source against the registered integrations.
 
 ## The sandbox runtime
 
