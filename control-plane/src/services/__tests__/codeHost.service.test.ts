@@ -152,6 +152,19 @@ describe("CodeHost", () => {
       ]);
     });
 
+    it("a hung getUserById is cut at the send timeout: no assignees POST", async () => {
+      assignee.mockResolvedValue(person("583231"));
+      getUserById.mockImplementation(() => new Promise(() => {}));
+
+      await prOpened(codeHost("bot", 20));
+
+      expect(addPrAssignees).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        "PR assignee mirror failed",
+        expect.objectContaining({ taskId: "task-1", message: "timed out after 20 ms" }),
+      );
+    });
+
     it("getUserById rejection is swallowed: no throw, no assignees POST", async () => {
       assignee.mockResolvedValue(person("583231"));
       getUserById.mockRejectedValue(new Error("github down"));

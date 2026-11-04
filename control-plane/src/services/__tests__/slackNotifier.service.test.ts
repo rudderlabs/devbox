@@ -333,8 +333,9 @@ describe("SlackNotifierService", () => {
         ["583231", false],
         ["octocat", false],
         [null, true],
+        ["", true],
       ] as const) {
-        it(`${account === null ? "unlinked: nudges" : `linked as ${account}: no nudge`}, from one Linear query and no GitHub call`, async () => {
+        it(`${nudged ? `unlinked (${JSON.stringify(account)}): nudges` : `linked as ${account}: no nudge`}, from one Linear lookup and no GitHub call`, async () => {
           const issue = mock(() =>
             Promise.resolve({ assignee: Promise.resolve(linearUser(account)) }),
           );
