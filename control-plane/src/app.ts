@@ -4,10 +4,9 @@ import { config } from "./config";
 import { ApiController } from "./controllers/api.controller";
 import { HealthController } from "./controllers/health.controller";
 import { db } from "./db";
-import type { Task } from "./db/schema";
+import { type Task, taskSource } from "./db/schema";
 import { definitions } from "./integrations";
 import { api } from "./integrations/api";
-import type { IntegrationDefinition } from "./integrations/types";
 import { apiTaskRepository } from "./repositories/apiTask.repository";
 import { apiTokenRepository } from "./repositories/apiToken.repository";
 import { inboxRepository } from "./repositories/inbox.repository";
@@ -25,7 +24,6 @@ import { IntegrationRegistry } from "./services/integrationRegistry";
 import { ReplyHolds } from "./services/replyHolds";
 import { SandboxManager } from "./services/sandboxManager.service";
 import { SlackNotifierService } from "./services/slackNotifier.service";
-import { BoundTaskService } from "./services/task.service";
 import { TaskProcessorService } from "./services/taskProcessor.service";
 
 export type AppBundle = {
@@ -33,6 +31,11 @@ export type AppBundle = {
   taskProcessor: TaskProcessorService;
   stopApiStreams: () => void;
 };
+
+// The claim query and GET /api/tasks?source= compare against the task_source
+// type, which accepts only its own values.
+const isTaskSource = (s: string): s is Task["source"] =>
+  (taskSource.enumValues as readonly string[]).includes(s);
 
 // Trust lists are forwarded to the sandbox only when configured.
 function joinIfAny(list: string[]): string | undefined {
@@ -65,29 +68,27 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     trustedUsers: joinIfAny(config.github.trustedUsers),
   });
 
-  // The only way tasks and rounds are created, one service per source. A
-  // restart's preempted sandbox is killed in the hooks' tracked detached set.
-  // The hooks need the integrations, which the registry builds from these
-  // services; that is safe because no task is assigned or restarted before
-  // requests are served.
+  // The registry builds the TaskServices, the only way tasks and rounds are
+  // created. A restart's preempted sandbox is killed in the hooks' tracked
+  // detached set. The hooks need the integrations, which the registry builds;
+  // that is safe because no task is assigned or restarted before requests are
+  // served.
   const detach: Pick<IntegrationHooks, "detach"> = {
     detach: (...args) => hooks.detach(...args),
   };
-  const taskService = (def: IntegrationDefinition) =>
-    new BoundTaskService(def.name, {
-      createsTasks: def.createsTasks,
-      taskRepo: taskRepository,
-      inboxRepo: inboxRepository,
-      sandboxManager,
-      hooks: detach,
-    });
   // Sends held because they failed before anything went out; each
   // integration's status reports its own.
   const replyHolds = new ReplyHolds();
   const registry = new IntegrationRegistry(definitions, integrationConfigs, {
-    tasks: taskService,
+    taskRepo: taskRepository,
+    inboxRepo: inboxRepository,
+    sandboxManager,
+    hooks: detach,
     holds: replyHolds,
   });
+  // Only these sources are claimed and reconciled, so an older image never
+  // works a task whose source it doesn't know.
+  const taskSources = registry.taskSources.filter(isTaskSource);
   // The enabled integrations, for sends and hooks.
   const integrations = registry.live;
   // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.
@@ -121,9 +122,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     slackNotifier,
     integrations,
     replyHolds,
-    // Only these sources are claimed and reconciled, so an older image never
-    // works a task whose source it doesn't know.
-    registry.taskSources as Task["source"][],
+    taskSources,
     hooks,
   );
 
@@ -139,7 +138,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
   if (config.api.enabled) {
     const apiTaskService = new ApiTaskService(
       apiTaskRepository,
-      taskService(api),
+      registry.tasks(api.name),
       taskEventRepository,
       {
         publicBaseUrl: config.api.publicBaseUrl,
@@ -152,7 +151,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
       ssePollMs: config.api.ssePollMs,
       sseMaxDurationMs: config.api.sseMaxDurationMs,
       clock: realClock,
-      taskSources: registry.taskSources,
+      taskSources,
     });
     app.route(
       "/",

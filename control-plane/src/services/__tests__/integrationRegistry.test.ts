@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, mock, setSystemTime } from "bun:test";
-import type { Integration, IntegrationDefinition, TaskService } from "../../integrations/types";
+import type {
+  Integration,
+  IntegrationDefinition,
+  ReplyTarget,
+  TaskService,
+} from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 
@@ -7,7 +12,6 @@ import type { TaskRepository } from "../../repositories/task.repository";
 mock.module("../../config", () => ({ config: {} }));
 
 const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
-const { BoundTaskService } = await import("../task.service");
 const { ReplyHolds } = await import("../replyHolds");
 const { RetryableError } = await import("../../integrations/outbound");
 const { definitions } = await import("../../integrations");
@@ -38,25 +42,25 @@ const definition = (
     ...over,
   };
 };
-const bound = (def: IntegrationDefinition) =>
-  new BoundTaskService(def.name, {
-    createsTasks: def.createsTasks,
-    taskRepo: {} as TaskRepository,
-    inboxRepo: {} as InboxRepository,
-    sandboxManager: {} as never,
-    hooks: { detach: () => {} },
-  });
+// Records each task the TaskServices assign, with its source.
+const assigned: { source: string; key: unknown }[] = [];
+const taskRepo = {
+  assign: mock((p: { source: string; key: unknown }) => {
+    assigned.push({ source: p.source, key: p.key });
+    return Promise.resolve({ id: "task-1", key: "K-1", result: "created", prevSandboxId: null });
+  }),
+} as unknown as TaskRepository;
 const registry = (
   defs: IntegrationDefinition[],
   env: Record<string, string> = {},
-  deps: {
-    tasks?: (d: IntegrationDefinition) => TaskService;
-    holds?: InstanceType<typeof ReplyHolds>;
-  } = {},
+  holds = new ReplyHolds(),
 ) =>
   new IntegrationRegistry(defs, parseIntegrationConfigs(defs, env), {
-    tasks: deps.tasks ?? bound,
-    holds: deps.holds ?? new ReplyHolds(),
+    taskRepo,
+    inboxRepo: {} as InboxRepository,
+    sandboxManager: {} as never,
+    hooks: { detach: () => {} },
+    holds,
   });
 
 describe("IntegrationRegistry", () => {
@@ -73,22 +77,16 @@ describe("IntegrationRegistry", () => {
     expect(b.created).toHaveLength(1);
   });
 
-  it("hands each integration a TaskService bound to its own name", () => {
+  it("builds one TaskService per integration, bound to its name, and hands it to that integration", () => {
     const defs = [definition("a"), definition("b"), definition("c")];
-    registry(defs, { a: "on", b: "on", c: "on" });
-    expect(defs.map((d) => d.created.map((core) => core.tasks.source))).toEqual([
-      ["a"],
-      ["b"],
-      ["c"],
+    const r = registry(defs, { a: "on", c: "on" });
+    expect(["a", "b", "c"].map((name) => r.tasks(name).source)).toEqual(["a", "b", "c"]);
+    expect(defs.map((d) => d.created.map((core) => core.tasks))).toEqual([
+      [r.tasks("a")],
+      [],
+      [r.tasks("c")],
     ]);
-  });
-
-  it("refuses to hand an integration another integration's TaskService", () => {
-    const a = definition("a");
-    const b = definition("b");
-    expect(() => registry([a, b], { a: "on", b: "on" }, { tasks: () => bound(a) })).toThrow(
-      "integration b was given the a TaskService",
-    );
+    expect(() => r.tasks("d")).toThrow("no integration is named d");
   });
 
   it("a duplicate name fails", () => {
@@ -128,7 +126,7 @@ describe("IntegrationRegistry", () => {
     holds.hold("t2", { inbox_id: "i2", seq: 3 }, "github", new RetryableError("HTTP 429"));
     setSystemTime(new Date(T0 + 5_000));
 
-    const r = registry([definition("linear"), definition("github")], { github: "on" }, { holds });
+    const r = registry([definition("linear"), definition("github")], { github: "on" }, holds);
     expect(await r.status("github")).toEqual({
       name: "github",
       holds: { heldTasks: 2, oldestHoldAgeMs: 5_000 },
@@ -176,7 +174,39 @@ describe("the integrations this build has", () => {
     expect(await r.status("api")).toEqual({ enabled: false, holds: none });
   });
 
-  it("are on from their own settings, each with its own TaskService", () => {
+  it("bind each TaskService to its integration; only linear and api may assign and restart", async () => {
+    const r = registry([...definitions]);
+    assigned.length = 0;
+    const assign = (name: string, target: ReplyTarget) =>
+      r.tasks(name).assign({
+        externalId: "ext-1",
+        key: { hint: "K-1" },
+        title: "t",
+        description: null,
+        flags: [],
+        url: () => "https://example.com/1",
+        target: () => target,
+      });
+    await assign("linear", { id: "s", spec: { kind: "linear_session" } });
+    await assign("api", { id: "s", spec: { kind: "api_session" } });
+    expect(assigned.map((a) => a.source)).toEqual(["linear", "api"]);
+
+    const pr = { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 1 } as const;
+    await expect(assign("github", { id: "1", spec: pr })).rejects.toThrow(
+      "assign: github creates no tasks",
+    );
+    await expect(
+      r.tasks("github").restart("task-1", {
+        title: "t",
+        description: null,
+        flags: [],
+        target: { id: "1", spec: pr },
+      }),
+    ).rejects.toThrow("restart: github creates no tasks");
+    expect(assigned).toHaveLength(2);
+  });
+
+  it("are on from their own settings", () => {
     const env = {
       LINEAR_ENABLED: "true",
       LINEAR_CLIENT_ID: "cid",
@@ -189,15 +219,8 @@ describe("the integrations this build has", () => {
       GITHUB_TRUSTED_USERS: "alice",
       API_ENABLED: "true",
     };
-    const sources: string[] = [];
-    const r = registry([...definitions], env, {
-      tasks: (d) => {
-        sources.push(d.name);
-        return bound(d);
-      },
-    });
+    const r = registry([...definitions], env);
     expect(Object.keys(r.live)).toEqual(["linear", "github", "api"]);
-    expect(sources).toEqual(["linear", "github", "api"]);
     expect(r.webhooks().map((w) => w.name)).toEqual(["linear", "github"]);
     expect(Object.keys(registry([...definitions], { API_ENABLED: "true" }).live)).toEqual(["api"]);
   });

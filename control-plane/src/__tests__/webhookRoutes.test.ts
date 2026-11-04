@@ -1,9 +1,13 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import type { Context } from "hono";
 import type { IntegrationDefinition } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
 import { createWebhookRoutes as createRoutes } from "../routes/webhook";
-import { IntegrationRegistry } from "../services/integrationRegistry";
+
+// The registry's TaskServices reach the database module, which reads config.
+mock.module("../config", () => ({ config: {} }));
+
+const { IntegrationRegistry } = await import("../services/integrationRegistry");
 
 type Webhook = (c: Context) => Promise<Response>;
 
@@ -27,7 +31,10 @@ function routesFor(on: string[], webhooks: Partial<Record<string, Webhook>>) {
     definitions,
     new Map(definitions.map((d) => [d.name, d.parseConfig({})])),
     {
-      tasks: (d) => ({ source: d.name }) as never,
+      taskRepo: {} as never,
+      inboxRepo: {} as never,
+      sandboxManager: {} as never,
+      hooks: { detach: () => {} },
       holds: { of: () => ({ heldTasks: 0, oldestHoldAgeMs: 0 }) },
     },
   );
