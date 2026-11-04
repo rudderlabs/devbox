@@ -1065,6 +1065,29 @@ describe("EventDispatcher", () => {
       expect(postIssueComment).not.toHaveBeenCalled();
     });
 
+    it("GitHub refuses a thread target without its owner or repo, or with a non-numeric PR number", async () => {
+      const spec = { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 555 };
+      const { owner: _o, ...noOwner } = spec;
+      const { repo: _r, ...noRepo } = spec;
+      const error = spyOn(logger, "error").mockImplementation(() => logger);
+      try {
+        for (const bad of [noOwner, noRepo, { ...spec, prNumber: "1" }]) {
+          const row = ghCommentRow();
+          row.reply_targets = [{ id: "555", spec: bad }];
+          getByIdForTask.mockResolvedValueOnce(row);
+          expect(await dispatcher.handle(responseEvent("555"), makeTask())).toBe("dropped");
+        }
+        expect(error.mock.calls.map(([, meta]) => (meta as { message?: string }).message)).toEqual([
+          "not a GitHub PR thread target",
+          "not a GitHub PR thread target",
+          "not a GitHub PR thread target",
+        ]);
+      } finally {
+        error.mockRestore();
+      }
+      expect(postIssueComment).not.toHaveBeenCalled();
+    });
+
     it("skips GitHub replies when GitHub webhooks are off: not posted, not held", async () => {
       getByIdForTask.mockResolvedValue(ghCommentRow());
       expect(await withGithubOff().handle(responseEvent("555"), makeTask())).toBe("ok");
