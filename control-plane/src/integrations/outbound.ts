@@ -17,6 +17,11 @@ export type Outbound =
     };
 export type SendCtx = { signal: AbortSignal; log: Logger };
 
+// What a workspace_missing notice tells the user, wherever it is shown.
+export const WORKSPACE_MISSING_MESSAGE =
+  "The workspace for this task has been cleaned up and can no longer be resumed. " +
+  "Please reach out to the harness team or open a new ticket to continue.";
+
 // Throw only before the first request is sent (a transient token failure,
 // 429, connection refused, DNS, TLS handshake).
 export class RetryableError extends Error {

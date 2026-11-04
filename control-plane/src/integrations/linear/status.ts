@@ -1,4 +1,4 @@
-import type { logger } from "../../logger";
+import type { Logger } from "../types";
 import type { LinearTokenProvider } from "./tokenProvider";
 
 export type LinearStatus =
@@ -34,7 +34,7 @@ export class LinearStatusService {
     private readonly provider:
       | Pick<LinearTokenProvider, "getAuthorizedLinearClient" | "lastTokenError">
       | undefined,
-    private readonly log?: Pick<typeof logger, "warn">,
+    private readonly log?: Pick<Logger, "warn">,
   ) {}
 
   recordWebhook(at: Date): void {

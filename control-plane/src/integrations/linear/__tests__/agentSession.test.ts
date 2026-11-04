@@ -32,6 +32,7 @@ mock.module("../../../clients/linear", () => ({
 }));
 
 const { AgentSessionService } = await import("../agentSession");
+const { logger } = await import("../../../logger");
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -97,7 +98,7 @@ describe("AgentSessionService", () => {
       "getAuthorizedLinearClient"
     >;
 
-    service = new AgentSessionService(tasks, linearTokenProvider);
+    service = new AgentSessionService(tasks, linearTokenProvider, logger);
   });
 
   describe("handleEvent created", () => {

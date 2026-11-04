@@ -406,7 +406,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     getUserIdByLogin.mockReset();
     getUserIdByLogin.mockResolvedValue(null);
     clock = { now: 1_000_000 };
-    controller = new GitHubWebhookController(tasks, SETTINGS, () => clock.now);
+    controller = new GitHubWebhookController(tasks, SETTINGS, logger, () => clock.now);
     const a = new Hono();
     a.post("/webhook/github", (c) => controller.handleWebhook(c));
     return a;
@@ -1036,10 +1036,11 @@ describe("GitHubWebhookController.handleWebhook", () => {
     fetchOrgMembers.mockResolvedValue(new Set([1, 2, 3]) as ReadonlySet<number>);
     const flagOffApp = new Hono();
     flagOffApp.post("/webhook/github", (c) =>
-      new GitHubWebhookController(flagOffTasks, {
-        ...SETTINGS,
-        ciResultEnabled: false,
-      }).handleWebhook(c),
+      new GitHubWebhookController(
+        flagOffTasks,
+        { ...SETTINGS, ciResultEnabled: false },
+        logger,
+      ).handleWebhook(c),
     );
 
     const body = workflowRunBody();
@@ -1194,6 +1195,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
       controller = new GitHubWebhookController(
         tasks,
         { ...SETTINGS, ...settings },
+        logger,
         () => clock.now,
       );
       const a = new Hono();

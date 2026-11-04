@@ -150,7 +150,7 @@ describe("GitHub rounds", () => {
     };
 
     it("appends a kind='ci_result' row with correct payload and reply target", async () => {
-      await enqueueCiResult(tasks, ciParams);
+      await enqueueCiResult(tasks, ciParams, logger);
 
       const arg = enqueueRound.mock.calls[0]?.[0] as {
         task: { id: string; key: string };
@@ -199,7 +199,7 @@ describe("GitHub rounds", () => {
       const warn = spyOn(logger, "warn").mockImplementation(() => logger);
       // seen is the rows already stored, which can exceed a lowered cap.
       enqueueRound.mockResolvedValueOnce({ dropped: "limit", count: 23 });
-      await enqueueCiResult(tasks, ciParams);
+      await enqueueCiResult(tasks, ciParams, logger);
       expect(warn.mock.calls).toEqual([
         [
           "ci_result loop breaker tripped — dropping CI failure",
@@ -208,9 +208,9 @@ describe("GitHub rounds", () => {
       ]);
       // Nothing for a round that went in or another drop.
       warn.mockClear();
-      await enqueueCiResult(tasks, ciParams);
+      await enqueueCiResult(tasks, ciParams, logger);
       enqueueRound.mockResolvedValueOnce({ dropped: "duplicate" });
-      await enqueueCiResult(tasks, ciParams);
+      await enqueueCiResult(tasks, ciParams, logger);
       expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
     });
@@ -305,21 +305,25 @@ describe("GitHub rounds", () => {
     });
 
     it("enqueueCiResult", async () => {
-      await enqueueCiResult(tasks, {
-        task: apiTask,
-        runId: 9,
-        runAttempt: 1,
-        workflowName: "CI",
-        workflowPath: ".github/workflows/ci.yml",
-        conclusion: "failure",
-        runUrl: "https://github.com/o/r/actions/runs/9",
-        headSha: "abc",
-        headBranch: "devbox/DBX-API-7-x",
-        owner: "o",
-        repo: "r",
-        prNumber: 7,
-        limit: 20,
-      });
+      await enqueueCiResult(
+        tasks,
+        {
+          task: apiTask,
+          runId: 9,
+          runAttempt: 1,
+          workflowName: "CI",
+          workflowPath: ".github/workflows/ci.yml",
+          conclusion: "failure",
+          runUrl: "https://github.com/o/r/actions/runs/9",
+          headSha: "abc",
+          headBranch: "devbox/DBX-API-7-x",
+          owner: "o",
+          repo: "r",
+          prNumber: 7,
+          limit: 20,
+        },
+        logger,
+      );
       expect(enqueueRound).toHaveBeenCalledWith({
         task: apiTask,
         kind: "ci_result",

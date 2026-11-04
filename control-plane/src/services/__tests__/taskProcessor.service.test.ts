@@ -100,9 +100,8 @@ const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
 const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
-const { InboxService: RealInboxService, WORKSPACE_MISSING_MESSAGE } = await import(
-  "../inbox.service"
-);
+const { InboxService: RealInboxService } = await import("../inbox.service");
+const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound");
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
   config: { shutdownDrainMs: number; leaseTimeoutMs: number };
 };

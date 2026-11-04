@@ -1,9 +1,7 @@
 import { emitAction, emitResponse, requireLinearTicketId } from "../../clients/linear";
 import type { Task } from "../../db/schema";
-import { logger } from "../../logger";
-import type { ReplyTarget } from "../../repositories/inbox.repository";
 import { parseExperimentalFlags } from "../../services/experimentalFlags";
-import type { TaskService } from "../../services/task.service";
+import type { Logger, ReplyTarget, TaskService } from "../types";
 import type { LinearTokenProvider } from "./tokenProvider";
 import type { HandleAgentSessionResult, ParsedAgentSessionEvent } from "./types";
 
@@ -22,6 +20,7 @@ export class AgentSessionService {
   constructor(
     tasks: Pick<TaskService, "assign" | "findTask" | "enqueueRound">,
     linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
+    private readonly log: Logger,
   ) {
     this.tasks = tasks;
     this.linearTokenProvider = linearTokenProvider;
@@ -55,7 +54,7 @@ export class AgentSessionService {
           // Fresh task — Linear sees Evaluating to satisfy the 10s SLA.
           this.fireAndForgetEmitAction(event.agentSessionId, "Evaluating", "task", "created-ack");
         } else if (result === "restarted") {
-          logger.info("re-delegation detected; restarting task from clean slate", {
+          this.log.info("re-delegation detected; restarting task from clean slate", {
             taskId,
             previousSessionId: previousTargetId,
             currentSessionId: event.agentSessionId,
@@ -158,7 +157,7 @@ export class AgentSessionService {
       .then((client) => emitResponse(client, sessionId, body))
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`emitResponse(${logContext}) failed`, {
+        this.log.error(`emitResponse(${logContext}) failed`, {
           agentSessionId: sessionId,
           message: msg,
         });
@@ -176,7 +175,7 @@ export class AgentSessionService {
       .then((client) => emitAction(client, sessionId, action, parameter))
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`emitAction(${logContext}) failed`, {
+        this.log.error(`emitAction(${logContext}) failed`, {
           agentSessionId: sessionId,
           message: msg,
         });

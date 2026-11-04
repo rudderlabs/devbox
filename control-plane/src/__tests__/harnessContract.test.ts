@@ -29,6 +29,7 @@ const { enqueueCiResult, enqueueComment, enqueueReview } = await import(
 );
 const { ApiTaskService } = await import("../services/apiTask.service");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
+const { logger } = await import("../logger");
 
 import type { Task } from "../db/schema";
 import type { SandboxManager } from "../services/sandboxManager.service";
@@ -83,9 +84,11 @@ describe("harness contract", () => {
     const inbox = new InboxService(inboxRepo, sandboxManager, {} as never, {} as never);
     // The webhook acks are fire-and-forget; a client that never arrives keeps
     // them from running.
-    const linear = new AgentSessionService(tasks.linear, {
-      getAuthorizedLinearClient: () => new Promise(() => {}),
-    });
+    const linear = new AgentSessionService(
+      tasks.linear,
+      { getAuthorizedLinearClient: () => new Promise(() => {}) },
+      logger,
+    );
     const api = new ApiTaskService(new ApiTaskRepository(), tasks.api, new TaskEventRepository(), {
       publicBaseUrl: "https://devbox.example",
       taskKeyPrefix: "DBX-API-",
@@ -153,19 +156,23 @@ describe("harness contract", () => {
       reviewerLogin: "reviewer",
       createdAt: "2026-01-02T05:00:00Z",
     });
-    await enqueueCiResult(tasks.github, {
-      task,
-      runId: 401,
-      runAttempt: 2,
-      workflowName: "CI",
-      workflowPath: ".github/workflows/ci.yml",
-      conclusion: "failure",
-      runUrl: "https://github.com/example/app/actions/runs/401",
-      headSha: "abc123",
-      headBranch: "devbox/eng-42",
-      ...PR,
-      limit: 20,
-    });
+    await enqueueCiResult(
+      tasks.github,
+      {
+        task,
+        runId: 401,
+        runAttempt: 2,
+        workflowName: "CI",
+        workflowPath: ".github/workflows/ci.yml",
+        conclusion: "failure",
+        runUrl: "https://github.com/example/app/actions/runs/401",
+        headSha: "abc123",
+        headBranch: "devbox/eng-42",
+        ...PR,
+        limit: 20,
+      },
+      logger,
+    );
 
     // API: an assignment and a message.
     const created = await api.create(null, {

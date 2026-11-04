@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
-import { logger } from "../../logger";
+import type { Logger } from "../types";
 import type { AgentSessionService } from "./agentSession";
 import type { ParsedAgentSessionEvent } from "./types";
 
@@ -14,6 +14,7 @@ export class LinearWebhookController {
   private readonly agentSessionService: AgentSessionService;
 
   private readonly webhookSecret: string;
+  private readonly log: Logger;
   private readonly onSignedWebhook: (at: Date) => void;
   private readonly now: () => Date;
 
@@ -21,11 +22,13 @@ export class LinearWebhookController {
     agentSessionService: AgentSessionService,
     // LINEAR_WEBHOOK_SECRET.
     webhookSecret: string,
+    log: Logger,
     onSignedWebhook: (at: Date) => void,
     now: () => Date = () => new Date(),
   ) {
     this.agentSessionService = agentSessionService;
     this.webhookSecret = webhookSecret;
+    this.log = log;
     this.onSignedWebhook = onSignedWebhook;
     this.now = now;
   }
@@ -39,7 +42,7 @@ export class LinearWebhookController {
       // differs from LINEAR_WEBHOOK_SECRET; an unsigned one (linear:status's
       // probe) is expected and not logged. Nothing from the request is logged.
       if (signature) {
-        logger.warn("Linear webhook rejected: signature mismatch (check LINEAR_WEBHOOK_SECRET)");
+        this.log.warn("Linear webhook rejected: signature mismatch (check LINEAR_WEBHOOK_SECRET)");
       }
       return c.json({ error: "invalid signature" }, 401);
     }
@@ -146,7 +149,7 @@ export class LinearWebhookController {
     const e = err instanceof Error ? err : new Error(String(err));
     const cause =
       e.cause instanceof Error ? { message: e.cause.message, stack: e.cause.stack } : e.cause;
-    logger.error("handleAgentSessionEvent failed", {
+    this.log.error("handleAgentSessionEvent failed", {
       action: event.action,
       agentSessionId: event.agentSessionId,
       message: e.message,

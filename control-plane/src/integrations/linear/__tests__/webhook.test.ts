@@ -46,6 +46,7 @@ const buildApp = (service: AgentSessionServiceLike) => {
   const controller = new LinearWebhookController(
     service as never,
     WEBHOOK_SECRET,
+    logger,
     onSignedWebhook as never,
     () => FROZEN,
   );

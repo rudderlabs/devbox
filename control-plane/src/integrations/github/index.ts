@@ -9,11 +9,16 @@ import {
   requestReviewers,
 } from "../../clients/github";
 import type { Task } from "../../db/schema";
-import type { InboxRow, ReplyTarget, ReplyTargetSpec } from "../../repositories/inbox.repository";
-import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { retryable } from "../http";
-import type { Outbound, SendCtx } from "../outbound";
-import type { HookCtx, Integration, IntegrationDefinition } from "../types";
+import { type Outbound, type SendCtx, WORKSPACE_MISSING_MESSAGE } from "../outbound";
+import type {
+  HookCtx,
+  Integration,
+  IntegrationDefinition,
+  ReplyTarget,
+  ReplyTargetSpec,
+  Round,
+} from "../types";
 import { type GithubConfig, parseGithubConfig } from "./config";
 import { type GithubStatus, GithubStatusService } from "./status";
 import { GitHubWebhookController } from "./webhook";
@@ -26,7 +31,7 @@ export const github: IntegrationDefinition<GithubConfig> = {
   createsTasks: false,
   parseConfig: parseGithubConfig,
   create(core, cfg) {
-    const controller = new GitHubWebhookController(core.tasks, cfg);
+    const controller = new GitHubWebhookController(core.tasks, cfg, core.log);
     const status = new GithubStatusService(githubTokenState, {
       enabled: true,
       ciResults: cfg.ciResultEnabled,
@@ -102,7 +107,7 @@ export class GithubIntegration implements Integration {
   async onRoundFinished(
     ctx: HookCtx & { firstTransition: boolean },
     task: Task,
-    round: InboxRow,
+    round: Round,
   ): Promise<void> {
     if (ctx.firstTransition && round.kind === "review") {
       await requestReviewFromOriginalReviewer(ctx, round, task);
@@ -112,7 +117,7 @@ export class GithubIntegration implements Integration {
 
 async function requestReviewFromOriginalReviewer(
   ctx: HookCtx,
-  inboxRow: Extract<InboxRow, { kind: "review" }>,
+  inboxRow: Extract<Round, { kind: "review" }>,
   task: Task,
 ): Promise<void> {
   const payload = inboxRow.payload as Record<string, unknown> | null | undefined;
@@ -160,7 +165,7 @@ async function requestReviewFromOriginalReviewer(
 }
 
 function reviewPrCoordinates(
-  inboxRow: Extract<InboxRow, { kind: "review" }>,
+  inboxRow: Extract<Round, { kind: "review" }>,
 ): { owner: string; repo: string; prNumber: number } | null {
   const pr = inboxRow.payload.pr as Record<string, unknown> | undefined;
   const owner = typeof pr?.owner === "string" ? pr.owner : "";
@@ -214,7 +219,7 @@ async function deliverFailure(
 // top-level PR comment for its summary, whatever target core passed (the
 // review body has no reply / reactions API). A CI result is informational and
 // dead-lettered silently.
-async function workspaceMissing(ctx: SendCtx, spec: GithubSpec, round: InboxRow): Promise<void> {
+async function workspaceMissing(ctx: SendCtx, spec: GithubSpec, round: Round): Promise<void> {
   if (round.kind === "review") {
     const body = round.reply_targets.find((t) => t.spec.kind === "review_body");
     if (body?.spec.kind === "review_body") await post(ctx, body.spec, WORKSPACE_MISSING_MESSAGE);

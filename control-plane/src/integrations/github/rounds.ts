@@ -1,7 +1,5 @@
 import type { Task } from "../../db/schema";
-import { logger } from "../../logger";
-import type { ReplyTarget, ReplyTargetSpec } from "../../repositories/inbox.repository";
-import type { TaskService } from "../../services/task.service";
+import type { Logger, ReplyTarget, ReplyTargetSpec, TaskService } from "../types";
 
 // GitHub's follow-up rounds (comment, review, CI result), built from its
 // webhooks and queued through GitHub's TaskService.
@@ -139,6 +137,7 @@ export async function enqueueCiResult(
     prNumber: number;
     limit: number;
   },
+  log: Pick<Logger, "warn">,
 ): Promise<void> {
   const runIdStr = String(params.runId);
   const externalId = `workflow_run:${params.runId}:${params.runAttempt}:${params.prNumber}`;
@@ -175,7 +174,7 @@ export async function enqueueCiResult(
     limit: params.limit,
   });
   if ("dropped" in result && result.dropped === "limit") {
-    logger.warn("ci_result loop breaker tripped — dropping CI failure", {
+    log.warn("ci_result loop breaker tripped — dropping CI failure", {
       taskId: params.task.id,
       seen: result.count,
       max: params.limit,

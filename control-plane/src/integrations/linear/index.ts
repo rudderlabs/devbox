@@ -13,11 +13,22 @@ import {
 } from "../../clients/linear";
 import { LinearTokenError } from "../../clients/linearOauth";
 import type { Task } from "../../db/schema";
-import type { InboxRow, ReplyTarget } from "../../repositories/inbox.repository";
-import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { rateLimitWaitMs, retryable } from "../http";
-import { type Outbound, RetryableError, type SendCtx } from "../outbound";
-import type { HookCtx, Integration, IntegrationDefinition, Person, PrRef } from "../types";
+import {
+  type Outbound,
+  RetryableError,
+  type SendCtx,
+  WORKSPACE_MISSING_MESSAGE,
+} from "../outbound";
+import type {
+  HookCtx,
+  Integration,
+  IntegrationDefinition,
+  Person,
+  PrRef,
+  ReplyTarget,
+  Round,
+} from "../types";
 import { AgentSessionService } from "./agentSession";
 import { type LinearConfig, parseLinearConfig } from "./config";
 import { type LinearStatus, LinearStatusService } from "./status";
@@ -35,8 +46,9 @@ export const linear: IntegrationDefinition<LinearConfig> = {
     });
     const status = new LinearStatusService(tokenProvider, core.log);
     const controller = new LinearWebhookController(
-      new AgentSessionService(core.tasks, tokenProvider),
+      new AgentSessionService(core.tasks, tokenProvider, core.log),
       cfg.webhookSecret,
+      core.log,
       (at) => status.recordWebhook(at),
     );
     return new LinearIntegration(tokenProvider, status, controller);
@@ -139,7 +151,7 @@ export class LinearIntegration implements Integration {
   async onRoundFinished(
     ctx: HookCtx & { firstTransition: boolean; archive(): Promise<Uint8Array | null> },
     task: Task,
-    round: InboxRow,
+    round: Round,
   ): Promise<void> {
     if (!ctx.firstTransition || round.kind !== "assignment") return;
     const bytes = await ctx.archive();

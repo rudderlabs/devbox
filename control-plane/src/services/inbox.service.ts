@@ -1,6 +1,7 @@
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { deliverToRound } from "../integrations/http";
+import { WORKSPACE_MISSING_MESSAGE } from "../integrations/outbound";
 import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
@@ -12,10 +13,6 @@ import type { SandboxManager } from "./sandboxManager.service";
 // (recreating it from the preserved PVC when it has been reaped), and the
 // PVC-missing per-row dead-letter. Integrations build their own rounds and
 // queue them through their TaskService.
-export const WORKSPACE_MISSING_MESSAGE =
-  "The workspace for this task has been cleaned up and can no longer be resumed. " +
-  "Please reach out to the harness team or open a new ticket to continue.";
-
 export class InboxService {
   constructor(
     private inboxRepo: InboxRepository,

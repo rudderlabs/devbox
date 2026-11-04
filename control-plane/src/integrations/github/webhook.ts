@@ -7,9 +7,7 @@ import {
   getReviewComments,
   getUserIdByLogin,
 } from "../../clients/github";
-import { logger } from "../../logger";
-import type { ReplyTargetSpec } from "../../repositories/inbox.repository";
-import type { TaskService } from "../../services/task.service";
+import type { Logger, ReplyTargetSpec, TaskService } from "../types";
 import type { GithubConfig } from "./config";
 import { enqueueCiResult, enqueueComment, enqueueReview } from "./rounds";
 
@@ -341,11 +339,20 @@ export class GitHubWebhookController {
   constructor(
     private tasks: Pick<TaskService, "findTaskByPrUrl" | "enqueueRound">,
     private readonly settings: GithubConfig,
+    private readonly log: Logger,
     private readonly now: () => number = Date.now,
   ) {
     this.mention = mentionRegex(settings.botLogin);
     this.botPayloadLogin = `${settings.botLogin}[bot]`;
   }
+
+  private readonly logFireAndForget = (err: unknown): void => {
+    const e = err instanceof Error ? err : new Error(String(err));
+    this.log.warn("github reaction fire-and-forget failed", {
+      message: e.message,
+      stack: e.stack,
+    });
+  };
 
   lastWebhookAt(): string | null {
     return this.lastSignedAt === null ? null : new Date(this.lastSignedAt).toISOString();
@@ -354,7 +361,7 @@ export class GitHubWebhookController {
   // One info line per rejected delivery. No payload content and no
   // secret: event name, GitHub's delivery id, and why.
   private reject(c: Context, reason: string): void {
-    logger.info("github_webhook.rejected", {
+    this.log.info("github_webhook.rejected", {
       event: c.req.header("x-github-event"),
       deliveryId: c.req.header("x-github-delivery"),
       reason,
@@ -383,7 +390,7 @@ export class GitHubWebhookController {
           const id = await getUserIdByLogin(login);
           if (id === null) {
             // Unknown login: leave it untrusted, keep the rest of the set.
-            logger.warn("trusted user login did not resolve; ignoring it", { login });
+            this.log.warn("trusted user login did not resolve; ignoring it", { login });
             continue;
           }
           trusted.add(id);
@@ -421,7 +428,7 @@ export class GitHubWebhookController {
         : body;
       payload = JSON.parse(jsonBody);
     } catch {
-      logger.warn("github webhook rejected: invalid json", {
+      this.log.warn("github webhook rejected: invalid json", {
         contentType: c.req.header("content-type"),
         bodyPreview: body.slice(0, 200),
       });
@@ -475,7 +482,7 @@ export class GitHubWebhookController {
       // GitHub unreachable / token scope problem. Return 503 so GitHub retries
       // per its delivery policy rather than dropping the event as a hard 403.
       const e = err instanceof Error ? err : new Error(String(err));
-      logger.error("github webhook 503: trusted set fetch failed", {
+      this.log.error("github webhook 503: trusted set fetch failed", {
         eventHeader,
         message: e.message,
       });
@@ -489,8 +496,8 @@ export class GitHubWebhookController {
 
     const parsed = parseGithubEvent(eventHeader, payload, this.mention);
 
-    // logger.debug("github webhook accepted: ", { userId, userLogin, prOpenerLogin });
-    // logger.debug("parsed payload: ", { parsed });
+    // this.log.debug("github webhook accepted: ", { userId, userLogin, prOpenerLogin });
+    // this.log.debug("parsed payload: ", { parsed });
 
     if (!parsed) return c.json({ status: "ignored" }, 200);
 
@@ -510,33 +517,37 @@ export class GitHubWebhookController {
           const prUrl = prUrlOf(parsed.owner, parsed.repo, pr.number);
           const task = await this.tasks.findTaskByPrUrl(prUrl);
           if (!task) continue;
-          logger.debug("workflow_run matched a bot-opened task; enqueueing ci_result", {
+          this.log.debug("workflow_run matched a bot-opened task; enqueueing ci_result", {
             taskId: task.id,
             taskExternalUrl: task.externalUrl,
             runId: parsed.runId,
             prNumber: pr.number,
           });
 
-          await enqueueCiResult(this.tasks, {
-            task,
-            runId: parsed.runId,
-            runAttempt: parsed.runAttempt,
-            workflowName: parsed.workflowName,
-            workflowPath: parsed.workflowPath,
-            conclusion: parsed.conclusion,
-            runUrl: parsed.runUrl,
-            headSha: parsed.headSha,
-            headBranch: parsed.headBranch,
-            owner: parsed.owner,
-            repo: parsed.repo,
-            prNumber: pr.number,
-            limit: this.settings.ciResultMaxPerTask,
-          });
+          await enqueueCiResult(
+            this.tasks,
+            {
+              task,
+              runId: parsed.runId,
+              runAttempt: parsed.runAttempt,
+              workflowName: parsed.workflowName,
+              workflowPath: parsed.workflowPath,
+              conclusion: parsed.conclusion,
+              runUrl: parsed.runUrl,
+              headSha: parsed.headSha,
+              headBranch: parsed.headBranch,
+              owner: parsed.owner,
+              repo: parsed.repo,
+              prNumber: pr.number,
+              limit: this.settings.ciResultMaxPerTask,
+            },
+            this.log,
+          );
         }
         return c.json({ status: "ok" }, 200);
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
-        logger.error("handleGithubWebhook failed", {
+        this.log.error("handleGithubWebhook failed", {
           eventKind: parsed.kind,
           message: e.message,
           stack: e.stack,
@@ -564,7 +575,9 @@ export class GitHubWebhookController {
         // (user, content) so a duplicate webhook delivery is a no-op API call.
         const react =
           parsed.spec.kind === "issue_comment" ? addIssueCommentReaction : addReviewCommentReaction;
-        void react(parsed.owner, parsed.repo, parsed.commentId, "eyes").catch(logFireAndForget);
+        void react(parsed.owner, parsed.repo, parsed.commentId, "eyes").catch(
+          this.logFireAndForget,
+        );
       } else {
         // Drop any inline comment authored by the bot itself — defensive: a
         // batch must never enqueue harness's own replies as items to address.
@@ -595,7 +608,7 @@ export class GitHubWebhookController {
         // Fire-and-forget 👀 on each processed inline; review_body has no reactions API.
         for (const ic of inlineComments) {
           void addReviewCommentReaction(parsed.owner, parsed.repo, ic.id, "eyes").catch(
-            logFireAndForget,
+            this.logFireAndForget,
           );
         }
       }
@@ -603,7 +616,7 @@ export class GitHubWebhookController {
       return c.json({ status: "ok" }, 200);
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
-      logger.error("handleGithubWebhook failed", {
+      this.log.error("handleGithubWebhook failed", {
         eventKind: parsed.kind,
         message: e.message,
         stack: e.stack,
@@ -632,12 +645,4 @@ function validWebhookRequest(
   }
 
   return false;
-}
-
-function logFireAndForget(err: unknown): void {
-  const e = err instanceof Error ? err : new Error(String(err));
-  logger.warn("github reaction fire-and-forget failed", {
-    message: e.message,
-    stack: e.stack,
-  });
 }

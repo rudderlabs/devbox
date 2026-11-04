@@ -68,7 +68,8 @@ mock.module("../../clients/github", () => ({
   githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),
 }));
 
-const { InboxService, WORKSPACE_MISSING_MESSAGE } = await import("../inbox.service");
+const { InboxService } = await import("../inbox.service");
+const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound");
 const { LinearIntegration } = await import("../../integrations/linear");
 const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
