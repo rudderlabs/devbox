@@ -5,7 +5,7 @@ import { type From, NoEventLog } from "../core/events";
 import type { CoreOps } from "../core/ops";
 import type { FollowFlags } from "./command";
 import { EXIT, exitCodeFor } from "./exit";
-import { printable } from "./format";
+import { printable, toJson } from "./format";
 import { colorEnabled, type Io } from "./io";
 import { renderEvent } from "./logLine";
 
@@ -20,9 +20,7 @@ export type FollowPlan = {
 
 export function printEvent(io: Io, event: ApiEventEnvelope, json: boolean): void {
   io.out(
-    json
-      ? JSON.stringify(event)
-      : renderEvent(event, { color: colorEnabled(io), timeZone: io.timeZone }),
+    json ? toJson(event) : renderEvent(event, { color: colorEnabled(io), timeZone: io.timeZone }),
   );
 }
 
@@ -44,7 +42,7 @@ export async function follow(ops: CoreOps, io: Io, plan: FollowPlan): Promise<nu
         const { result } = item;
         if (plan.quiet) {
           const body = (result.response?.data as { body?: unknown } | undefined)?.body;
-          if (result.response && plan.json) io.out(JSON.stringify(result.response));
+          if (result.response && plan.json) io.out(toJson(result.response));
           else if (typeof body === "string") io.out(printable(body));
         }
         if (result.failed) io.err(`devbox: ${plan.ref} failed: ${printable(result.reason ?? "")}`);
@@ -64,7 +62,7 @@ export async function follow(ops: CoreOps, io: Io, plan: FollowPlan): Promise<nu
 // A write's resource as --json prints it: on one line when the write is
 // followed, so every line of the output is one JSON value.
 export const writtenJson = (value: unknown, afterWrite: FollowFlags): string =>
-  afterWrite.follow || afterWrite.wait ? JSON.stringify(value) : JSON.stringify(value, null, 2);
+  afterWrite.follow || afterWrite.wait ? toJson(value) : toJson(value, 2);
 
 // Follows the round a write created, as its flags ask: --follow prints the log,
 // --wait ends with the round and prints its response.

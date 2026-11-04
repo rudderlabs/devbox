@@ -79,13 +79,20 @@ describe("ls: render", () => {
     expect(row).not.toContain("more");
   });
 
-  it("strips control characters from titles and descriptions", () => {
+  it("strips control characters from titles, descriptions and creators", () => {
     const [, row = ""] = render(
-      [task({ title: "Fix\x1b]52;c;eA==\x07 it", description: "Erase\x1b[2K\r me" })],
+      [
+        task({
+          title: "Fix\x1b]52;c;eA==\x07 it",
+          description: "Erase\x1b[2K\r me",
+          created_by: { id: "0192f000-0000-7000-8000-0000000000aa", name: "frodo\x1b[8m\u009b" },
+        }),
+      ],
       NOW,
     ).split("\n");
     expect(row).toContain("Fix]52;c;eA== it");
     expect(row).toContain("Erase[2K me");
+    expect(row).toContain("frodo[8m");
     expect(row).not.toMatch(/\p{Cc}/u);
   });
 
@@ -136,6 +143,17 @@ describe("ls: run", () => {
     const json = testIo();
     await run({ ...asJson, mine: false }, ops, json);
     expect(JSON.parse(json.stdout.join("\n"))).toEqual([]);
+  });
+
+  it("escapes DEL and C1 controls in --json, and the parsed tasks are unchanged", async () => {
+    const tasks = [task({ title: "a\x7fb\u0085c\u009bd" })];
+    const { ops } = fakeOps({ listTasks: async () => tasks });
+    const io = testIo();
+    await run({ ...asJson, mine: false }, ops, io);
+    const out = io.stdout.join("\n");
+    expect(out).toContain("a\\u007fb\\u0085c\\u009bd");
+    expect(out).not.toMatch(/(?!\n)\p{Cc}/u);
+    expect(JSON.parse(out)).toEqual(tasks);
   });
 
   it("colours output only on a TTY without NO_COLOR", async () => {

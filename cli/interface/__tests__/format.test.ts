@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { NOW } from "../../__tests__/fixtures";
-import { age, oneLine, paint, printable } from "../format";
+import { age, oneLine, paint, printable, toJson } from "../format";
 
 describe("age", () => {
   it.each([
@@ -30,6 +30,18 @@ describe("printable", () => {
       "a]52;c;eA==b]8;;u\\c[2Kd31m\te\n",
     );
     expect(printable("naïve ✓ \u00a0")).toBe("naïve ✓ \u00a0");
+  });
+});
+
+describe("toJson", () => {
+  it("escapes every control character inside strings, and parses back to the same value", () => {
+    const value = { s: "a\x00\x1b[2K\n\t\x7f\u0080\u009fz", "k\u0085": [1] };
+    for (const space of [undefined, 2]) {
+      const out = toJson(value, space);
+      expect(out).not.toMatch(/(?!\n)\p{Cc}/u);
+      expect(JSON.parse(out)).toEqual(value);
+    }
+    expect(toJson({ s: "\x7f" })).toBe('{"s":"\\u007f"}');
   });
 });
 

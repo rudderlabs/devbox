@@ -2,7 +2,7 @@
 import type { ApiRound, ApiTask } from "../../../control-plane/src/types/api";
 import type { CoreOps } from "../../core/ops";
 import type { CommandModule, CommonArgs } from "../command";
-import { age, paint, printable, STATE_TONE } from "../format";
+import { age, paint, printable, STATE_TONE, toJson } from "../format";
 import { colorEnabled, type Io } from "../io";
 import { common, commonArgs, type Opts } from "../options";
 
@@ -56,9 +56,7 @@ export function render(t: ApiTask, now: number, o: Color = { color: false }): st
 
 export async function run(args: ShowArgs, ops: CoreOps, io: Io): Promise<number> {
   const task = await ops.showTask(args.ref);
-  io.out(
-    args.json ? JSON.stringify(task, null, 2) : render(task, io.now(), { color: colorEnabled(io) }),
-  );
+  io.out(args.json ? toJson(task, 2) : render(task, io.now(), { color: colorEnabled(io) }));
   return 0;
 }
 
