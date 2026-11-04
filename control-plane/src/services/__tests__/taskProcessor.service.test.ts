@@ -1361,7 +1361,9 @@ describe("TaskProcessorService", () => {
         const round = { ...survivingNonTerminalRow(), source: "github", status: "delivered" };
         const dispatcher = new RealEventDispatcher(
           taskRepo,
-          { getByIdForTask: mock(() => Promise.resolve(round)) } as unknown as InboxRepository,
+          {
+            getByIdForTask: mock(() => Promise.resolve({ row: round, assignmentId: "inbox-1" })),
+          } as unknown as InboxRepository,
           sandboxManager,
           slackNotifier,
           registryOf(

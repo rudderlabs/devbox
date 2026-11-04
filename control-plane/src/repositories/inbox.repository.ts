@@ -257,7 +257,7 @@ export class InboxRepository {
   async getByIdForTask(
     id: string,
     taskId: string,
-  ): Promise<(InboxRow & { task_assignment_id: string | null }) | null> {
+  ): Promise<{ row: InboxRow; assignmentId: string | null } | null> {
     type Raw = RawInboxRow & { task_assignment_id: string | null };
     const result = await db.execute<Raw>(sql`
       SELECT i.*,
@@ -268,7 +268,7 @@ export class InboxRepository {
        LIMIT 1;
     `);
     const row = asRows<Raw>(result)[0];
-    return row ? { ...mapRow(row), task_assignment_id: row.task_assignment_id } : null;
+    return row ? { row: mapRow(row), assignmentId: row.task_assignment_id } : null;
   }
 
   // The task's assignment row. A restart re-pends it under a new id, which is

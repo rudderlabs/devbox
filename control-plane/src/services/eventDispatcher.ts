@@ -114,9 +114,8 @@ export class EventDispatcher {
         });
         return "abort";
       }
-      const { task_assignment_id, ...row } = found;
-      inboxRow = row;
-      runId = task_assignment_id;
+      inboxRow = found.row;
+      runId = found.assignmentId;
     }
     switch (event.type) {
       // Agent emits → labelled, then delivered by the round's integration

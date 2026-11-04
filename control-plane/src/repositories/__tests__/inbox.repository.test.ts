@@ -397,8 +397,8 @@ describe("InboxRepository", () => {
       if (!row) throw new Error("insert failed");
 
       const found = await repo.getByIdForTask(row.id, task.id);
-      expect(found?.id).toBe(row.id);
-      expect(found?.task_assignment_id).toBe(row.id);
+      expect(found?.row.id).toBe(row.id);
+      expect(found?.assignmentId).toBe(row.id);
     });
 
     it("carries the task's assignment id on a follow-up round", async () => {
@@ -415,9 +415,11 @@ describe("InboxRepository", () => {
       });
 
       const found = await repo.getByIdForTask(comment.id, task.id);
-      expect(found?.id).toBe(comment.id);
-      expect(found?.kind).toBe("comment");
-      expect(found?.task_assignment_id).toBe(assignment.id);
+      expect(found?.row.id).toBe(comment.id);
+      expect(found?.row.kind).toBe("comment");
+      expect(found?.assignmentId).toBe(assignment.id);
+      // The row is the row as every other lookup reads it.
+      expect(found?.row).toEqual((await repo.getById(comment.id)) as never);
     });
 
     it("returns null when the row belongs to a different task (confused deputy)", async () => {
