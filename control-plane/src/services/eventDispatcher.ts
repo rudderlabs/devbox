@@ -136,7 +136,8 @@ export class EventDispatcher {
         // Only the dispatch that added the URL runs the code host's first-time
         // work (the onboarding comment and the assignee mirror); a replay (the
         // cursor advances only after handle() returns) finds the URL already
-        // there.
+        // there. It runs before onPrOpened, whose hold retries the event as
+        // such a replay.
         if (appended.firstTime) await this.codeHost.prOpened(task, pr);
         // The owner's onPrOpened (Linear: attach the PR to the issue) runs on
         // every dispatch and is idempotent. Unlike other hooks, its

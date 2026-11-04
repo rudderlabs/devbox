@@ -783,6 +783,9 @@ describe("EventDispatcher", () => {
       expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
       expect(appendPrUrl).toHaveBeenCalledTimes(1);
       expect(attachUrlToIssue).not.toHaveBeenCalled();
+      // The code host's first-time work ran before the hold: the retry is a
+      // replay (firstTime false) and won't run it.
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
     });
 
     it("Linear task: a 429 or a refused connection on the attach holds the event", async () => {
