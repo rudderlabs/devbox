@@ -14,8 +14,9 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 
 // Outcome of dispatching a single event.
 // - `ok`: handled; reconcileOne advances the cursor and goes on.
-// - `dropped`: the event's send failed for good. reconcileOne advances past
-//   it and goes on.
+// - `dropped`: the event's send failed for good without timing out.
+//   reconcileOne advances past it and goes on, while the task's time budget
+//   for the tick lasts.
 // - `timed_out`: the event's send ran out of time. reconcileOne advances past
 //   it, then stops this task's events for the tick, so a slow platform can't
 //   eat the tick.
@@ -204,7 +205,8 @@ export class EventDispatcher {
   // never checks what an integration can show. A disabled integration's send
   // is skipped and counts as sent. The send runs under the registry's send
   // timeout. A RetryableError (nothing was sent) holds the event on the
-  // round's integration; a timeout or any other failure is logged and the
+  // round's integration. A timeout is logged and returns "timed_out", which
+  // ends the task's events for the tick; any other failure is logged and the
   // event dropped.
   private async deliver(
     event: AgentEmit,

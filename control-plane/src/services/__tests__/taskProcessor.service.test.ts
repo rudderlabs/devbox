@@ -1515,7 +1515,7 @@ describe("TaskProcessorService", () => {
       expect(seqs).toEqual([1]);
     });
 
-    it("a send that failed fast advances the cursor and the task's next event goes on", async () => {
+    it("a dropped send that did not time out advances the cursor and the task's next event goes on", async () => {
       const task = makeTask({ sandboxId: "sbx-1" });
       listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
       readEvents
@@ -1536,6 +1536,56 @@ describe("TaskProcessorService", () => {
         (c: unknown[]) => (c[0] as { event: { seq: number } }).event.seq,
       );
       expect(seqs).toEqual([1, 2]);
+    });
+
+    it("a task's events stop for the tick once they have taken one send timeout, slow successes included", async () => {
+      const realNow = Date.now;
+      let elapsed = 0;
+      const now = spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+      try {
+        const task = makeTask({ sandboxId: "sbx-1" });
+        let nextTick = () => {};
+        const secondTick = new Promise<void>((r) => {
+          nextTick = r;
+        });
+        listInFlightOwnedBy.mockResolvedValueOnce([task]).mockImplementation(() => {
+          nextTick();
+          return Promise.resolve([]);
+        });
+        const thought = (seq: number) =>
+          ({
+            seq,
+            ts: "t",
+            type: "agent_thought",
+            inbox_id: "i",
+            target_id: "s",
+            body: "x",
+          }) as const;
+        readEvents.mockResolvedValueOnce([thought(1), thought(2), thought(3)] as HarnessEvent[]);
+        // Each send takes 12 s, under the 20 s send timeout: one dropped, one sent.
+        dispatcherHandle
+          .mockImplementationOnce(() => {
+            elapsed += 12_000;
+            return Promise.resolve("dropped");
+          })
+          .mockImplementationOnce(() => {
+            elapsed += 12_000;
+            return Promise.resolve("ok");
+          });
+
+        service.start();
+        await secondTick;
+        await service.stop();
+
+        // The budget ran out with seq 2; seq 3 waits for the next tick.
+        expect(dispatcherHandle).toHaveBeenCalledTimes(2);
+        const seqs = recordEventCursor.mock.calls.map(
+          (c: unknown[]) => (c[0] as { event: { seq: number } }).event.seq,
+        );
+        expect(seqs).toEqual([1, 2]);
+      } finally {
+        now.mockRestore();
+      }
     });
 
     it("drops a hold once the cursor moves past its event, or once the task leaves this pod", async () => {

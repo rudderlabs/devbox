@@ -78,7 +78,8 @@ export class TimeoutError extends Error {}
 
 // Runs `send` with an abort signal and stops waiting after `ms`, whether or not
 // the client honours the signal. The send may still land after the timeout, so
-// a timeout is a plain failure (dropped), never a retry.
+// a timeout is never a retry. The registry's deliver reports it as
+// "timed_out", which ends the task's events for the tick.
 export async function withTimeout<T>(
   ms: number,
   send: (signal: AbortSignal) => Promise<T>,

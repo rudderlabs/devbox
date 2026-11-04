@@ -2,6 +2,7 @@ import type { SandboxInfo } from "@alibaba-group/opensandbox";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
+import { SEND_TIMEOUT_MS } from "../integrations/http";
 import type { Outbound } from "../integrations/outbound";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
@@ -408,6 +409,10 @@ export class TaskProcessorService {
     //    (appendPrUrl, setSandboxId).
     let currentTask: Task | null = task;
     const events = await this.sandboxManager.readEvents(task.sandboxId, task.lastObservedEventSeq);
+    // This task's share of the tick: once its events have taken one send
+    // timeout, the rest wait for the next tick, so slow sends, failing or
+    // not, can't hold up the other tasks and claims.
+    const budgetEndsAt = Date.now() + SEND_TIMEOUT_MS;
     for (const event of events) {
       if (currentTask === null) break; // self-evict: lease lost or task gone
       // Shutting down: stop after the event in hand (the cursor is persisted
@@ -481,9 +486,9 @@ export class TaskProcessorService {
       }
       // The cursor is past any held event now.
       this.holds.release(currentTask.id);
-      // A timed-out send ends this task's events for the tick, so a slow
-      // platform can't eat the tick. One that failed fast goes on.
-      if (result === "timed_out") break;
+      // A timed-out send, or a spent budget, ends this task's events for the
+      // tick.
+      if (result === "timed_out" || Date.now() >= budgetEndsAt) break;
 
       // Re-fetch (owner-scoped) to pick up dispatcher mutations (pr_urls
       // append, etc.). An owner-scoped fetch returns null on a takeover in the
