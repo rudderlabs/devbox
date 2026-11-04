@@ -22,11 +22,12 @@ export type GithubSpec =
   | { kind: "review_body"; owner: string; repo: string; prNumber: number; reviewId: number };
 export type CommentSpec = Extract<GithubSpec, { kind: "issue_comment" | "review_comment" }>;
 
-const SPEC_KINDS: readonly unknown[] = [
-  "issue_comment",
-  "review_comment",
-  "review_body",
-] satisfies GithubSpec["kind"][];
+// Fails to compile unless it lists exactly GithubSpec's kinds.
+const SPEC_KINDS: readonly unknown[] = Object.keys({
+  issue_comment: true,
+  review_comment: true,
+  review_body: true,
+} satisfies Record<GithubSpec["kind"], true>);
 
 // True for a spec GitHub can post to: one of its kinds, on a PR.
 export function isGithubSpec(spec: unknown): spec is GithubSpec {

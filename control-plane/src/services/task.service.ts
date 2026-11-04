@@ -74,12 +74,13 @@ export interface TaskService {
   findTaskByPrUrl(prUrl: string): Promise<Task | null>; // any source's task
 }
 
-// The follow-up kinds the harness handles; it exits on any other.
-const ROUND_KINDS: readonly string[] = [
-  "comment",
-  "review",
-  "ci_result",
-] satisfies RoundDraft["kind"][];
+// The follow-up kinds the harness handles; it exits on any other. The record
+// fails to compile unless it lists exactly RoundDraft's kinds.
+const ROUND_KINDS: readonly string[] = Object.keys({
+  comment: true,
+  review: true,
+  ci_result: true,
+} satisfies Record<RoundDraft["kind"], true>);
 
 export class BoundTaskService implements TaskService {
   constructor(
