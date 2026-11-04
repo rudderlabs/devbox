@@ -4,9 +4,11 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import ts from "typescript";
 
 const SRC = resolve(import.meta.dir, "../..");
 const INTEGRATIONS = join(SRC, "integrations");
+const SOURCE = /\.[cm]?([jt]sx?)$/;
 
 // Besides its own folder and packages (node:*, hono, npm), a file under
 // integrations/<name>/ may import these, the API clients in clients/, and the
@@ -20,33 +22,34 @@ const SHARED = [
 ];
 const TYPES_ONLY = ["db/schema"];
 
-// Every static, re-export, side-effect, dynamic and require specifier, with
-// whether the statement is type-only (`import type` / `export type`).
-function imports(code: string): { spec: string; typeOnly: boolean }[] {
-  const re =
-    /\b(?:import|export)\s+(type\s+)?(?:[\w*{}\s,$]+?\s+from\s+)?["']([^"']+)["']|\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
-  return [...code.matchAll(re)].map((m) => ({
-    spec: (m[2] ?? m[3]) as string,
-    typeOnly: m[1] !== undefined,
-  }));
+// Every specifier `code` imports, re-exports or loads, and whether only types
+// come from it. Bun's scanner lists what runs (static and dynamic imports,
+// require), dropping type-only imports; TypeScript's lists every static one.
+function imports(path: string, code: string): { spec: string; typeOnly: boolean }[] {
+  const loader = path.match(SOURCE)?.[1] as "ts" | "tsx" | "js" | "jsx";
+  const loaded = new Set(new Bun.Transpiler({ loader }).scanImports(code).map((i) => i.path));
+  const all = ts.preProcessFile(code, true, true).importedFiles.map((f) => f.fileName);
+  return [...new Set([...loaded, ...all])].map((spec) => ({ spec, typeOnly: !loaded.has(spec) }));
 }
 
 // Why `file` may not import `spec`, or undefined when it may.
 function violation(file: string, spec: string, typeOnly: boolean): string | undefined {
+  const why = `${relative(SRC, file)} imports ${spec}`;
+  if (spec.startsWith("/") || spec.startsWith("file:")) return why;
   if (!spec.startsWith(".")) return undefined;
-  const target = relative(SRC, resolve(dirname(file), spec)).replace(/\.ts$/, "");
+  const target = relative(SRC, resolve(dirname(file), spec)).replace(SOURCE, "");
   const own = relative(SRC, dirname(file)).split("/").slice(0, 2).join("/");
   if (target === own || target.startsWith(`${own}/`)) return undefined;
   if (SHARED.includes(target) || target.startsWith("clients/")) return undefined;
   if (typeOnly && TYPES_ONLY.includes(target)) return undefined;
-  return `${relative(SRC, file)} imports ${spec}`;
+  return why;
 }
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const path = join(dir, e.name);
     if (e.isDirectory()) return e.name === "__tests__" ? [] : sourceFiles(path);
-    return e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [path] : [];
+    return SOURCE.test(e.name) && !/\.test\.[cm]?[jt]sx?$/.test(e.name) ? [path] : [];
   });
 }
 
@@ -54,44 +57,46 @@ const files = readdirSync(INTEGRATIONS, { withFileTypes: true })
   .filter((e) => e.isDirectory() && e.name !== "__tests__")
   .flatMap((e) => sourceFiles(join(INTEGRATIONS, e.name)));
 
+const violations = (file: string, code: string) =>
+  imports(file, code)
+    .map(({ spec, typeOnly }) => violation(file, spec, typeOnly))
+    .filter(Boolean);
+
 describe("integration folders", () => {
   it("import only their own files, the shared integration files, clients and packages", () => {
     expect(files.map((f) => relative(INTEGRATIONS, f))).toEqual(
       expect.arrayContaining(["api/index.ts", "github/index.ts", "linear/index.ts"]),
     );
-    const found = files.flatMap((file) =>
-      imports(readFileSync(file, "utf8")).map(({ spec, typeOnly }) =>
-        violation(file, spec, typeOnly),
-      ),
-    );
-    expect(found.length).toBeGreaterThan(files.length);
-    expect(found.filter(Boolean)).toEqual([]);
+    const found = files.map((file) => imports(file, readFileSync(file, "utf8")));
+    expect(found.flat().length).toBeGreaterThan(files.length);
+    expect(files.flatMap((file) => violations(file, readFileSync(file, "utf8")))).toEqual([]);
   });
 
   it("the check rejects core modules, another integration and a value import of the schema", () => {
     const file = join(INTEGRATIONS, "linear", "index.ts");
     const code = [
       'import type { Task } from "../../db/schema";',
-      'import { taskSource } from "../../db/schema";',
-      'import {\n  type Logger,\n  ReplyTarget,\n} from "../types";',
-      'import type { InboxRow } from "../../repositories/inbox.repository";',
+      'import { type Person } from "../../db/schema";',
+      'import { taskSource, type Task as T } from "../../db/schema";',
+      'import {\n  type Logger, // isn\'t "core"; really\n  ReplyTarget,\n} from "../types";',
+      'import type { InboxRow /* it\'s "a row" */ } from "../../repositories/inbox.repository";',
+      'import { /* "x"; */ y } /* from "../types" */ from "../../services/inbox.service";',
       'export { enqueueComment } from "../github/rounds";',
-      'const { config } = await import("../../config");',
-      'import "../../logger";',
+      "const { config } = await import(`../../config`);",
+      'const { logger } = require("../../logger");',
+      'import "/abs/integrations/types";',
       'import { Hono } from "hono";',
-      'import { AgentSessionService } from "./agentSession";',
+      'import { AgentSessionService } from "./agentSession.js";',
       'import { getUserById } from "../../clients/github";',
     ].join("\n");
-    expect(
-      imports(code)
-        .map(({ spec, typeOnly }) => violation(file, spec, typeOnly))
-        .filter(Boolean),
-    ).toEqual([
+    expect(violations(file, code)).toEqual([
       "integrations/linear/index.ts imports ../../db/schema",
-      "integrations/linear/index.ts imports ../../repositories/inbox.repository",
+      "integrations/linear/index.ts imports ../../services/inbox.service",
       "integrations/linear/index.ts imports ../github/rounds",
       "integrations/linear/index.ts imports ../../config",
       "integrations/linear/index.ts imports ../../logger",
+      "integrations/linear/index.ts imports /abs/integrations/types",
+      "integrations/linear/index.ts imports ../../repositories/inbox.repository",
     ]);
   });
 });
