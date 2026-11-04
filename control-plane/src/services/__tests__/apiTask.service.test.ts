@@ -48,7 +48,7 @@ describe("ApiTaskService", () => {
       taskRepo: new TaskRepository(),
       inboxRepo: new InboxRepository(),
       sandboxManager: { killSandbox },
-      hooks: { detach: () => {} },
+      background: { track: () => {} },
     });
     service = new ApiTaskService(new ApiTaskRepository(), tasks, new TaskEventRepository(), {
       publicBaseUrl: "https://api.example",

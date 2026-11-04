@@ -8,6 +8,7 @@ import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
+import type { BackgroundWork } from "./backgroundWork";
 import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
@@ -52,6 +53,7 @@ export class TaskProcessorService {
   // listInFlightOwnedBy see only these tasks.
   private readonly taskSources: Task["source"][];
   private readonly hooks: IntegrationHooks;
+  private readonly background: BackgroundWork;
 
   constructor(
     taskRepo: TaskRepository,
@@ -64,6 +66,7 @@ export class TaskProcessorService {
     holds: ReplyHolds,
     taskSources: Task["source"][],
     hooks: IntegrationHooks,
+    background: BackgroundWork,
   ) {
     this.taskRepo = taskRepo;
     this.inboxRepo = inboxRepo;
@@ -75,6 +78,7 @@ export class TaskProcessorService {
     this.holds = holds;
     this.taskSources = taskSources;
     this.hooks = hooks;
+    this.background = background;
   }
 
   start(): void {
@@ -92,12 +96,12 @@ export class TaskProcessorService {
       await this.loopPromise.catch(() => {});
     }
 
-    // In-flight provisions, then detached hooks (some started by those
+    // In-flight provisions, then background work (some started by those
     // provisions), share one shutdownDrainMs budget.
     const drain = Promise.allSettled([...this.inflight.values()]);
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, config.shutdownDrainMs));
     await Promise.race([drain, timeout]);
-    await this.hooks.drain(timeout);
+    await this.background.drain(timeout);
 
     // Backdate own heartbeat so any survivors become immediately reclaimable
     // instead of waiting the full LEASE_TIMEOUT_MS.
@@ -871,7 +875,7 @@ export class TaskProcessorService {
     // it at-most-once. Detached: a Slack outage must not affect teardown; the
     // notifier no-ops when Slack is disabled or the task isn't from Linear.
     if (assignment) {
-      this.hooks.detach(
+      this.background.track(
         task.id,
         "slack",
         this.slackNotifier

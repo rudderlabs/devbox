@@ -66,7 +66,7 @@ async function insertTask(o: {
 
 describe("TaskService", () => {
   let killSandbox: ReturnType<typeof mock>;
-  let detach: ReturnType<typeof mock>;
+  let track: ReturnType<typeof mock>;
   let linear: TaskService;
   let github: TaskService;
   let api: TaskService;
@@ -95,14 +95,14 @@ describe("TaskService", () => {
       sql`TRUNCATE TABLE task_events, inbox, tasks, api_tokens RESTART IDENTITY CASCADE`,
     );
     killSandbox = mock(() => Promise.resolve());
-    detach = mock(() => {});
+    track = mock(() => {});
     const bound = (source: "linear" | "github" | "api") =>
       new BoundTaskService(source, {
         createsTasks: source !== "github",
         taskRepo: new TaskRepository(),
         inboxRepo: new InboxRepository(),
         sandboxManager: { killSandbox },
-        hooks: { detach },
+        background: { track },
       });
     linear = bound("linear");
     github = bound("github");
@@ -245,7 +245,7 @@ describe("TaskService", () => {
       await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-1' WHERE id = ${taskId}`);
       expect((await assignLinear(session("sess-1"))).result).toBe("duplicate");
       expect(killSandbox).not.toHaveBeenCalled();
-      expect(detach).not.toHaveBeenCalled();
+      expect(track).not.toHaveBeenCalled();
     });
 
     it("kills the preempted sandbox when a re-delegation restarts a live run", async () => {
@@ -269,8 +269,8 @@ describe("TaskService", () => {
       });
       expect(killSandbox).toHaveBeenCalledTimes(1);
       expect(killSandbox).toHaveBeenCalledWith("sb-old");
-      // In the tracked detached set, so shutdown drains it.
-      expect(detach).toHaveBeenCalledWith(taskId, "killSandbox", expect.any(Promise));
+      // In BackgroundWork, so shutdown drains it.
+      expect(track).toHaveBeenCalledWith(taskId, "killSandbox", expect.any(Promise));
       const [task] = await db.execute(
         sql`SELECT title, external_url, metadata, sandbox_id, pvc_name FROM tasks`,
       );
@@ -592,7 +592,7 @@ describe("TaskService", () => {
         reply_targets: [session("sess-9")],
       });
       expect(killSandbox).toHaveBeenCalledWith("sb-old");
-      expect(detach).toHaveBeenCalledWith(taskId, "killSandbox", expect.any(Promise));
+      expect(track).toHaveBeenCalledWith(taskId, "killSandbox", expect.any(Promise));
     });
   });
 

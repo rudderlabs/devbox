@@ -59,7 +59,7 @@ const registry = (
     taskRepo,
     inboxRepo: {} as InboxRepository,
     sandboxManager: {} as never,
-    hooks: { detach: () => {} },
+    background: { track: () => {} },
     holds,
   });
 

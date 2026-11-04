@@ -16,9 +16,9 @@ type PrUrlEntry = { repo: string; url: string };
 // message per Linear-sourced task). Disabled unless both a bot token and a
 // channel are configured.
 //
-// Best-effort by contract: callers detach it (IntegrationHooks.detach logs a
-// failure). A Slack outage or a missing thread must never affect task dispatch
-// or teardown.
+// Best-effort by contract: callers run it in BackgroundWork, which shutdown
+// drains, and log its failure themselves. A Slack outage or a missing thread
+// must never affect task dispatch or teardown.
 export class SlackNotifierService {
   constructor(
     private readonly taskRepo: TaskRepository,

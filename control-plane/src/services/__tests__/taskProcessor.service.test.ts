@@ -99,6 +99,7 @@ const { ApiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
+const { BackgroundWork } = await import("../backgroundWork");
 const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
 const { InboxService: RealInboxService } = await import("../inbox.service");
 const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound");
@@ -196,6 +197,7 @@ describe("TaskProcessorService", () => {
     linear: InstanceType<typeof LinearIntegration>;
   };
   let hooks: InstanceType<typeof IntegrationHooks>;
+  let background: InstanceType<typeof BackgroundWork>;
   let service: InstanceType<typeof TaskProcessorService>;
 
   beforeEach(() => {
@@ -305,7 +307,8 @@ describe("TaskProcessorService", () => {
         NO_WEBHOOK,
       ),
     });
-    hooks = new IntegrationHooks(integrations, inboxRepo);
+    background = new BackgroundWork();
+    hooks = new IntegrationHooks(integrations, inboxRepo, background);
     service = new TaskProcessorService(
       taskRepo,
       inboxRepo,
@@ -317,6 +320,7 @@ describe("TaskProcessorService", () => {
       holds,
       ["linear", "api"],
       hooks,
+      background,
     );
   });
 
@@ -1350,6 +1354,7 @@ describe("TaskProcessorService", () => {
           },
           holds,
           hooks,
+          background,
           20, // send timeout (ms)
         );
         service = new TaskProcessorService(
@@ -1363,6 +1368,7 @@ describe("TaskProcessorService", () => {
           holds,
           ["linear", "api"],
           hooks,
+          background,
         );
         const thought = (seq: number) => ({
           seq,
@@ -2011,14 +2017,14 @@ describe("TaskProcessorService", () => {
         let finished = false;
         service.start();
         await waitFor(() => heartbeatOwnedBy.mock.calls.length > 0);
-        hooks.detach(
+        background.track(
           "task-1",
           "onRoundFinished",
           sleep(20).then(() => {
             finished = true;
           }),
         );
-        hooks.detach("task-2", "assignee", sleep(400));
+        background.track("task-2", "assignee", sleep(400));
         await service.stop();
 
         expect(finished).toBe(true);
@@ -2033,6 +2039,37 @@ describe("TaskProcessorService", () => {
         warn.mockRestore();
       }
     });
+
+    // Each in turn outlasts the other, so neither finishes inside the other's wait.
+    for (const slow of ["slack", "onRoundFinished"]) {
+      it(`stop() waits for a failed task's Slack post and its onRoundFinished (${slow} last)`, async () => {
+        const drainMs = mockedConfig.shutdownDrainMs;
+        mockedConfig.shutdownDrainMs = 1_000;
+        try {
+          const done: string[] = [];
+          const work = (what: string) =>
+            sleep(what === slow ? 60 : 20).then(() => {
+              done.push(what);
+            });
+          notifyTerminal.mockImplementation(() => work("slack"));
+          (integrations.linear as Integration).onRoundFinished = () => work("onRoundFinished");
+          failTaskInbox.mockResolvedValue([survivingNonTerminalRow()]);
+          service.start();
+          await waitFor(() => heartbeatOwnedBy.mock.calls.length > 0);
+
+          await (service as unknown as { failTask(t: Task, m: string): Promise<void> }).failTask(
+            makeTask(),
+            "boom",
+          );
+          expect(done).toEqual([]);
+          await service.stop();
+
+          expect(done.sort()).toEqual(["onRoundFinished", "slack"]);
+        } finally {
+          mockedConfig.shutdownDrainMs = drainMs;
+        }
+      });
+    }
 
     it("stop() backdates heartbeats owned by this pod before resolving", async () => {
       service.start();

@@ -5,6 +5,7 @@ import type { HookCtx, Integration } from "../../integrations/types";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
 
 const { IntegrationHooks } = await import("../integrationHooks");
+const { BackgroundWork } = await import("../backgroundWork");
 const { RetryableError } = await import("../../integrations/outbound");
 const { logger } = await import("../../logger");
 
@@ -42,9 +43,16 @@ function hooksWith(
     t === undefined
       ? undefined
       : { onTaskStarted: t, onPrOpened: t, onRoundFinished: t, assignee: t };
+  const background = new BackgroundWork();
   return {
-    hooks: new IntegrationHooks(integrations, inboxRepo as unknown as InboxRepository, timeouts),
+    hooks: new IntegrationHooks(
+      integrations,
+      inboxRepo as unknown as InboxRepository,
+      background,
+      timeouts,
+    ),
     inboxRepo,
+    background,
   };
 }
 
@@ -70,13 +78,13 @@ describe("IntegrationHooks", () => {
       spyOn(logger, level).mockImplementation(() => logger),
     );
     try {
-      const { hooks, inboxRepo } = hooksWith(null);
+      const { hooks, inboxRepo, background } = hooksWith(null);
       const pr = { url: "u", repo: "r", branch: "b" };
       expect(await hooks.assignee(task, row("a-1"), {})).toBeUndefined();
       expect(await hooks.prOpened(task, row("a-1"), pr, true)).toBeUndefined();
       await hooks.taskStarted(task, row("a-1"));
       hooks.roundFinished(task, row("a-1"), "completed", true);
-      await hooks.drain(Promise.resolve());
+      await background.drain(Promise.resolve());
       expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
       for (const log of logs) expect(log).not.toHaveBeenCalled();
     } finally {
@@ -166,34 +174,6 @@ describe("IntegrationHooks", () => {
     expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
   });
 
-  it("drain also waits for work detached while it drains", async () => {
-    const warn = spyOn(logger, "warn").mockImplementation(() => logger);
-    try {
-      const { hooks } = hooksWith({});
-      let finished = false;
-      hooks.detach(
-        "task-1",
-        "onRoundFinished",
-        sleep(10).then(() =>
-          // A webhook still being served restarts a task meanwhile.
-          hooks.detach(
-            "task-2",
-            "killSandbox",
-            sleep(20).then(() => {
-              finished = true;
-            }),
-          ),
-        ),
-      );
-      await hooks.drain(sleep(500));
-
-      expect(finished).toBe(true);
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   it("onRoundFinished routes by round.source; drain logs hook_abandoned for what is still running", async () => {
     const warn = spyOn(logger, "warn").mockImplementation(() => logger);
     try {
@@ -201,14 +181,14 @@ describe("IntegrationHooks", () => {
       const record = async (_ctx: unknown, _task: Task, round: InboxRow) => {
         finished.push(round.id);
       };
-      const { hooks } = hooksWith(
+      const { hooks, background } = hooksWith(
         // Outlives the drain deadline below.
         { onRoundFinished: (ctx, t, round) => sleep(200).then(() => record(ctx, t, round)) },
         { onRoundFinished: record },
       );
       hooks.roundFinished(task, row("gh-1", "review", "github"), null, true);
       hooks.roundFinished(task, row("a-1"), "failed", true);
-      await hooks.drain(sleep(50));
+      await background.drain(sleep(50));
 
       expect(finished).toEqual(["gh-1"]);
       expect(warn.mock.calls).toEqual([

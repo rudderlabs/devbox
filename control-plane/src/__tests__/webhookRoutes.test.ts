@@ -34,7 +34,7 @@ function routesFor(on: string[], webhooks: Partial<Record<string, Webhook>>) {
       taskRepo: {} as never,
       inboxRepo: {} as never,
       sandboxManager: {} as never,
-      hooks: { detach: () => {} },
+      background: { track: () => {} },
       holds: { of: () => ({ heldTasks: 0, oldestHoldAgeMs: 0 }) },
     },
   );

@@ -8,6 +8,7 @@ import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
 import type { AgentEmit, HarnessEvent } from "../types/harnessEvent";
+import type { BackgroundWork } from "./backgroundWork";
 import type { IntegrationHooks } from "./integrationHooks";
 import type { ReplyHolds } from "./replyHolds";
 import type { SandboxManager } from "./sandboxManager.service";
@@ -64,6 +65,7 @@ export class EventDispatcher {
     private integrations: Readonly<Record<string, Integration>>,
     private holds: ReplyHolds,
     private hooks: IntegrationHooks,
+    private background: Pick<BackgroundWork, "track">,
     private sendTimeoutMs = SEND_TIMEOUT_MS,
   ) {}
 
@@ -152,7 +154,7 @@ export class EventDispatcher {
           // stall tick() toward the lease window — the same hazard
           // reconcileFilesTimeoutMs exists for. Nothing downstream reads the
           // result, and the method never rejects (see its contract).
-          this.hooks.detach(task.id, "assignee", this.mirrorPrAssignee(event, task, inboxRow));
+          this.background.track(task.id, "assignee", this.mirrorPrAssignee(event, task, inboxRow));
         }
         // The owner's onPrOpened (Linear: attach the PR to the issue) runs on
         // every dispatch and is idempotent. Unlike other hooks, its
@@ -191,7 +193,7 @@ export class EventDispatcher {
         // mention) must not stall the dispatch loop. The notifier no-ops when
         // Slack is disabled or the task isn't from Linear.
         if (marked && inboxRow.kind === "assignment") {
-          this.hooks.detach(
+          this.background.track(
             task.id,
             "slack",
             this.slackNotifier

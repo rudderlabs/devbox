@@ -74,6 +74,7 @@ const { LinearIntegration } = await import("../../integrations/linear");
 const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
 const { IntegrationHooks } = await import("../integrationHooks");
+const { BackgroundWork } = await import("../backgroundWork");
 const { LinearTokenError } = await import("../../clients/linearOauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
@@ -196,7 +197,7 @@ describe("InboxService", () => {
       inboxRepo,
       sandboxManager,
       integrations,
-      new IntegrationHooks(integrations, inboxRepo),
+      new IntegrationHooks(integrations, inboxRepo, new BackgroundWork()),
     );
   });
 

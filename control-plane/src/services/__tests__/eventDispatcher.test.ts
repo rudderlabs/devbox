@@ -87,6 +87,7 @@ const { ApiIntegration } = await import("../../integrations/api");
 const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
+const { BackgroundWork } = await import("../backgroundWork");
 const { LinearTokenError } = await import("../../clients/linearOauth");
 const { logger } = await import("../../logger");
 
@@ -104,6 +105,7 @@ const linearRejected = () =>
 // The assignee mirror is detached (void'd) from the pr_opened case — settle its
 // promise chain before asserting on its mocks.
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -171,6 +173,7 @@ describe("EventDispatcher", () => {
   let slackNotifier: SlackNotifierService;
   let holds: InstanceType<typeof ReplyHolds>;
   let dispatcher: InstanceType<typeof EventDispatcher>;
+  let background: InstanceType<typeof BackgroundWork>;
 
   // The registry's enabled integrations, with GitHub's webhooks (and so its
   // integration) on or off.
@@ -200,7 +203,8 @@ describe("EventDispatcher", () => {
       slackNotifier,
       integrations,
       holds,
-      new IntegrationHooks(integrations, inboxRepo),
+      new IntegrationHooks(integrations, inboxRepo, background),
+      background,
     );
   };
 
@@ -251,6 +255,7 @@ describe("EventDispatcher", () => {
     slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
+    background = new BackgroundWork();
     const integrations = makeIntegrations(true);
     dispatcher = new EventDispatcher(
       taskRepo,
@@ -259,7 +264,8 @@ describe("EventDispatcher", () => {
       slackNotifier,
       integrations,
       holds,
-      new IntegrationHooks(integrations, inboxRepo),
+      new IntegrationHooks(integrations, inboxRepo, background),
+      background,
     );
   });
 
@@ -665,7 +671,8 @@ describe("EventDispatcher", () => {
         slackNotifier,
         integrations,
         new ReplyHolds(),
-        new IntegrationHooks(integrations, inboxRepo),
+        new IntegrationHooks(integrations, inboxRepo, background),
+        background,
       );
       const assignment = linearRow();
       const ghComment = {
@@ -827,6 +834,22 @@ describe("EventDispatcher", () => {
         expect(getIssueHumanAssignee).toHaveBeenCalledWith(expect.anything(), "issue-1");
         expect(getUserById).toHaveBeenCalledWith("583231", expect.any(AbortSignal));
         expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
+      });
+
+      it("runs in BackgroundWork, so shutdown waits for it", async () => {
+        getIssueHumanAssignee.mockResolvedValue(human("octocat"));
+        let assigned = false;
+        addPrAssignees.mockImplementation(() =>
+          sleep(20).then(() => {
+            assigned = true;
+            return { assigned: ["octocat"] };
+          }),
+        );
+
+        await dispatcher.handle(prEvent(), makeTask());
+        await background.drain(sleep(500));
+
+        expect(assigned).toBe(true);
       });
 
       it("non-numeric gitHubUserId is treated as a login directly (no getUserById)", async () => {
@@ -1282,6 +1305,18 @@ describe("EventDispatcher", () => {
         expect.objectContaining({ id: "task-1" }),
         "completed",
       );
+    });
+
+    it("runs the Slack post in BackgroundWork, so shutdown waits for it", async () => {
+      let posted = false;
+      notifyTerminal.mockImplementation(() =>
+        sleep(20).then(() => {
+          posted = true;
+        }),
+      );
+      await dispatcher.handle(completedEvent(), makeTask());
+      await background.drain(sleep(500));
+      expect(posted).toBe(true);
     });
 
     it("forwards the event status to the Slack notify (partial_failure)", async () => {

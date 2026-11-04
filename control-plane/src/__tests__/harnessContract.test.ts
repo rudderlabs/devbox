@@ -77,7 +77,7 @@ describe("harness contract", () => {
         taskRepo,
         inboxRepo,
         sandboxManager,
-        hooks: { detach: () => {} },
+        background: { track: () => {} },
       });
     const tasks = { linear: bound("linear"), github: bound("github"), api: bound("api") };
     // The sweep never reaches the integrations or hooks.

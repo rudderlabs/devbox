@@ -16,6 +16,7 @@ import { createHealthRoutes } from "./routes/health";
 import { createWebhookRoutes } from "./routes/webhook";
 import { ApiAuthService } from "./services/apiAuth.service";
 import { ApiTaskService } from "./services/apiTask.service";
+import { BackgroundWork } from "./services/backgroundWork";
 import { EventDispatcher } from "./services/eventDispatcher";
 import { InboxService } from "./services/inbox.service";
 import { IntegrationHooks } from "./services/integrationHooks";
@@ -62,22 +63,19 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     trustedUsers: joinIfAny(config.github.trustedUsers),
   });
 
-  // The registry builds the TaskServices, the only way tasks and rounds are
-  // created. A restart's preempted sandbox is killed in the hooks' tracked
-  // detached set. The hooks need the integrations, which the registry builds;
-  // that is safe because no task is assigned or restarted before requests are
-  // served.
-  const detach: Pick<IntegrationHooks, "detach"> = {
-    detach: (...args) => hooks.detach(...args),
-  };
+  // Work that outlives its caller (hooks, Slack posts, a restart's sandbox
+  // kill); TaskProcessor.stop() drains it.
+  const background = new BackgroundWork();
   // Sends held because they failed before anything went out; each
   // integration's status reports its own.
   const replyHolds = new ReplyHolds();
+  // The registry builds the TaskServices, the only way tasks and rounds are
+  // created.
   const registry = new IntegrationRegistry(definitions, integrationConfigs, {
     taskRepo: taskRepository,
     inboxRepo: inboxRepository,
     sandboxManager,
-    hooks: detach,
+    background,
     holds: replyHolds,
   });
   // Only these sources are claimed and reconciled, so an older image never
@@ -85,8 +83,8 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
   const taskSources = registry.taskSources;
   // The enabled integrations, for sends and hooks.
   const integrations = registry.live;
-  // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.
-  const hooks = new IntegrationHooks(integrations, inboxRepository);
+  // Integrations' lifecycle hooks.
+  const hooks = new IntegrationHooks(integrations, inboxRepository, background);
 
   const inboxService = new InboxService(inboxRepository, sandboxManager, integrations, hooks);
 
@@ -105,6 +103,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     integrations,
     replyHolds,
     hooks,
+    background,
   );
 
   const taskProcessor = new TaskProcessorService(
@@ -118,6 +117,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     replyHolds,
     taskSources,
     hooks,
+    background,
   );
 
   const healthController = new HealthController(db);

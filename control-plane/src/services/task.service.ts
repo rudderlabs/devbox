@@ -13,7 +13,7 @@ import type {
   ReviewPayload,
   TaskIdentity,
 } from "../types/inboxMessage";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { BackgroundWork } from "./backgroundWork";
 import type { SandboxManager } from "./sandboxManager.service";
 
 // The only way integrations create work. Each instance is bound to one
@@ -92,7 +92,7 @@ export class BoundTaskService implements TaskService {
       taskRepo: TaskRepository;
       inboxRepo: InboxRepository;
       sandboxManager: Pick<SandboxManager, "killSandbox">;
-      hooks: Pick<IntegrationHooks, "detach">;
+      background: Pick<BackgroundWork, "track">;
     },
   ) {}
 
@@ -180,11 +180,11 @@ export class BoundTaskService implements TaskService {
     if (!this.deps.createsTasks) throw new Error(`${op}: ${this.source} creates no tasks`);
   }
 
-  // A restart's preempted sandbox, killed after commit in the tracked detached
-  // set so shutdown drains it. The old workspace volume is kept (a known leak).
+  // A restart's preempted sandbox, killed after commit in BackgroundWork so
+  // shutdown drains it. The old workspace volume is kept (a known leak).
   private killPreempted(taskId: string, sandboxId: string | null, why: string): void {
     if (!sandboxId) return;
-    this.deps.hooks.detach(
+    this.deps.background.track(
       taskId,
       "killSandbox",
       this.deps.sandboxManager.killSandbox(sandboxId).catch((err) => {

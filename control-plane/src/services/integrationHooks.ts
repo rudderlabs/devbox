@@ -4,6 +4,7 @@ import { RetryableError } from "../integrations/outbound";
 import type { HookCtx, Integration, Outcome, Person, PrRef } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
+import type { BackgroundWork } from "./backgroundWork";
 
 // Upper bound on one hook call.
 const HOOK_TIMEOUT_MS = {
@@ -13,8 +14,6 @@ const HOOK_TIMEOUT_MS = {
   assignee: 15_000,
 } as const;
 type HookName = keyof typeof HOOK_TIMEOUT_MS;
-// What a detached promise is doing, for the shutdown log.
-type DetachedWork = HookName | "killSandbox" | "slack";
 
 // Runs integrations' lifecycle hooks. onTaskStarted, onPrOpened and
 // assignee go to the task's own integration; onRoundFinished goes to the
@@ -23,15 +22,14 @@ type DetachedWork = HookName | "killSandbox" | "slack";
 // has, so no line is logged). Each call runs under its hook's timeout with an
 // abort signal and never throws: a failure is logged and the caller goes on. The one exception
 // is a RetryableError from onPrOpened, which escapes so the dispatcher holds
-// pr_opened as it holds a send (the hook must be idempotent). Detached work is
-// tracked so TaskProcessor.stop() can drain it.
+// pr_opened as it holds a send (the hook must be idempotent). onRoundFinished
+// runs in BackgroundWork, which TaskProcessor.stop() drains.
 export class IntegrationHooks {
-  private readonly detached = new Map<Promise<void>, { taskId: string; hook: DetachedWork }>();
-
   constructor(
     // The registry's enabled integrations, by name.
     private integrations: Readonly<Record<string, Integration>>,
     private inboxRepo: Pick<InboxRepository, "getAssignment">,
+    private background: Pick<BackgroundWork, "track">,
     private timeoutsMs: Record<HookName, number> = HOOK_TIMEOUT_MS,
   ) {}
 
@@ -88,41 +86,13 @@ export class IntegrationHooks {
     // written by a newer build before a rollback), has no instance.
     const owner: Integration | undefined = this.integrations[round.source];
     if (!owner?.onRoundFinished) return;
-    this.detach(
+    this.background.track(
       task.id,
       "onRoundFinished",
       this.callHook("onRoundFinished", round.source, task, round, (ctx) =>
         owner.onRoundFinished?.({ ...ctx, firstTransition, archive }, task, round, outcome),
       ),
     );
-  }
-
-  // Tracks detached work (a hook, core work that calls one, or a restart's
-  // sandbox kill) for drain().
-  detach(taskId: string, hook: DetachedWork, work: Promise<unknown>): void {
-    const p: Promise<void> = work
-      .then(
-        () => {},
-        (err) => logErr(`detached ${hook} work failed`, err, { taskId }),
-      )
-      .finally(() => this.detached.delete(p));
-    this.detached.set(p, { taskId, hook });
-  }
-
-  // Waits for detached work until `deadline` settles, then logs what is still
-  // running; the process exits right after. Work detached meanwhile (say, a
-  // restart's sandbox kill from a webhook still being served) is waited for too.
-  async drain(deadline: Promise<void>): Promise<void> {
-    let expired = false;
-    void deadline.then(() => {
-      expired = true;
-    });
-    while (this.detached.size > 0 && !expired) {
-      await Promise.race([Promise.allSettled(this.detached.keys()), deadline]);
-    }
-    for (const { taskId, hook } of this.detached.values()) {
-      logger.warn("hook abandoned at shutdown", { event: "hook_abandoned", taskId, hook });
-    }
   }
 
   private async callHook<T>(
