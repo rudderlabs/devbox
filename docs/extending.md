@@ -69,7 +69,12 @@ The API (`control-plane/src/routes/api.ts`, `control-plane/src/services/apiTask.
 is the documented way to create tasks. Every source of tasks and follow-up
 rounds, the API included, is an integration in its own folder under
 `control-plane/src/integrations/`. A new source is one more folder there and
-one entry in the list in `control-plane/src/integrations/index.ts`.
+one entry in the list in `control-plane/src/integrations/index.ts`. The
+harness, though, treats a new source as not live, and sends it no progress
+messages, unless `LIVE_CHANNEL_SOURCES` in
+`harness/src/harness/handlers/_common.py` lists it. It also adds the PR
+discussion to a follow-up only for `github` rounds
+(`harness/src/harness/followup.py`).
 
 - **The definition.** The folder exports an `IntegrationDefinition`
   (`control-plane/src/integrations/types.ts`). Its `name` is stored as the
@@ -87,8 +92,9 @@ one entry in the list in `control-plane/src/integrations/index.ts`.
 - **Reply targets.** Each round carries reply targets that say where the
   harness's answers go, each with a `spec` in the integration's own shape. The
   control plane stores the spec and hands it back to the `deliver` of the
-  round's integration (`control-plane/src/services/eventDispatcher.ts`), which
-  checks it and refuses anything else.
+  round's integration (`deliverToRound` in
+  `control-plane/src/integrations/http.ts`), which checks it and refuses
+  anything else.
 - **The boundary.** A file in the folder imports only its own folder, the
   shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), the
   API clients in `control-plane/src/clients/`, the experimental-flag parser,
