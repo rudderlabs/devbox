@@ -65,8 +65,10 @@ describe("IntegrationHooks", () => {
     }
   });
 
-  it("skips a disabled integration's hooks: logged, never held", async () => {
-    const info = spyOn(logger, "info").mockImplementation(() => logger);
+  it("skips a disabled integration's hooks as it does a missing hook: no lookup, no log, never held", async () => {
+    const logs = (["info", "warn", "error"] as const).map((level) =>
+      spyOn(logger, level).mockImplementation(() => logger),
+    );
     try {
       const { hooks, inboxRepo } = hooksWith(null);
       const pr = { url: "u", repo: "r", branch: "b" };
@@ -74,15 +76,11 @@ describe("IntegrationHooks", () => {
       expect(await hooks.prOpened(task, row("a-1"), pr, true)).toBeUndefined();
       await hooks.taskStarted(task);
       hooks.roundFinished(task, row("a-1"), "completed", true);
+      await hooks.drain(Promise.resolve());
       expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
-      for (const hook of ["assignee", "onPrOpened", "onTaskStarted", "onRoundFinished"]) {
-        expect(info).toHaveBeenCalledWith(
-          `${hook} skipped: integration disabled`,
-          expect.objectContaining({ taskId: "task-1", integration: "linear" }),
-        );
-      }
+      for (const log of logs) expect(log).not.toHaveBeenCalled();
     } finally {
-      info.mockRestore();
+      for (const log of logs) log.mockRestore();
     }
   });
 

@@ -18,9 +18,10 @@ type DetachedWork = HookName | "killSandbox" | "slack";
 
 // Runs integrations' lifecycle hooks. onTaskStarted, onPrOpened and
 // assignee go to the task's own integration; onRoundFinished goes to the
-// round's. A disabled integration (one without an instance) is skipped and
-// logged. Each call runs under its hook's timeout with an abort signal and
-// never throws: a failure is logged and the caller goes on. The one exception
+// round's. A disabled integration has no instance, so, like an integration
+// without that hook, it is skipped (core can't tell which hooks a disabled one
+// has, so no line is logged). Each call runs under its hook's timeout with an
+// abort signal and never throws: a failure is logged and the caller goes on. The one exception
 // is a RetryableError from onPrOpened, which escapes so the dispatcher holds
 // pr_opened as it holds a send (the hook must be idempotent). Detached work is
 // tracked so TaskProcessor.stop() can drain it.
@@ -41,11 +42,7 @@ export class IntegrationHooks {
   // Fresh provision, before the sandbox is created. Awaited; no hold.
   async taskStarted(task: Task): Promise<void> {
     const owner = this.integrations[task.source];
-    if (!owner) {
-      this.skipped("onTaskStarted", task.source, { taskId: task.id });
-      return;
-    }
-    if (!owner.onTaskStarted) return;
+    if (!owner?.onTaskStarted) return;
     const round = await this.inboxRepo.getAssignment(task.id).catch((err) => {
       logErr("onTaskStarted skipped: assignment lookup failed", err, { taskId: task.id });
       return null;
@@ -98,11 +95,7 @@ export class IntegrationHooks {
     // A disabled integration, or a source this build doesn't know (rows
     // written by a newer build before a rollback), has no instance.
     const owner: Integration | undefined = this.integrations[round.source];
-    if (!owner) {
-      this.skipped("onRoundFinished", round.source, { taskId: task.id });
-      return;
-    }
-    if (!owner.onRoundFinished) return;
+    if (!owner?.onRoundFinished) return;
     this.detach(
       task.id,
       "onRoundFinished",
@@ -150,11 +143,7 @@ export class IntegrationHooks {
   ): Promise<T | undefined> {
     const meta = { ...logMeta, taskId: task.id, integration: source };
     const owner = this.integrations[source];
-    if (!owner) {
-      this.skipped(hook, source, meta);
-      return undefined;
-    }
-    if (!owner[hook]) return undefined;
+    if (!owner?.[hook]) return undefined;
     try {
       return await withTimeout(this.timeoutsMs[hook], async (signal) => {
         // A failed lookup still runs the hook; isCurrent() then answers false.
@@ -178,10 +167,6 @@ export class IntegrationHooks {
       logErr(`${hook} hook failed`, err, meta);
       return undefined;
     }
-  }
-
-  private skipped(hook: HookName, source: string, meta: Record<string, unknown>): void {
-    logger.info(`${hook} skipped: integration disabled`, { ...meta, integration: source });
   }
 
   // The task's assignment id: a restart re-pends the assignment row under a
