@@ -32,7 +32,7 @@ export type RoundDraft =
   | { kind: "ci_result"; payload: Omit<CiResultPayload, keyof TaskIdentity> };
 
 export interface TaskService {
-  readonly source: IntegrationName;
+  readonly source: string;
 
   assign(p: {
     externalId?: string; // required with a hint key; with a sequence key the new key is used
@@ -88,7 +88,7 @@ const TARGET_OWNER: Record<ReplyTargetSpec["kind"], IntegrationName> = {
 
 export class BoundTaskService implements TaskService {
   constructor(
-    readonly source: IntegrationName,
+    readonly source: string,
     private taskRepo: TaskRepository,
     private inboxRepo: InboxRepository,
     private sandboxManager: Pick<SandboxManager, "killSandbox">,
@@ -196,7 +196,7 @@ export class BoundTaskService implements TaskService {
   }
 }
 
-function checkTargets(source: IntegrationName, targets: ReplyTarget[]): void {
+function checkTargets(source: string, targets: ReplyTarget[]): void {
   for (const t of targets) {
     if (TARGET_OWNER[t.spec.kind] !== source) {
       throw new Error(`a ${source} round can't carry a ${t.spec.kind} reply target`);

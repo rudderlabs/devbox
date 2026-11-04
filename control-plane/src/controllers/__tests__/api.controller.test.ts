@@ -1,6 +1,5 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import { ApiError } from "../../errors";
-import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
 import { logger } from "../../logger";
 import { createApiRoutes } from "../../routes/api";
 import type { ApiTask } from "../../types/api";
@@ -54,15 +53,19 @@ function setup(opts: { authEnabled: boolean; allowedHosts?: string[] }) {
     ssePollMs: 1000,
     sseMaxDurationMs: 2000,
     clock: { now: () => 0, sleep: async () => {} },
+    taskSources: ["linear", "api"],
   });
   const app = createApiRoutes(controller, auth, {
     authEnabled: opts.authEnabled,
     allowedHosts: opts.allowedHosts ?? [],
-    integrations: fakeIntegrations({
-      linear: { status: async () => LINEAR_STATUS },
-      github: { status: async () => GITHUB_STATUS },
-      api: { status: async () => ({ enabled: true }) },
-    }),
+    status: (name) => {
+      const statuses: Record<string, object> = {
+        linear: LINEAR_STATUS,
+        github: GITHUB_STATUS,
+        api: { enabled: true },
+      };
+      return Object.hasOwn(statuses, name) ? Promise.resolve(statuses[name] as object) : undefined;
+    },
   });
   const req = (path: string, init: RequestInit & { json?: unknown } = {}) =>
     app.request(path, {

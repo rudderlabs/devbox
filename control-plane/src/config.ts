@@ -2,8 +2,6 @@ import { parseApiConfig } from "./apiConfig";
 import { parseGithubTokenSettings } from "./clients/githubToken";
 import { pickForwardedEnv } from "./forwardedEnv";
 import { optionalNumber, parseTrustList } from "./integrations/env";
-import { parseGithubConfig } from "./integrations/github/config";
-import { parseLinearConfig } from "./integrations/linear/config";
 import { parseSlackConfig } from "./integrationsConfig";
 import { parseSandboxGitIdentity, parseSandboxRuntimeConfig } from "./sandboxConfig";
 
@@ -83,10 +81,6 @@ export const config = {
   // rather than yielding NaN, which would make `attempt > NaN` always false and
   // silently disable the cap → an unbounded retry/sandbox-recreate loop.
   maxTaskRetries: optionalNumber(process.env, "MAX_TASK_RETRIES", 3),
-  // Undefined unless LINEAR_ENABLED=true; then LINEAR_CLIENT_ID,
-  // LINEAR_CLIENT_SECRET and LINEAR_WEBHOOK_SECRET are required. Parsed by
-  // integrations/linear/config.ts.
-  linear: parseLinearConfig(process.env),
   // Undefined unless SLACK_ENABLED=true; then SLACK_BOT_TOKEN (xoxb-…, posts
   // task-completion updates) and SLACK_CHANNEL_ID (C…) are required. The token
   // matches the /token/i log-redaction pattern. Parsed by integrationsConfig.ts.
@@ -101,9 +95,6 @@ export const config = {
     // the sandbox for PR-discussion trust.
     trustedOrgs: parseTrustList(process.env.GITHUB_TRUSTED_ORGS),
     trustedUsers: parseTrustList(process.env.GITHUB_TRUSTED_USERS),
-    // Undefined unless GITHUB_WEBHOOKS_ENABLED=true. Parsed by
-    // integrations/github/config.ts.
-    webhooks: parseGithubConfig(process.env),
   },
   opensandbox: {
     domain: process.env.OPENSANDBOX_DOMAIN ?? "localhost:8080",

@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { type ApiController, type ApiEnv, errorBody } from "../controllers/api.controller";
-import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import { API_BODY_LIMIT_BYTES } from "../requestLimits";
 import type { ApiAuthService } from "../services/apiAuth.service";
@@ -15,8 +14,9 @@ export function createApiRoutes(
   opts: {
     authEnabled: boolean;
     allowedHosts: string[];
-    // GET /api/integrations/<name>, for every integration, enabled or not.
-    integrations: Record<IntegrationName, Pick<Integration, "status">>;
+    // GET /api/integrations/<name>, for every integration, enabled or not;
+    // undefined for a name no integration has (IntegrationRegistry.status).
+    status: (name: string) => Promise<object> | undefined;
   },
 ): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
@@ -66,10 +66,10 @@ export function createApiRoutes(
   app.get("/api/tasks/:ref/events", (c) => controller.listEvents(c));
   app.get("/api/me", (c) => controller.me(c));
   app.get("/api/integrations/:name", async (c) => {
-    const name = c.req.param("name");
+    const status = opts.status(c.req.param("name"));
     // An unknown name is a 404, as an unregistered route.
-    if (!Object.hasOwn(opts.integrations, name)) return c.notFound();
-    return c.json(await opts.integrations[name as IntegrationName].status());
+    if (!status) return c.notFound();
+    return c.json(await status);
   });
   return app;
 }

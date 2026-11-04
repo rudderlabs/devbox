@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
-import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import { fakeIntegrations, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
 import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
 import type { SandboxManager } from "../sandboxManager.service";
@@ -65,6 +65,7 @@ mock.module("../../clients/github", () => ({
   getUserIdByLogin: mock(() => Promise.resolve(null)),
   requestReviewers: mock(() => Promise.resolve()),
   parsePrUrl: () => null,
+  githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),
 }));
 
 const { InboxService, WORKSPACE_MISSING_MESSAGE } = await import("../inbox.service");
@@ -176,13 +177,19 @@ describe("InboxService", () => {
       getAuthorizedLinearClient: mock(() => Promise.resolve({})),
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
-    linear = new LinearIntegration(linearTokenProvider, true, {
-      status: async () => ({ configured: false }),
-    });
+    linear = new LinearIntegration(
+      linearTokenProvider,
+      { status: async () => ({ configured: false }) },
+      NO_WEBHOOK,
+    );
     const integrations = fakeIntegrations({
       linear,
-      api: new ApiIntegration(true),
-      github: new GithubIntegration(true, { status: () => ({}) as never }),
+      api: new ApiIntegration(),
+      github: new GithubIntegration(
+        { botLogin: "harness" },
+        { status: () => ({}) as never },
+        NO_WEBHOOK,
+      ),
     });
     service = new InboxService(
       inboxRepo,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { LinearClient } from "@linear/sdk";
 import type { ReplyTarget } from "../../repositories/inbox.repository";
+import { NO_WEBHOOK } from "./fakeIntegrations";
 
 // A token file that does not exist: the GitHub client has no token to send.
 mock.module("../../config", () => ({
@@ -189,7 +190,7 @@ describe("Linear deliver: token failures", () => {
   const reply = { type: "reply", body: "hi" } as const;
   const status = { status: async () => ({ configured: false as const }) };
   const deliverWith = (provider: ConstructorParameters<typeof LinearIntegration>[0]) =>
-    new LinearIntegration(provider, true, status)
+    new LinearIntegration(provider, status, NO_WEBHOOK)
       .deliver({ signal: new AbortController().signal, log: logger }, target, reply)
       .then(() => "sent")
       .catch((e: unknown) => e);
@@ -313,8 +314,8 @@ describe("Linear deliver: SDK failures", () => {
         getAuthorizedLinearClient: (signal?: AbortSignal) =>
           Promise.resolve(new LinearClient({ accessToken: "t", apiUrl, signal })),
       },
-      true,
       { status: async () => ({ configured: false }) },
+      NO_WEBHOOK,
     );
   const deliverTo = (apiUrl: string, signal = new AbortController().signal) =>
     integrationFor(apiUrl)

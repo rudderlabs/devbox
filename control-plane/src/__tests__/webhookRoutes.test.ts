@@ -1,19 +1,51 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import type { Context } from "hono";
-import type { IntegrationName } from "../integrations/types";
+import type { IntegrationDefinition } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
 import { createWebhookRoutes as createRoutes } from "../routes/webhook";
+import { IntegrationRegistry } from "../services/integrationRegistry";
+
+type Webhook = (c: Context) => Promise<Response>;
+
+// The routes of a registry of linear, github and api, where `on` are enabled
+// and each integration takes webhooks only if given one.
+function routesFor(on: string[], webhooks: Partial<Record<string, Webhook>>) {
+  const definitions: IntegrationDefinition[] = ["linear", "github", "api"].map((name) => ({
+    name,
+    createsTasks: false,
+    parseConfig: () => (on.includes(name) ? {} : undefined),
+    create: () => ({
+      async deliver() {},
+      async status() {
+        return {};
+      },
+      ...(webhooks[name] ? { webhook: webhooks[name] } : {}),
+    }),
+    disabledStatus: () => ({}),
+  }));
+  const registry = new IntegrationRegistry(
+    definitions,
+    new Map(definitions.map((d) => [d.name, d.parseConfig({})])),
+    {
+      tasks: (d) => ({ source: d.name }) as never,
+      holds: { of: () => ({ heldTasks: 0, oldestHoldAgeMs: 0 }) },
+    },
+  );
+  return createRoutes(registry.webhooks());
+}
 
 // The routes for enabled integrations with these webhooks.
 function createWebhookRoutes(
-  webhooks: Partial<Record<IntegrationName, { handleWebhook: (c: Context) => Promise<Response> }>>,
+  webhooks: Partial<Record<string, { handleWebhook: (c: Context) => Promise<Response> }>>,
 ) {
-  return createRoutes(
-    Object.entries(webhooks).map(([name, w]) => ({
-      name: name as IntegrationName,
-      enabled: true,
-      webhook: (c: Context) => w.handleWebhook(c),
-    })),
+  return routesFor(
+    Object.keys(webhooks),
+    Object.fromEntries(
+      Object.entries(webhooks).map(([name, w]) => [
+        name,
+        (c: Context) => (w as { handleWebhook: Webhook }).handleWebhook(c),
+      ]),
+    ),
   );
 }
 
@@ -107,22 +139,13 @@ describe("createWebhookRoutes", () => {
 
   it("serves no webhook for a disabled integration, and calls an enabled one's", async () => {
     let calls = 0;
-    const app = createRoutes([
-      {
-        name: "linear",
-        enabled: false,
-        webhook: async () => new Response(null, { status: 200 }),
+    const app = routesFor(["github", "api"], {
+      linear: async () => new Response(null, { status: 200 }),
+      github: async () => {
+        calls++;
+        return new Response(null, { status: 200 });
       },
-      {
-        name: "github",
-        enabled: true,
-        webhook: async () => {
-          calls++;
-          return new Response(null, { status: 200 });
-        },
-      },
-      { name: "api", enabled: true },
-    ]);
+    });
     expect((await app.request("/webhook/linear", { method: "POST", body: "{}" })).status).toBe(404);
     expect((await app.request("/webhook/api", { method: "POST", body: "{}" })).status).toBe(404);
     expect((await app.request("/webhook/github", { method: "POST", body: "{}" })).status).toBe(200);

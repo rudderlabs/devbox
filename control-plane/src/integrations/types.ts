@@ -2,11 +2,21 @@ import type { Context } from "hono";
 import type { Task, taskSource } from "../db/schema";
 import type { logger } from "../logger";
 import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
+import type { TaskService } from "../services/task.service";
 import type { ApiTaskSource } from "../types/api";
 import type { InboxSource } from "../types/inboxMessage";
 import type { Outbound, SendCtx } from "./outbound";
 
-type Logger = typeof logger;
+// What an integration module may use from core, besides ./outbound, ./http
+// and ./env. Its TaskService is bound to its own name.
+export type {
+  InboxRow as Round,
+  ReplyTarget,
+  ReplyTargetSpec,
+} from "../repositories/inbox.repository";
+export type { TaskService } from "../services/task.service";
+export type Env = Record<string, string | undefined>;
+export type Logger = typeof logger;
 
 // The sources a task can have (the task_source enum).
 export type TaskSource = (typeof taskSource.enumValues)[number];
@@ -24,14 +34,31 @@ export type SourceChecks = [
   Assert<Equal<ApiTaskSource, TaskSource>>,
 ];
 
-export interface Integration<S = unknown> {
-  name: IntegrationName;
-  // Core never calls webhook, deliver, hooks or assignee of a disabled module:
-  // it logs and skips (a skipped send counts as sent, never held).
-  enabled: boolean;
+// One per integration module; integrations/index.ts lists them all.
+export interface IntegrationDefinition<C = unknown> {
+  // The source of its tasks and rounds, POST /webhook/<name> and
+  // GET /api/integrations/<name>. Stored in tasks.source and inbox.source, so
+  // never renamed.
+  name: string;
+  // Its tasks are claimed and reconciled, even while it is off.
+  createsTasks: boolean;
+  // Its settings, or undefined when it is off. Throws on a bad value, which
+  // fails boot before migrations run.
+  parseConfig(env: Env): C | undefined;
+  // Called once at startup, only when it is on.
+  create(core: Core, cfg: C): Integration;
+  // GET /api/integrations/<name> while it is off.
+  disabledStatus(): object;
+}
 
-  // Incoming. Core mounts POST /webhook/<name> only when enabled (404
-  // otherwise), behind the shared body limit and raw-body read.
+// What core hands an integration: its own TaskService and the logger.
+export type Core = { tasks: TaskService; log: Logger };
+
+// An enabled integration. A disabled one has no instance: core skips its
+// webhook, sends and hooks (a skipped send counts as sent, never held).
+export interface Integration {
+  // Incoming. Core mounts POST /webhook/<name> (404 for any other name),
+  // behind the shared body limit and raw-body read.
   webhook?(c: Context): Promise<Response>;
 
   // Outgoing. Core labels each message; the integration decides where (or
@@ -50,9 +77,13 @@ export interface Integration<S = unknown> {
   ): Promise<void>;
   assignee?(ctx: HookCtx, task: Task): Promise<Person | null>; // throws when the lookup itself fails
 
+  // The login that @-mentions on devbox's PRs go to, set by the integration
+  // that turns them into rounds. Core's onboarding comment names it.
+  prMentionLogin?: string;
+
   // Health. Core serves GET /api/integrations/<name> (behind API auth, only
   // when the API is enabled) with this body plus the integration's held sends.
-  status(): Promise<S>;
+  status(): Promise<object>;
 }
 
 // isCurrent() is false once a restart rotated the task's assignment id.

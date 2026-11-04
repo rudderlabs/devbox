@@ -4,9 +4,9 @@ import { SandboxApiException } from "@alibaba-group/opensandbox";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../../errors";
-import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import { fakeIntegrations, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
 import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
-import type { Integration, IntegrationName } from "../../integrations/types";
+import type { Integration } from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
@@ -89,6 +89,7 @@ mock.module("../../clients/github", () => ({
   getUserIdByLogin: mock(() => Promise.resolve(null)),
   requestReviewers: mock(() => Promise.resolve()),
   parsePrUrl: () => null,
+  githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),
 }));
 
 const { TaskProcessorService } = await import("../taskProcessor.service");
@@ -192,7 +193,7 @@ describe("TaskProcessorService", () => {
   let notifyTerminal: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
   let holds: InstanceType<typeof ReplyHolds>;
-  let integrations: Record<IntegrationName, Integration> & {
+  let integrations: Record<string, Integration> & {
     linear: InstanceType<typeof LinearIntegration>;
   };
   let hooks: InstanceType<typeof IntegrationHooks>;
@@ -293,11 +294,17 @@ describe("TaskProcessorService", () => {
 
     holds = new ReplyHolds();
     integrations = fakeIntegrations({
-      linear: new LinearIntegration(linearTokenProvider, true, {
-        status: async () => ({ configured: false }),
-      }),
-      api: new ApiIntegration(true),
-      github: new GithubIntegration(true, { status: () => ({}) as never }),
+      linear: new LinearIntegration(
+        linearTokenProvider,
+        { status: async () => ({ configured: false }) },
+        NO_WEBHOOK,
+      ),
+      api: new ApiIntegration(),
+      github: new GithubIntegration(
+        { botLogin: "harness" },
+        { status: () => ({}) as never },
+        NO_WEBHOOK,
+      ),
     });
     hooks = new IntegrationHooks(integrations, inboxRepo);
     service = new TaskProcessorService(
@@ -719,7 +726,7 @@ describe("TaskProcessorService", () => {
     });
 
     it("a row whose integration is disabled gets no notice; it is still failed and the lease released", async () => {
-      integrations.github = new GithubIntegration(false, { status: () => ({}) as never });
+      delete integrations.github;
       const row = {
         ...survivingNonTerminalRow(),
         id: "gc",
@@ -958,7 +965,7 @@ describe("TaskProcessorService", () => {
     });
 
     it("a row whose integration is disabled gets no notice; it is still dead-lettered and the lease released", async () => {
-      integrations.github = new GithubIntegration(false, { status: () => ({}) as never });
+      delete integrations.github;
       failTaskInbox.mockResolvedValue([
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
@@ -1341,7 +1348,7 @@ describe("TaskProcessorService", () => {
           slackNotifier,
           {
             ...integrations,
-            github: { name: "github", enabled: true, status: async () => ({}), deliver },
+            github: { status: async () => ({}), deliver },
           },
           holds,
           hooks,

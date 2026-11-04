@@ -3,7 +3,7 @@ import { config } from "../config";
 import type { Task } from "../db/schema";
 import { deliverToRound, SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import { type Outbound, RetryableError } from "../integrations/outbound";
-import type { Integration, IntegrationName } from "../integrations/types";
+import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
@@ -36,7 +36,7 @@ export type DispatchResult = "ok" | "dropped" | "hold" | "self_evict" | "abort";
 // One-time onboarding comment posted on every PR harness opens — comment
 // interactivity is invisible unless users know it exists. Built per-call from
 // the configured bot login so the displayed name and the `@mention` example
-// always match the actual GitHub App identity (config.github.webhooks.botLogin).
+// always match the actual GitHub App identity (GITHUB_BOT_LOGIN).
 function onboardingCommentBody(botLogin: string, taskKey: string): string {
   return [
     `👋 I'm **${botLogin}**. I opened this PR from task \`${taskKey}\`.`,
@@ -61,7 +61,7 @@ export class EventDispatcher {
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
     private slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
-    private integrations: Record<IntegrationName, Integration>,
+    private integrations: Readonly<Record<string, Integration>>,
     private holds: ReplyHolds,
     private hooks: IntegrationHooks,
     private sendTimeoutMs = SEND_TIMEOUT_MS,
@@ -304,9 +304,10 @@ export class EventDispatcher {
     event: Extract<HarnessEvent, { type: "pr_opened" }>,
     task: Task,
   ): Promise<void> {
-    // The comment explains @-mentions, which only work with webhooks on.
-    const webhooks = config.github.webhooks;
-    if (!webhooks) return;
+    // The comment explains @-mentions, which only work while an enabled
+    // integration takes them (GitHub's webhooks).
+    const botLogin = Object.values(this.integrations).find((i) => i.prMentionLogin)?.prMentionLogin;
+    if (!botLogin) return;
     const pr = parsePrUrl(event.pr_url);
     if (!pr) return; // not a github.com PR URL — skip
     // Awaited inside the tick, so bounded like a send.
@@ -315,7 +316,7 @@ export class EventDispatcher {
         pr.owner,
         pr.repo,
         pr.prNumber,
-        onboardingCommentBody(webhooks.botLogin, task.key),
+        onboardingCommentBody(botLogin, task.key),
         signal,
       ),
     ).catch((err) => logErr("onboarding comment post failed", err));

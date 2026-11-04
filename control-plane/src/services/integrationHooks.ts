@@ -1,14 +1,7 @@
 import type { Task } from "../db/schema";
 import { withTimeout } from "../integrations/http";
 import { RetryableError } from "../integrations/outbound";
-import type {
-  HookCtx,
-  Integration,
-  IntegrationName,
-  Outcome,
-  Person,
-  PrRef,
-} from "../integrations/types";
+import type { HookCtx, Integration, Outcome, Person, PrRef } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 
@@ -25,9 +18,9 @@ type DetachedWork = HookName | "killSandbox" | "slack";
 
 // Runs integrations' lifecycle hooks. onTaskStarted, onPrOpened and
 // assignee go to the task's own integration; onRoundFinished goes to the
-// round's. A disabled integration's hooks are skipped (logged). Each call runs
-// under its hook's timeout with an abort signal and never throws: a failure is
-// logged and the caller goes on. The one exception
+// round's. A disabled integration (one without an instance) is skipped and
+// logged. Each call runs under its hook's timeout with an abort signal and
+// never throws: a failure is logged and the caller goes on. The one exception
 // is a RetryableError from onPrOpened, which escapes so the dispatcher holds
 // pr_opened as it holds a send (the hook must be idempotent). Detached work is
 // tracked so TaskProcessor.stop() can drain it.
@@ -39,7 +32,8 @@ export class IntegrationHooks {
   private readonly started = new Set<string>();
 
   constructor(
-    private integrations: Record<IntegrationName, Integration>,
+    // The registry's enabled integrations, by name.
+    private integrations: Readonly<Record<string, Integration>>,
     private inboxRepo: Pick<InboxRepository, "getAssignment">,
     private timeoutsMs: Record<HookName, number> = HOOK_TIMEOUT_MS,
   ) {}
@@ -47,6 +41,10 @@ export class IntegrationHooks {
   // Fresh provision, before the sandbox is created. Awaited; no hold.
   async taskStarted(task: Task): Promise<void> {
     const owner = this.integrations[task.source];
+    if (!owner) {
+      this.skipped("onTaskStarted", task.source, { taskId: task.id });
+      return;
+    }
     if (!owner.onTaskStarted) return;
     const round = await this.inboxRepo.getAssignment(task.id).catch((err) => {
       logErr("onTaskStarted skipped: assignment lookup failed", err, { taskId: task.id });
@@ -55,7 +53,7 @@ export class IntegrationHooks {
     const target = round?.reply_targets[0];
     if (!round || !target || this.started.has(round.id)) return;
     this.started.add(round.id);
-    await this.callHook("onTaskStarted", owner, task, round, (ctx) =>
+    await this.callHook("onTaskStarted", task.source, task, round, (ctx) =>
       owner.onTaskStarted?.(ctx, task, target),
     );
   }
@@ -63,8 +61,7 @@ export class IntegrationHooks {
   // pr_opened, after appendPrUrl, awaited before the cursor advances. Throws
   // RetryableError (nothing was sent), which the dispatcher turns into a hold.
   async prOpened(task: Task, round: InboxRow | null, pr: PrRef, firstTime: boolean): Promise<void> {
-    const owner = this.integrations[task.source];
-    await this.callHook("onPrOpened", owner, task, round, (ctx) =>
+    await this.callHook("onPrOpened", task.source, task, round, (ctx, owner) =>
       owner.onPrOpened?.({ ...ctx, firstTime }, task, pr),
     );
   }
@@ -77,13 +74,12 @@ export class IntegrationHooks {
     round: InboxRow | null,
     logMeta: Record<string, unknown>,
   ): Promise<Person | null | undefined> {
-    const owner = this.integrations[task.source];
     return this.callHook(
       "assignee",
-      owner,
+      task.source,
       task,
       round,
-      (ctx) => owner.assignee?.(ctx, task),
+      (ctx, owner) => owner.assignee?.(ctx, task),
       logMeta,
     );
   }
@@ -99,14 +95,18 @@ export class IntegrationHooks {
     firstTransition: boolean,
     archive: () => Promise<Uint8Array | null> = async () => null,
   ): void {
-    // A source this build has no integration for (rows written by a newer
-    // build before a rollback) has no hook.
+    // A disabled integration, or a source this build doesn't know (rows
+    // written by a newer build before a rollback), has no instance.
     const owner: Integration | undefined = this.integrations[round.source];
-    if (!owner?.onRoundFinished) return;
+    if (!owner) {
+      this.skipped("onRoundFinished", round.source, { taskId: task.id });
+      return;
+    }
+    if (!owner.onRoundFinished) return;
     this.detach(
       task.id,
       "onRoundFinished",
-      this.callHook("onRoundFinished", owner, task, round, (ctx) =>
+      this.callHook("onRoundFinished", round.source, task, round, (ctx) =>
         owner.onRoundFinished?.({ ...ctx, firstTransition, archive }, task, round, outcome),
       ),
     );
@@ -142,18 +142,19 @@ export class IntegrationHooks {
 
   private async callHook<T>(
     hook: HookName,
-    owner: Integration,
+    source: string,
     task: Task,
     round: InboxRow | null,
-    run: (ctx: HookCtx) => Promise<T> | undefined,
+    run: (ctx: HookCtx, owner: Integration) => Promise<T> | undefined,
     logMeta: Record<string, unknown> = {},
   ): Promise<T | undefined> {
-    if (!owner[hook]) return undefined;
-    const meta = { ...logMeta, taskId: task.id, integration: owner.name };
-    if (!owner.enabled) {
-      logger.info(`${hook} skipped: integration disabled`, meta);
+    const meta = { ...logMeta, taskId: task.id, integration: source };
+    const owner = this.integrations[source];
+    if (!owner) {
+      this.skipped(hook, source, meta);
       return undefined;
     }
+    if (!owner[hook]) return undefined;
     try {
       return await withTimeout(this.timeoutsMs[hook], async (signal) => {
         // A failed lookup still runs the hook; isCurrent() then answers false.
@@ -161,19 +162,26 @@ export class IntegrationHooks {
           logErr(`${hook}: assignment lookup failed; isCurrent() is false`, err, meta);
           return undefined;
         });
-        return run({
-          signal,
-          log: logger,
-          isCurrent: async () =>
-            startedOn !== undefined &&
-            (await this.assignmentId(task.id).catch(() => undefined)) === startedOn,
-        });
+        return run(
+          {
+            signal,
+            log: logger,
+            isCurrent: async () =>
+              startedOn !== undefined &&
+              (await this.assignmentId(task.id).catch(() => undefined)) === startedOn,
+          },
+          owner,
+        );
       });
     } catch (err) {
       if (hook === "onPrOpened" && err instanceof RetryableError) throw err;
       logErr(`${hook} hook failed`, err, meta);
       return undefined;
     }
+  }
+
+  private skipped(hook: HookName, source: string, meta: Record<string, unknown>): void {
+    logger.info(`${hook} skipped: integration disabled`, { ...meta, integration: source });
   }
 
   // The task's assignment id: a restart re-pends the assignment row under a

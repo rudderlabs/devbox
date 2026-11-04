@@ -1,7 +1,7 @@
 import { logger } from "../logger";
 import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
 import { type Outbound, RetryableError } from "./outbound";
-import type { Integration, IntegrationName } from "./types";
+import type { Integration } from "./types";
 
 // Shared rules for integrations' outbound HTTP: the typed errors clients
 // throw, which failures may be retried, and how long one send may take.
@@ -100,13 +100,13 @@ export async function withTimeout<T>(
 }
 
 // Hands `message` for one of `round`'s targets to the round's integration,
-// under the send timeout. An integration this build doesn't know (rows
-// written by a newer build before a rollback) or a disabled one is skipped and
-// logged: that counts as sent. Any other failure is logged and the message
+// under the send timeout. `integrations` are the registry's enabled ones: an
+// integration this build doesn't know (rows written by a newer build before a
+// rollback) or a disabled one is skipped and logged, which counts as sent. Any other failure is logged and the message
 // dropped, except a RetryableError (nothing was sent), which is rethrown: each
 // caller decides whether it holds or drops.
 export async function deliverToRound(
-  integrations: Record<IntegrationName, Integration>,
+  integrations: Readonly<Record<string, Integration>>,
   round: InboxRow,
   target: ReplyTarget,
   message: Outbound,
@@ -115,7 +115,7 @@ export async function deliverToRound(
 ): Promise<"ok" | "dropped"> {
   const log = { ...meta, inboxId: round.id, source: round.source, targetId: target.id };
   const integration: Integration | undefined = integrations[round.source];
-  if (!integration?.enabled) {
+  if (!integration) {
     logger.info(`${message.type} skipped: integration unknown or disabled`, log);
     return "ok";
   }

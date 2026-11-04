@@ -4,7 +4,7 @@ import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
 import { deliverToRound } from "../integrations/http";
 import type { Outbound } from "../integrations/outbound";
-import type { Integration, IntegrationName } from "../integrations/types";
+import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
@@ -46,7 +46,7 @@ export class TaskProcessorService {
   private readonly eventDispatcher: EventDispatcher;
   private readonly inboxService: InboxService;
   private readonly slackNotifier: Pick<SlackNotifierService, "notifyTerminal">;
-  private readonly integrations: Record<IntegrationName, Integration>;
+  private readonly integrations: Readonly<Record<string, Integration>>;
   private readonly holds: ReplyHolds;
   // Sources this build has an integration for; claimNext and
   // listInFlightOwnedBy see only these tasks.
@@ -60,7 +60,7 @@ export class TaskProcessorService {
     eventDispatcher: EventDispatcher,
     inboxService: InboxService,
     slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
-    integrations: Record<IntegrationName, Integration>,
+    integrations: Readonly<Record<string, Integration>>,
     holds: ReplyHolds,
     taskSources: Task["source"][],
     hooks: IntegrationHooks,

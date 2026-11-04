@@ -17,30 +17,46 @@ import type { InboxRow, ReplyTarget } from "../../repositories/inbox.repository"
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { rateLimitWaitMs, retryable } from "../http";
 import { type Outbound, RetryableError, type SendCtx } from "../outbound";
-import type { HookCtx, Integration, Person, PrRef } from "../types";
-import type { LinearStatus, LinearStatusService } from "./status";
-import type { LinearTokenProvider } from "./tokenProvider";
-import type { LinearWebhookController } from "./webhook";
+import type { HookCtx, Integration, IntegrationDefinition, Person, PrRef } from "../types";
+import { AgentSessionService } from "./agentSession";
+import { type LinearConfig, parseLinearConfig } from "./config";
+import { type LinearStatus, LinearStatusService } from "./status";
+import { LinearTokenProvider } from "./tokenProvider";
+import { LinearWebhookController } from "./webhook";
+
+export const linear: IntegrationDefinition<LinearConfig> = {
+  name: "linear",
+  createsTasks: true,
+  parseConfig: parseLinearConfig,
+  create(core, cfg) {
+    const tokenProvider = new LinearTokenProvider({
+      creds: { clientId: cfg.clientId, clientSecret: cfg.clientSecret },
+      log: core.log,
+    });
+    const status = new LinearStatusService(tokenProvider, core.log);
+    const controller = new LinearWebhookController(
+      new AgentSessionService(core.tasks, tokenProvider),
+      cfg.webhookSecret,
+      (at) => status.recordWebhook(at),
+    );
+    return new LinearIntegration(tokenProvider, status, controller);
+  },
+  disabledStatus: () => ({ configured: false }),
+};
 
 // Linear rounds post to the agent session. target.id IS the agent session id
 // by construction (the enqueue paths stamp the live session id). The session
 // is private to the workspace, so a failure shows its raw detail.
-export class LinearIntegration implements Integration<LinearStatus> {
-  readonly name = "linear";
-
+export class LinearIntegration implements Integration {
   constructor(
     private linearTokenProvider: Pick<LinearTokenProvider, "getAuthorizedLinearClient">,
-    // LINEAR_ENABLED.
-    readonly enabled: boolean,
     private statusService: Pick<LinearStatusService, "status">,
-    // Today's webhook controller; none while Linear is off.
-    private controller?: Pick<LinearWebhookController, "handleWebhook">,
+    private controller: Pick<LinearWebhookController, "handleWebhook">,
   ) {}
 
   // Today's responses, including 503 session_not_found when a prompt arrives
   // before its session (Linear retries). The controller holds its TaskService.
-  async webhook(c: Context): Promise<Response> {
-    if (!this.controller) return c.notFound();
+  webhook(c: Context): Promise<Response> {
     return this.controller.handleWebhook(c);
   }
 

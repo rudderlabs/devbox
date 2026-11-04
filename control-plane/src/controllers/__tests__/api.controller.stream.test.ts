@@ -1,7 +1,6 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type { Clock } from "../../clock";
 import { ApiError } from "../../errors";
-import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
 import { logger } from "../../logger";
 import { createApiRoutes } from "../../routes/api";
 import type { ApiEventEnvelope, SseStateData } from "../../types/api";
@@ -117,6 +116,7 @@ function setup(o: {
     ssePollMs: o.pollMs ?? 1000,
     sseMaxDurationMs: o.maxMs ?? 3000,
     clock,
+    taskSources: ["linear", "api"],
   });
   const app = createApiRoutes(
     controller,
@@ -124,16 +124,7 @@ function setup(o: {
     {
       authEnabled: false,
       allowedHosts: [],
-      integrations: fakeIntegrations({
-        linear: { status: async () => ({ configured: false }) },
-        github: {
-          status: async () => ({
-            token: { source: "env", expiresAt: null, readAt: null, lastError: null },
-            webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
-          }),
-        },
-        api: { status: async () => ({ enabled: true }) },
-      }),
+      status: () => undefined,
     },
   );
   return { app, service, controller, clock };

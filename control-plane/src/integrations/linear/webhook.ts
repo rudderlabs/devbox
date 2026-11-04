@@ -1,6 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
-import { config } from "../../config";
 import { logger } from "../../logger";
 import type { AgentSessionService } from "./agentSession";
 import type { ParsedAgentSessionEvent } from "./types";
@@ -14,15 +13,19 @@ const asRecord = (v: unknown): MaybeRecord =>
 export class LinearWebhookController {
   private readonly agentSessionService: AgentSessionService;
 
+  private readonly webhookSecret: string;
   private readonly onSignedWebhook: (at: Date) => void;
   private readonly now: () => Date;
 
   constructor(
     agentSessionService: AgentSessionService,
+    // LINEAR_WEBHOOK_SECRET.
+    webhookSecret: string,
     onSignedWebhook: (at: Date) => void,
     now: () => Date = () => new Date(),
   ) {
     this.agentSessionService = agentSessionService;
+    this.webhookSecret = webhookSecret;
     this.onSignedWebhook = onSignedWebhook;
     this.now = now;
   }
@@ -31,12 +34,11 @@ export class LinearWebhookController {
     const body = await c.req.text();
     const signature = c.req.header("linear-signature");
 
-    const secret = config.linear?.webhookSecret;
-    if (!secret || !signature || !this.verifySignature(body, signature, secret)) {
+    if (!signature || !this.verifySignature(body, signature, this.webhookSecret)) {
       // A signed request that fails is most likely Linear with a secret that
       // differs from LINEAR_WEBHOOK_SECRET; an unsigned one (linear:status's
       // probe) is expected and not logged. Nothing from the request is logged.
-      if (secret && signature) {
+      if (signature) {
         logger.warn("Linear webhook rejected: signature mismatch (check LINEAR_WEBHOOK_SECRET)");
       }
       return c.json({ error: "invalid signature" }, 401);

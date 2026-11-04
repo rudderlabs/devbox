@@ -2,20 +2,45 @@ import type { Context } from "hono";
 import {
   addIssueCommentReaction,
   addReviewCommentReaction,
+  githubTokenState,
   parsePrUrl,
   postIssueComment,
   postReviewCommentReply,
   requestReviewers,
 } from "../../clients/github";
-import { config } from "../../config";
 import type { Task } from "../../db/schema";
 import type { InboxRow, ReplyTarget, ReplyTargetSpec } from "../../repositories/inbox.repository";
 import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
-import type { HookCtx, Integration } from "../types";
-import type { GithubStatus, GithubStatusService } from "./status";
-import type { GitHubWebhookController } from "./webhook";
+import type { HookCtx, Integration, IntegrationDefinition } from "../types";
+import { type GithubConfig, parseGithubConfig } from "./config";
+import { type GithubStatus, GithubStatusService } from "./status";
+import { GitHubWebhookController } from "./webhook";
+
+// GitHub creates no tasks: its rounds come only from its webhooks, so it is
+// enabled exactly when they are, and disabling them skips open rounds' replies.
+// Its status always reports the control plane's own token.
+export const github: IntegrationDefinition<GithubConfig> = {
+  name: "github",
+  createsTasks: false,
+  parseConfig: parseGithubConfig,
+  create(core, cfg) {
+    const controller = new GitHubWebhookController(core.tasks, cfg);
+    const status = new GithubStatusService(githubTokenState, {
+      enabled: true,
+      ciResults: cfg.ciResultEnabled,
+      lastWebhookAt: () => controller.lastWebhookAt(),
+    });
+    return new GithubIntegration(cfg, status, controller);
+  },
+  disabledStatus: () =>
+    new GithubStatusService(githubTokenState, {
+      enabled: false,
+      ciResults: false,
+      lastWebhookAt: () => null,
+    }).status(),
+};
 
 type GithubSpec = Extract<
   ReplyTargetSpec,
@@ -24,23 +49,21 @@ type GithubSpec = Extract<
 
 // GitHub rounds (comments, reviews, CI results) post on the PR. A PR shows no
 // live progress, and it is public: a failure's raw detail never goes there.
-// GitHub creates no tasks: its rounds come only from its webhooks, so it is
-// enabled exactly when they are, and disabling them skips open rounds' replies.
-export class GithubIntegration implements Integration<GithubStatus> {
-  readonly name = "github";
+export class GithubIntegration implements Integration {
+  // Its webhooks turn @-mentions of the bot into rounds.
+  readonly prMentionLogin: string;
 
   constructor(
-    // GITHUB_WEBHOOKS_ENABLED.
-    readonly enabled: boolean,
+    cfg: Pick<GithubConfig, "botLogin">,
     private statusService: Pick<GithubStatusService, "status">,
-    // Today's webhook controller; none while webhooks are off.
-    private controller?: Pick<GitHubWebhookController, "handleWebhook">,
-  ) {}
+    private controller: Pick<GitHubWebhookController, "handleWebhook">,
+  ) {
+    this.prMentionLogin = cfg.botLogin;
+  }
 
   // Today's responses: 403 for untrusted actors, 503 when the trusted set
   // can't be fetched. The controller holds its TaskService.
-  async webhook(c: Context): Promise<Response> {
-    if (!this.controller) return c.notFound();
+  webhook(c: Context): Promise<Response> {
     return this.controller.handleWebhook(c);
   }
 
@@ -65,7 +88,7 @@ export class GithubIntegration implements Integration<GithubStatus> {
       case "progress":
         return;
       case "failure":
-        await deliverFailure(ctx, spec, message);
+        await deliverFailure(ctx, spec, message, this.prMentionLogin);
         return;
       default: {
         const _exhaustive: never = message;
@@ -162,6 +185,7 @@ async function deliverFailure(
   ctx: SendCtx,
   spec: GithubSpec,
   message: Extract<Outbound, { type: "failure" }>,
+  botLogin: string,
 ): Promise<void> {
   const { round } = message;
   switch (message.cause) {
@@ -172,9 +196,7 @@ async function deliverFailure(
     case "round_failed": {
       // A failed CI-fix round stays silent.
       if (round.kind === "ci_result") return;
-      // The retry hint is an @-mention, which only works with webhooks on.
-      const botLogin = config.github.webhooks?.botLogin;
-      if (!botLogin) return;
+      // The retry hint is an @-mention, which the webhooks turn into a round.
       await post(
         ctx,
         spec,

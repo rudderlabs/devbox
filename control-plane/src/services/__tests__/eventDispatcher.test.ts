@@ -4,8 +4,9 @@ import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/
 // mock.module barrel factories below, and it pins the real contract.
 import type { LinearHumanUser } from "../../clients/linearApi";
 import type { Task } from "../../db/schema";
-import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
+import { fakeIntegrations, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
 import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
+import type { Integration } from "../../integrations/types";
 import type { InboxRepository, InboxRow, InboxStatus } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
@@ -15,7 +16,6 @@ import type { SlackNotifierService } from "../slackNotifier.service";
 mock.module("../../config", () => ({
   config: {
     podId: "pod-test",
-    github: { webhooks: { botLogin: "harness" } },
   },
 }));
 
@@ -76,6 +76,7 @@ mock.module("../../clients/github", () => ({
     const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
     return m ? { owner: m[1], repo: m[2], prNumber: Number(m[3]) } : null;
   },
+  githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),
 }));
 
 const { EventDispatcher } = await import("../eventDispatcher");
@@ -86,11 +87,6 @@ const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationHooks } = await import("../integrationHooks");
 const { LinearTokenError } = await import("../../clients/linearOauth");
-const { config: mockedConfig } = (await import("../../config")) as unknown as {
-  config: {
-    github: { webhooks: { botLogin: string } | undefined };
-  };
-};
 
 // What the token provider throws when Linear's token endpoint can't be reached
 // (no answer, so no status): a later request may succeed.
@@ -174,15 +170,37 @@ describe("EventDispatcher", () => {
   let holds: InstanceType<typeof ReplyHolds>;
   let dispatcher: InstanceType<typeof EventDispatcher>;
 
-  // The registry, with GitHub's webhooks (and so its integration) on or off.
-  const makeIntegrations = (githubEnabled: boolean) =>
-    fakeIntegrations({
-      linear: new LinearIntegration(linearTokenProvider, true, {
-        status: async () => ({ configured: false }),
-      }),
-      api: new ApiIntegration(true),
-      github: new GithubIntegration(githubEnabled, { status: () => ({}) as never }),
-    });
+  // The registry's enabled integrations, with GitHub's webhooks (and so its
+  // integration) on or off.
+  const makeIntegrations = (githubEnabled: boolean): Record<string, Integration> => ({
+    linear: new LinearIntegration(
+      linearTokenProvider,
+      { status: async () => ({ configured: false }) },
+      NO_WEBHOOK,
+    ),
+    api: new ApiIntegration(),
+    ...(githubEnabled
+      ? {
+          github: new GithubIntegration(
+            { botLogin: "harness" },
+            { status: () => ({}) as never },
+            NO_WEBHOOK,
+          ),
+        }
+      : {}),
+  });
+  const withGithubOff = () => {
+    const integrations = makeIntegrations(false);
+    return new EventDispatcher(
+      taskRepo,
+      inboxRepo,
+      sandboxManager,
+      slackNotifier,
+      integrations,
+      holds,
+      new IntegrationHooks(integrations, inboxRepo),
+    );
+  };
 
   beforeEach(() => {
     for (const m of [
@@ -612,21 +630,15 @@ describe("EventDispatcher", () => {
     });
 
     it("a GitHub comment round failure posts nothing when GitHub webhooks are off (no bot login)", async () => {
-      const webhooks = mockedConfig.github.webhooks;
-      mockedConfig.github.webhooks = undefined;
-      try {
-        getByIdForTask.mockResolvedValue(
-          ghRow("comment", {
-            id: "555",
-            spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 555 },
-          }),
-        );
-        expect(await dispatcher.handle(errorEvent("555"), makeTask())).toBe("ok");
-        expect(postIssueComment).not.toHaveBeenCalled();
-        expect(postReviewCommentReply).not.toHaveBeenCalled();
-      } finally {
-        mockedConfig.github.webhooks = webhooks;
-      }
+      getByIdForTask.mockResolvedValue(
+        ghRow("comment", {
+          id: "555",
+          spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 555 },
+        }),
+      );
+      expect(await withGithubOff().handle(errorEvent("555"), makeTask())).toBe("ok");
+      expect(postIssueComment).not.toHaveBeenCalled();
+      expect(postReviewCommentReply).not.toHaveBeenCalled();
     });
   });
 
@@ -634,8 +646,6 @@ describe("EventDispatcher", () => {
     it("labels each agent emit and hands it to the round's integration with the event's target", async () => {
       const delivered: unknown[] = [];
       const record = (name: "linear" | "api" | "github") => ({
-        name,
-        enabled: true,
         status: async () => ({}),
         deliver: async (_ctx: unknown, target: unknown, message: unknown) => {
           delivered.push([name, target, message]);
@@ -789,15 +799,9 @@ describe("EventDispatcher", () => {
     });
 
     it("posts no onboarding comment when GitHub webhooks are off", async () => {
-      const webhooks = mockedConfig.github.webhooks;
-      mockedConfig.github.webhooks = undefined;
-      try {
-        const result = await dispatcher.handle(prEvent(), makeTask());
-        expect(result).toBe("ok");
-        expect(postIssueComment).not.toHaveBeenCalled();
-      } finally {
-        mockedConfig.github.webhooks = webhooks;
-      }
+      const result = await withGithubOff().handle(prEvent(), makeTask());
+      expect(result).toBe("ok");
+      expect(postIssueComment).not.toHaveBeenCalled();
     });
 
     describe("linear assignee mirror", () => {
@@ -1034,18 +1038,8 @@ describe("EventDispatcher", () => {
     });
 
     it("skips GitHub replies when GitHub webhooks are off: not posted, not held", async () => {
-      const integrations = makeIntegrations(false);
-      const d = new EventDispatcher(
-        taskRepo,
-        inboxRepo,
-        sandboxManager,
-        slackNotifier,
-        integrations,
-        holds,
-        new IntegrationHooks(integrations, inboxRepo),
-      );
       getByIdForTask.mockResolvedValue(ghCommentRow());
-      expect(await d.handle(responseEvent("555"), makeTask())).toBe("ok");
+      expect(await withGithubOff().handle(responseEvent("555"), makeTask())).toBe("ok");
       expect(postIssueComment).not.toHaveBeenCalled();
       expect(holds.of("github").heldTasks).toBe(0);
     });

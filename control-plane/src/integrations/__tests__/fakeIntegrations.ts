@@ -1,23 +1,22 @@
-import type { Integration, IntegrationName } from "../types";
+import type { Integration } from "../types";
 
-const noop = (name: IntegrationName): Integration => ({
-  name,
-  enabled: true,
+const noop = (): Integration => ({
   async deliver() {},
   async status() {
     return {};
   },
 });
 
-// A registry for tests: every integration a no-op (enabled, delivers nothing)
-// unless given. A new integration gets its default here, not in every test.
-export function fakeIntegrations<
-  O extends Partial<Record<IntegrationName, Pick<Integration, "status">>>,
->(overrides: O): Omit<Record<IntegrationName, Integration>, keyof O> & O {
-  const defaults: Record<IntegrationName, Integration> = {
-    linear: noop("linear"),
-    api: noop("api"),
-    github: noop("github"),
-  };
-  return { ...defaults, ...overrides };
+// The registry's enabled integrations, for tests: every one a no-op (delivers
+// nothing) unless given. A new integration gets its default here, not in every
+// test.
+export function fakeIntegrations<O extends Record<string, Integration>>(
+  overrides: O,
+): Record<string, Integration> & O {
+  return { linear: noop(), api: noop(), github: noop(), ...overrides };
 }
+
+// A webhook controller for integrations built in tests that receive no webhooks.
+export const NO_WEBHOOK = {
+  handleWebhook: (): Promise<Response> => Promise.reject(new Error("no webhooks in this test")),
+};

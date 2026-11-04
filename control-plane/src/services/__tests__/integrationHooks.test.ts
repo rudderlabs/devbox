@@ -16,19 +16,27 @@ const row = (id: string, kind = "assignment", source = "linear") =>
     source,
     reply_targets: [{ id: "sess-1", spec: { kind: "linear_session" } }],
   }) as unknown as InboxRow;
-const noop: Integration = { name: "api", enabled: true, async deliver() {}, async status() {} };
+const noop: Integration = {
+  async deliver() {},
+  async status() {
+    return {};
+  },
+};
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// Hooks over enabled linear and github integrations, or with linear disabled
+// (no instance) when `linear` is null.
 function hooksWith(
-  linear: Partial<Integration>,
+  linear: Partial<Integration> | null,
   github: Partial<Integration> = {},
   timeoutMs?: number,
 ) {
   const inboxRepo = { getAssignment: mock(() => Promise.resolve(row("a-1"))) };
-  const integrations = fakeIntegrations({
-    linear: { ...noop, name: "linear" as const, ...linear },
-    github: { ...noop, name: "github" as const, ...github },
+  const integrations: Record<string, Integration> = fakeIntegrations({
+    linear: { ...noop, ...linear },
+    github: { ...noop, ...github },
   });
+  if (linear === null) delete integrations.linear;
   const t = timeoutMs;
   const timeouts =
     t === undefined
@@ -57,21 +65,22 @@ describe("IntegrationHooks", () => {
     }
   });
 
-  it("skips a disabled integration's hooks: logged, never called, never held", async () => {
+  it("skips a disabled integration's hooks: logged, never held", async () => {
     const info = spyOn(logger, "info").mockImplementation(() => logger);
     try {
-      const assignee = mock(() => Promise.resolve(null));
-      const onPrOpened = mock(() => Promise.reject(new RetryableError("429")));
-      const { hooks } = hooksWith({ enabled: false, assignee, onPrOpened });
+      const { hooks, inboxRepo } = hooksWith(null);
       const pr = { url: "u", repo: "r", branch: "b" };
       expect(await hooks.assignee(task, row("a-1"), {})).toBeUndefined();
       expect(await hooks.prOpened(task, row("a-1"), pr, true)).toBeUndefined();
-      expect(assignee).not.toHaveBeenCalled();
-      expect(onPrOpened).not.toHaveBeenCalled();
-      expect(info).toHaveBeenCalledWith(
-        "assignee skipped: integration disabled",
-        expect.objectContaining({ taskId: "task-1", integration: "linear" }),
-      );
+      await hooks.taskStarted(task);
+      hooks.roundFinished(task, row("a-1"), "completed", true);
+      expect(inboxRepo.getAssignment).not.toHaveBeenCalled();
+      for (const hook of ["assignee", "onPrOpened", "onTaskStarted", "onRoundFinished"]) {
+        expect(info).toHaveBeenCalledWith(
+          `${hook} skipped: integration disabled`,
+          expect.objectContaining({ taskId: "task-1", integration: "linear" }),
+        );
+      }
     } finally {
       info.mockRestore();
     }

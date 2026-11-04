@@ -1,7 +1,7 @@
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { deliverToRound } from "../integrations/http";
-import type { Integration, IntegrationName } from "../integrations/types";
+import type { Integration } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { InboxMessage } from "../types/inboxMessage";
@@ -20,7 +20,7 @@ export class InboxService {
   constructor(
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private integrations: Record<IntegrationName, Integration>,
+    private integrations: Readonly<Record<string, Integration>>,
     private hooks: IntegrationHooks,
   ) {}
 

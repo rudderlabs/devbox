@@ -67,7 +67,7 @@ export class ReplyHolds {
   }
 
   // One integration's held tasks and oldest hold age, for its status body.
-  of(integration: IntegrationName): { heldTasks: number; oldestHoldAgeMs: number } {
+  of(integration: string): { heldTasks: number; oldestHoldAgeMs: number } {
     const now = Date.now();
     const out = { heldTasks: 0, oldestHoldAgeMs: 0 };
     for (const h of this.byTask.values()) {

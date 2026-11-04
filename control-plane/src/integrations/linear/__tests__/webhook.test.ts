@@ -5,12 +5,6 @@ import type { AgentSessionCreated, AgentSessionPrompted, HandleAgentSessionResul
 
 const WEBHOOK_SECRET = "test-webhook-secret";
 
-mock.module("../../../config", () => ({
-  config: {
-    linear: { webhookSecret: WEBHOOK_SECRET },
-  },
-}));
-
 const { LinearWebhookController } = await import("../webhook");
 const { logger } = await import("../../../logger");
 
@@ -51,6 +45,7 @@ let onSignedWebhook: ReturnType<typeof mock> = mock(() => {});
 const buildApp = (service: AgentSessionServiceLike) => {
   const controller = new LinearWebhookController(
     service as never,
+    WEBHOOK_SECRET,
     onSignedWebhook as never,
     () => FROZEN,
   );

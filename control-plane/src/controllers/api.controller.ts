@@ -1,7 +1,6 @@
 import type { Context } from "hono";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import type { Clock } from "../clock";
-import { taskSource } from "../db/schema";
 import { ApiError } from "../errors";
 import type { TaskSource } from "../integrations/types";
 import { logger } from "../logger";
@@ -32,6 +31,8 @@ export type ApiControllerOptions = {
   ssePollMs: number;
   sseMaxDurationMs: number;
   clock: Clock;
+  // The sources a task can have (IntegrationRegistry.taskSources).
+  taskSources: readonly string[];
 };
 
 const TITLE_MAX_CHARS = 256;
@@ -39,7 +40,6 @@ const TEXT_MAX_BYTES = 64 * 1024;
 const FLAGS_MAX = 16;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATES: readonly ApiTaskState[] = ["queued", "running", "idle", "failed"];
-const SOURCES: readonly string[] = taskSource.enumValues;
 
 export function errorBody(code: ApiErrorCode, message: string): ApiErrorBody {
   return { error: { code, message } };
@@ -66,7 +66,10 @@ export class ApiController {
 
   async listTasks(c: Context<ApiEnv>): Promise<Response> {
     try {
-      return c.json(await this.service.list(c.get("principal"), parseListQuery(c)), 200);
+      return c.json(
+        await this.service.list(c.get("principal"), parseListQuery(c, this.opts.taskSources)),
+        200,
+      );
     } catch (err) {
       return this.handleError(c, err);
     }
@@ -360,7 +363,7 @@ function parseIntParam(
   return n;
 }
 
-function parseListQuery(c: Context): ListTasksInput {
+function parseListQuery(c: Context, sources: readonly string[]): ListTasksInput {
   const q: ListTasksInput = {
     limit: parseIntParam(
       c.req.query("limit"),
@@ -372,9 +375,9 @@ function parseListQuery(c: Context): ListTasksInput {
   };
   const source = c.req.query("source");
   if (source !== undefined) {
-    if (!SOURCES.includes(source)) {
+    if (!sources.includes(source)) {
       throw invalid(
-        `source must be ${SOURCES.slice(0, -1).join(", ")} or ${SOURCES[SOURCES.length - 1]}`,
+        `source must be ${sources.slice(0, -1).join(", ")} or ${sources[sources.length - 1]}`,
       );
     }
     q.source = source as TaskSource;

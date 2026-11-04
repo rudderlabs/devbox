@@ -1,12 +1,11 @@
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import type { Integration } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
 
-// POST /webhook/<name> is registered only for an enabled integration that has
-// a webhook; any other name answers 404.
+// POST /webhook/<name> for each of `webhooks` (the registry's enabled
+// integrations that take webhooks); any other name answers 404.
 export function createWebhookRoutes(
-  integrations: Pick<Integration, "name" | "enabled" | "webhook">[],
+  webhooks: { name: string; webhook(c: Context): Promise<Response> }[],
 ): Hono {
   const app = new Hono();
 
@@ -29,10 +28,8 @@ export function createWebhookRoutes(
     await next();
   };
 
-  for (const integration of integrations) {
-    const webhook = integration.webhook?.bind(integration);
-    if (!integration.enabled || !webhook) continue;
-    app.post(`/webhook/${integration.name}`, webhookBodyLimit, readLimitedWebhookBody, webhook);
+  for (const { name, webhook } of webhooks) {
+    app.post(`/webhook/${name}`, webhookBodyLimit, readLimitedWebhookBody, webhook);
   }
   return app;
 }
