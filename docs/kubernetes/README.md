@@ -129,7 +129,7 @@ to save what you typed ([configuration.md](../configuration.md#secrets)):
 | `GITHUB_TOKEN` | The GitHub token. Falls back to `gh auth token` before the prompt. Not used with the GitHub App. |
 | `GITHUB_APP_PRIVATE_KEY_FILE` or `GITHUB_APP_PRIVATE_KEY` | The GitHub App's private key (a path, or the PEM), for devbox tokens. Never prompted for; falls back to the keychain entry `GITHUB_APP_PRIVATE_KEY`. |
 | `LLM_API_KEY` | The LLM API key. It must not be empty on Kubernetes. |
-| `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET` | Only for an integration enabled in the target file ([customizing.md](customizing.md#integrations)); `GITHUB_WEBHOOK_SECRET` for the GitHub App. GitLab's `GITLAB_WEBHOOK_SIGNING_TOKEN` is not read by the installer: put it in the Secret yourself ([GitLab](../gitlab.md#webhooks-notes-and-pipelines)). |
+| `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET` | Only for an integration enabled in the target file ([customizing.md](customizing.md#integrations)); `GITHUB_WEBHOOK_SECRET` for the GitHub App, `GITLAB_WEBHOOK_SIGNING_TOKEN` (or `GITLAB_WEBHOOK_SECRET`) for GitLab's webhooks ([GitLab](../gitlab.md#configure)). |
 
 It writes them only to Kubernetes Secrets in the `devbox` namespace, never to
 a file or a Helm value. Without a terminal, a missing secret stops the install.

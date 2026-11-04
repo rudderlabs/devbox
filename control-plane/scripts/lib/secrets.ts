@@ -18,7 +18,10 @@ export type SecretName =
   | "LINEAR_WEBHOOK_SECRET"
   | "SLACK_BOT_TOKEN"
   | "GITHUB_WEBHOOK_SECRET"
-  | "GITHUB_APP_PRIVATE_KEY";
+  | "GITHUB_APP_PRIVATE_KEY"
+  | "GITLAB_TOKEN"
+  | "GITLAB_WEBHOOK_SIGNING_TOKEN"
+  | "GITLAB_WEBHOOK_SECRET";
 
 const COMPOSE_SECRET_NAMES: readonly SecretName[] = [
   "GITHUB_TOKEN",
@@ -29,8 +32,14 @@ const COMPOSE_SECRET_NAMES: readonly SecretName[] = [
   "GITHUB_WEBHOOK_SECRET",
 ];
 
-// Slack is only wired up on Kubernetes.
-const K8S_SECRET_NAMES: readonly SecretName[] = [...COMPOSE_SECRET_NAMES, "SLACK_BOT_TOKEN"];
+// Slack and GitLab are only wired up on Kubernetes.
+const K8S_SECRET_NAMES: readonly SecretName[] = [
+  ...COMPOSE_SECRET_NAMES,
+  "SLACK_BOT_TOKEN",
+  "GITLAB_TOKEN",
+  "GITLAB_WEBHOOK_SIGNING_TOKEN",
+  "GITLAB_WEBHOOK_SECRET",
+];
 
 export const secretNamesFor = (d: Deployment): readonly SecretName[] =>
   d.kind === "compose" ? COMPOSE_SECRET_NAMES : K8S_SECRET_NAMES;
@@ -64,6 +73,9 @@ const LABELS: Record<SecretName, string> = {
   SLACK_BOT_TOKEN: "Slack bot token",
   GITHUB_WEBHOOK_SECRET: "GitHub webhook secret",
   GITHUB_APP_PRIVATE_KEY: "GitHub App private key",
+  GITLAB_TOKEN: "GitLab token",
+  GITLAB_WEBHOOK_SIGNING_TOKEN: "GitLab webhook signing token",
+  GITLAB_WEBHOOK_SECRET: "GitLab webhook secret token",
 };
 
 const EMPTY_IS_SET: ReadonlySet<SecretName> = new Set(["GITHUB_TOKEN", "LLM_API_KEY"]);

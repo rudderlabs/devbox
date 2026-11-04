@@ -8,14 +8,27 @@
 // are decoded in memory only. It never saves, removes or prompts.
 import { createPrivateKey } from "node:crypto";
 import { GithubAppError } from "../../src/githubToken/mint";
+import { checkGitlab } from "../gitlab/check";
 import { GithubAppSetupError, mintAppToken } from "../lib/githubApp";
 import { isPem, PrivateKeyError } from "../lib/githubAppKey";
-import { enabledGithubApp, enabledLinear } from "../lib/integrations";
+import {
+  enabledGithubApp,
+  enabledGitlab,
+  enabledLinear,
+  gitlabWebhookSecretName,
+} from "../lib/integrations";
 import { checkLinear } from "../linear/check";
-import { type DevboxConfig, githubRepos } from "../up/config";
+import { type DevboxConfig, githubRepos, gitlabRepos } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, PreflightError } from "../up/preflight";
 import { KubeError, kube, NAMESPACE, type Runner } from "./run";
-import { existingSecret, GITHUB_APP_SECRET, GITHUB_SECRET, INTEGRATIONS_SECRET } from "./secrets";
+import {
+  existingSecret,
+  GITHUB_APP_SECRET,
+  GITHUB_SECRET,
+  GITLAB_CA_SECRET,
+  GITLAB_SECRET,
+  INTEGRATIONS_SECRET,
+} from "./secrets";
 import type { Target } from "./target";
 import { userValue } from "./values";
 
@@ -32,11 +45,13 @@ const FORBIDDEN =
   "k8s:check needs read access to Secrets in namespace devbox: skip it, or run it with an account that has it";
 const NOT_CREATED = "not created yet (k8s:install creates it)";
 
-// Each enabled integration's keys in the integrations Secret.
+// Each enabled integration's keys in the integrations Secret. GitLab's one
+// key depends on integrations.gitlab.webhookAuth.
 const INTEGRATION_KEYS = {
   linear: ["LINEAR_CLIENT_SECRET", "LINEAR_WEBHOOK_SECRET"],
   slack: ["SLACK_BOT_TOKEN"],
   githubApp: ["GITHUB_WEBHOOK_SECRET"],
+  gitlab: [],
 } as const;
 
 class Forbidden extends Error {}
@@ -158,6 +173,9 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
   const enabled = (Object.keys(INTEGRATION_KEYS) as Array<keyof typeof INTEGRATION_KEYS>).filter(
     (name) => integrations[name]?.enabled,
   );
+  const gitlab = enabledGitlab(integrations);
+  const keysOf = (name: keyof typeof INTEGRATION_KEYS): readonly string[] =>
+    name === "gitlab" && gitlab ? [gitlabWebhookSecretName(gitlab)] : INTEGRATION_KEYS[name];
   // The user's existingSecret, else the installer's name for it.
   const secretOf = (key: string, installerName: string) => {
     const name = existingSecret(values, key);
@@ -190,6 +208,17 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
         { name: "DATABASE_URL", verbatim: false },
       );
     }
+    // The GitLab token Secret, and the CA bundle the installer wrote from
+    // gitlab.caFile (the instance's own; the chart mounts it as a Secret).
+    const gitlabSecret = cfg.gitlab
+      ? await secretItem(secretOf("gitlab", GITLAB_SECRET), { name: "token", verbatim: true })
+      : undefined;
+    const gitlabCa = cfg.gitlab?.caFile
+      ? await secretItem(
+          { name: GITLAB_CA_SECRET, path: "gitlab.caFile", owned: true },
+          { name: "ca.crt", verbatim: false },
+        )
+      : undefined;
     // The chart's integrations Secret is optional: used only with one enabled.
     const ints = enabled.length
       ? await secretItem(secretOf("integrations", INTEGRATIONS_SECRET))
@@ -238,6 +267,25 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
         return undefined;
       });
     }
+    if (cfg.gitlab && gitlabSecret) {
+      const instance = cfg.gitlab;
+      const gitlabToken = usable(gitlabSecret, "token", true, "GitLab token");
+      const ca = gitlabCa?.data?.["ca.crt"];
+      if (gitlabToken !== undefined) {
+        const trust = (target.values.gitlab ?? {}) as { trustedGroups?: unknown };
+        const trustedGroups = Array.isArray(trust.trustedGroups)
+          ? trust.trustedGroups.filter((g): g is string => typeof g === "string")
+          : [];
+        await serviceItem("GitLab token", async () => {
+          const id = await checkGitlab(instance, gitlabToken, gitlabRepos(cfg.repos), deps.fetch, {
+            requirePush: !opts.skipPushCheck,
+            ...(ca ? { ca } : {}),
+            ...(gitlab ? { webhooks: { trustedGroups } } : {}),
+          });
+          return `(devbox acts as ${id.username}, id ${id.id}, on GitLab ${id.version})`;
+        });
+      }
+    }
     const linear = enabledLinear(integrations);
     if (linear && ints) {
       const secret = usable(ints, "LINEAR_CLIENT_SECRET", false, "Linear client secret");
@@ -251,7 +299,7 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
 
     if (ints) {
       for (const name of enabled) {
-        for (const k of INTEGRATION_KEYS[name]) {
+        for (const k of keysOf(name)) {
           const what = `Secret ${ints.name}: ${k}`;
           if (!ints.data) skip(what, ints.reason ?? "");
           else {

@@ -36,20 +36,16 @@ mentioning note is one round), approvals as a signal, and an installer step
 
 ## Configure
 
-1. Create the token Secret in the `devbox` namespace. The chart never creates
-   it and the installer does not ask for it.
+Kubernetes only: the local Compose stack takes GitHub repos. The pieces are
+the ones every integration has: the setup in `devbox.config.json`, the
+deployment's settings in the target file, the secrets in Secrets the
+installer writes.
 
-   ```bash
-   kubectl -n devbox create secret generic devbox-gitlab --from-literal=token="$GITLAB_TOKEN"
-   # With a private CA:
-   kubectl -n devbox create secret generic gitlab-ca --from-file=ca.crt=./gitlab-ca.pem
-   ```
-
-2. Put the instance and the repos in `devbox.config.json`:
+1. Put the instance and the repos in `devbox.config.json`:
 
    ```json
    {
-     "gitlab": { "baseUrl": "https://gitlab.example.com" },
+     "gitlab": { "baseUrl": "https://gitlab.example.com", "caFile": "/etc/devbox/corp-ca.pem" },
      "repos": [
        { "url": "https://github.com/acme/widgets.git", "branch": "main" },
        { "url": "https://gitlab.example.com/platform/backend/api.git", "branch": "develop" }
@@ -59,22 +55,60 @@ mentioning note is one round), approvals as a signal, and an installer step
 
    A GitLab repo is `<gitlab.baseUrl>/<group>[/<subgroup>...]/<project>.git`.
    Nested groups are fine. Repo names (the last path segment) must be unique
-   across both hosts, because each is cloned to `/workspace/<name>`.
+   across both hosts, because each is cloned to `/workspace/<name>`. `caFile`
+   is the PEM of the instance's private CA, absolute path, only when it has
+   one; the installer puts it in a Secret for the chart.
 
-3. Name the Secret, and the CA bundle if any, in the target file's values:
+2. Run the setup, with the token in `GITLAB_TOKEN` or at its prompt:
 
-   ```yaml
-   secrets: { gitlab: { existingSecret: devbox-gitlab } }
-   ironProxy: { caBundle: gitlab-ca }   # only with a private CA
+   ```
+   bun run gitlab:setup --target <file> [--public-url <url>]
+                        [--trusted-group <group>]... [--trusted-user <name>]...
+                        [--secret-token] [--skip-webhook] [--skip-push-check] [--no-keychain]
    ```
 
-4. `bun run k8s:install --target <file>` as usual. With GitOps, set
-   `gitlab.baseUrl`, `repos`, `secrets.gitlab.existingSecret` and
-   `ironProxy.caBundle` directly ([values](../deploy/helm/devbox/README.md)).
+   It checks the token against the instance and every repo under it (the
+   project exists, the token can push and open merge requests; with the
+   webhooks, that it can read pipelines, jobs and the trusted groups'
+   members), learns the bot's identity from the token, registers a webhook
+   on each project with a signing token it generates, saves the token in the
+   system keychain (or shows it once), and writes `integrations.gitlab`,
+   `values.gitlab` (the trust lists) and `publicUrl` to the target file. It
+   applies nothing and never touches the cluster.
 
-The GitHub checks the installer runs (token, push access) cover the GitHub
-repos only; there is no GitLab preflight yet. A wrong token shows on the first
-task, as a failed push or merge request.
+   | Flag | Effect |
+   |---|---|
+   | `--target <file>` | The Kubernetes deployment. Required. |
+   | `--public-url <url>` | The public HTTPS URL GitLab sends webhooks to; else the saved `publicUrl`, else the Ingress ([GitHub: The public URL](github.md#the-public-url)). |
+   | `--trusted-group`, `--trusted-user` | Who may drive devbox from GitLab. Default: what the target file holds, else the first repo's group. |
+   | `--secret-token` | Verify webhooks with the legacy `X-Gitlab-Token` instead of the signing token. Chosen by itself below GitLab 19.1. |
+   | `--bot-username`, `--bot-user-id` | The bot, when the token sits in your own Secret and cannot be asked. |
+   | `--skip-webhook` | Register no webhook; create them by hand as below. |
+   | `--no-keychain` | Never read or write the system keychain. |
+
+   A token that may not manage webhooks (below Maintainer) gets the manual
+   instructions instead: URL `<public URL>/webhook/gitlab`, triggers
+   **Comments** and **Pipeline events**, the token setup printed.
+
+3. `bun run k8s:install --target <file>` as usual. It checks the token again,
+   writes `devbox-gitlab` (the token), `devbox-gitlab-ca` (the CA, with
+   `caFile`) and the webhook token into `devbox-integrations`, and sets
+   `secrets.gitlab.existingSecret`, `ironProxy.caBundle` and the
+   `integrations.gitlab` values for the chart. `bun run k8s:check` verifies
+   the Secrets and the token afterwards; `bun run gitlab:status` shows the
+   configuration, the control plane's view and whether the webhook URL
+   reaches devbox; `bun run gitlab:disable` turns the webhooks off, or with
+   `--forget` removes the block and the saved secrets.
+
+With GitOps, set the values directly ([values](../deploy/helm/devbox/README.md)):
+`gitlab.baseUrl`, `repos`, `secrets.gitlab.existingSecret` (a Secret with key
+`token`), `ironProxy.caBundle` (a Secret with key `ca.crt`), and for the
+webhooks `integrations.gitlab {enabled, botUsername, botUserId, ciResults}`,
+`gitlab.trustedGroups` or `gitlab.trustedUsers`, and
+`GITLAB_WEBHOOK_SIGNING_TOKEN` (or `GITLAB_WEBHOOK_SECRET`) in the
+integrations Secret. To bring your own token Secret, name it in
+`secrets.gitlab.existingSecret` in the target file's values: the installer
+then writes none and runs no token check (`k8s:check` does).
 
 ## Webhooks: notes and pipelines
 
@@ -96,41 +130,17 @@ id. The bot's own notes are ignored, and so is everything on merge requests it
 did not open. Approvals, `Merge Request Hook` events and notes without the
 mention are ignored.
 
-1. Put the bot's identity and the trust lists in the values:
+Deliveries are verified before anything is looked up: the signing token
+(Standard Webhooks `webhook-signature` over
+`webhook-id.webhook-timestamp.body`, five minutes of clock skew allowed; GitLab
+19.1+), or on an older instance the secret token in `X-Gitlab-Token`. With
+both configured a signed delivery must verify and an unsigned one falls back
+to the secret token, GitLab's own migration path. A rejected delivery is one
+`gitlab_webhook.rejected` log line with the reason.
 
-   ```yaml
-   integrations:
-     gitlab: { enabled: true, botUsername: group_123_bot_abc, botUserId: 4242 }
-   gitlab:
-     baseUrl: https://gitlab.example.com
-     trustedGroups: [platform]        # or trustedUsers: [alice, bob]
-   ```
-
-   `GET <baseUrl>/api/v4/user` with the token prints its user's `username`
-   and `id`.
-
-2. Create the webhook on each project (or once on the group, GitLab Premium):
-   URL `<public URL>/webhook/gitlab`; triggers **Comments** and **Pipeline
-   events**; a **signing token** (GitLab 19.1+; the chart reads it as
-   `GITLAB_WEBHOOK_SIGNING_TOKEN`). On an older instance use the **secret
-   token** instead (`GITLAB_WEBHOOK_SECRET`). Put it in the integrations Secret:
-
-   ```bash
-   kubectl -n devbox create secret generic devbox-integrations \
-     --from-literal=GITLAB_WEBHOOK_SIGNING_TOKEN="whsec_…"
-   ```
-
-   The public URL is the one GitHub and Linear use: the `ingress.webhooks`
-   host, else `ingress.api`, else a tunnel ([GitHub: The public
-   URL](github.md#the-public-url)). Deliveries are verified (Standard Webhooks
-   `webhook-signature` over `webhook-id.webhook-timestamp.body`, five minutes
-   of clock skew allowed), then gated on the actor before anything is looked
-   up. A rejected delivery is one `gitlab_webhook.rejected` log line with the
-   reason.
-
-3. The control plane now needs the GitLab token too, for replies and the
-   member lookups: the chart mounts `secrets.gitlab.existingSecret` into it
-   when the webhooks are on. Nothing else to do.
+The control plane needs the GitLab token too, for the replies and the member
+lookups: the chart mounts `secrets.gitlab.existingSecret` into it when the
+webhooks are on.
 
 `GET /api/integrations/gitlab` reports the token, the webhooks and the last
 verified delivery.

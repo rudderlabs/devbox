@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
+import { checkGitlab, type GitlabIdentity } from "../gitlab/check";
 import {
   appIdentity,
   GithubAppSetupError,
@@ -20,7 +21,13 @@ import {
   missingKeyMessage,
 } from "../lib/githubApp";
 import { type PrivateKey, PrivateKeyError, resolvePrivateKey } from "../lib/githubAppKey";
-import { type EnabledGithubApp, enabledGithubApp, enabledLinear } from "../lib/integrations";
+import {
+  type EnabledGithubApp,
+  enabledGithubApp,
+  enabledGitlab,
+  enabledLinear,
+  gitlabWebhookSecretName,
+} from "../lib/integrations";
 import type { Keychain } from "../lib/keychain";
 import {
   checkWithRetry,
@@ -31,7 +38,7 @@ import {
 } from "../lib/secrets";
 import { checkLinear, type LinearIdentity } from "../linear/check";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput, readCliProfile } from "../up/cliLogin";
-import { type DevboxConfig, githubRepos } from "../up/config";
+import { type DevboxConfig, githubRepos, gitlabRepos } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, type Identity } from "../up/preflight";
 import { pickClusterIP } from "./clusterIP";
 import { freePort, profileFor } from "./connect";
@@ -60,6 +67,8 @@ import {
   existingSecret,
   GITHUB_APP_SECRET,
   GITHUB_SECRET,
+  GITLAB_CA_SECRET,
+  GITLAB_SECRET,
   INSTALLER_LABEL,
   INTEGRATIONS_SECRET,
   type IntegrationSecretName,
@@ -221,6 +230,13 @@ export async function install(
   // Commits link to the App's bot; git values the user set still win.
   const appCommitIdentity = app ? appIdentity(app.slug, app.botUserId) : undefined;
 
+  // GitLab: the installer writes the token Secret unless the user brings
+  // one, and the CA bundle Secret from gitlab.caFile.
+  const ownGitlab = cfg.gitlab !== undefined && !existingSecret(deps.target.values, "gitlab");
+  const gitlabSecrets = {
+    ...(ownGitlab ? { gitlabSecret: GITLAB_SECRET } : {}),
+    ...(cfg.gitlab?.caFile ? { gitlabCaSecret: GITLAB_CA_SECRET } : {}),
+  };
   if (opts.render) {
     const values = chartValues(
       cfg,
@@ -229,6 +245,7 @@ export async function install(
         clusterIP: userClusterIP ?? (await pickClusterIP(k)),
         identity: appCommitIdentity,
         integrations,
+        ...gitlabSecrets,
       },
       overlay,
     );
@@ -294,6 +311,19 @@ export async function install(
   }
   const slackR = await resolveIf(integrations?.slack?.enabled, "SLACK_BOT_TOKEN");
   const webhookR = await resolveIf(integrations?.githubApp?.enabled, "GITHUB_WEBHOOK_SECRET");
+  // GitLab: the token, and with the webhooks on, the webhook token under the
+  // key integrations.gitlab.webhookAuth names. The CA file is read now, for
+  // the check and the Secret.
+  const gitlab = enabledGitlab(integrations ?? {});
+  let gitlabCa: string | undefined;
+  if (cfg.gitlab?.caFile) {
+    gitlabCa = deps.readFile(cfg.gitlab.caFile);
+    if (!gitlabCa) throw new KubeError(`gitlab.caFile ${cfg.gitlab.caFile}: cannot read it`);
+  }
+  let gitlabR = ownGitlab ? await resolveSecret("GITLAB_TOKEN", secretDeps) : undefined;
+  const gitlabWebhookR = gitlab
+    ? await resolveIf(true, gitlabWebhookSecretName(gitlab))
+    : undefined;
   // Unchecked: offered now, so a failing GitHub check does not lose them.
   if (llmR && opts.skipLlmCheck) await offerSave(llmR, secretDeps);
   if (linearR && opts.skipLinearCheck) {
@@ -302,6 +332,7 @@ export async function install(
   }
   if (slackR) await offerSave(slackR, secretDeps);
   if (webhookR) await offerSave(webhookR, secretDeps);
+  if (gitlabWebhookR) await offerSave(gitlabWebhookR, secretDeps);
   // The commit identity is the App's bot, or comes from a token resolved
   // here; otherwise the chart uses `git` from the values or its default.
   let identity: Identity | undefined = appCommitIdentity;
@@ -327,6 +358,32 @@ export async function install(
       checkGithub(token, githubRepos(cfg.repos), deps.fetch, { requirePush: !opts.skipPushCheck }),
     ));
     await offerSave(githubR, secretDeps);
+  }
+  if (gitlabR && cfg.gitlab) {
+    const instance = cfg.gitlab;
+    const trust = (deps.target.values.gitlab ?? {}) as { trustedGroups?: unknown };
+    const trustedGroups = Array.isArray(trust.trustedGroups)
+      ? trust.trustedGroups.filter((g): g is string => typeof g === "string")
+      : [];
+    let gitlabIdentity: GitlabIdentity;
+    ({ resolved: gitlabR, result: gitlabIdentity } = await checkWithRetry(
+      gitlabR,
+      secretDeps,
+      (token) =>
+        checkGitlab(instance, token, gitlabRepos(cfg.repos), deps.fetch, {
+          requirePush: !opts.skipPushCheck,
+          ...(gitlabCa !== undefined ? { ca: gitlabCa } : {}),
+          ...(gitlab ? { webhooks: { trustedGroups } } : {}),
+        }),
+    ));
+    await offerSave(gitlabR, secretDeps);
+    log(
+      `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`,
+    );
+  } else if (cfg.gitlab) {
+    log(
+      `Skipping the GitLab checks: the token is in your Secret "${existingSecret(values0, "gitlab")}"; run bun run k8s:check --target ${deps.targetPath} after install`,
+    );
   }
   if (opts.skipPushCheck) {
     log(
@@ -363,7 +420,7 @@ export async function install(
   const github = minted ?? (githubR ? { token: githubR.value } : undefined);
   const llm = llmR?.value ?? "";
   const integrationSecrets: Partial<Record<IntegrationSecretName, string>> = {};
-  for (const r of [linearR?.client, linearR?.webhook, slackR, webhookR]) {
+  for (const r of [linearR?.client, linearR?.webhook, slackR, webhookR, gitlabWebhookR]) {
     if (r) integrationSecrets[r.name as IntegrationSecretName] = r.value;
   }
 
@@ -412,6 +469,8 @@ export async function install(
   const secrets = userSecrets(values0, {
     github,
     githubApp: appKey && { pem: appKey.pem },
+    gitlab: gitlabR && { token: gitlabR.value },
+    gitlabCa: gitlabCa !== undefined ? { pem: gitlabCa } : undefined,
     llm,
     integrations: integrationSecrets,
   });
@@ -451,6 +510,21 @@ export async function install(
       "this install does not use the installer's copy of the GitHub App's private key",
     );
   }
+  // The GitLab Secrets the installer wrote for an instance that is gone
+  // (the installed release knew one), or whose token the user now brings,
+  // or whose CA is no longer configured.
+  const hadGitlab = cfg.gitlab !== undefined || previous?.gitlab !== undefined;
+  if (hadGitlab && !gitlabR) {
+    await deleteOwned(
+      GITLAB_SECRET,
+      cfg.gitlab
+        ? `the GitLab token comes from Secret "${existingSecret(values0, "gitlab")}"`
+        : "no GitLab instance is configured",
+    );
+  }
+  if (hadGitlab && gitlabCa === undefined) {
+    await deleteOwned(GITLAB_CA_SECRET, "gitlab.caFile is not set");
+  }
   // External tokens live in the user's Secret; a token the installer wrote
   // before is stale.
   if (app?.tokens === "external") {
@@ -468,7 +542,7 @@ export async function install(
   const values = chartValues(
     cfg,
     deps.target.values,
-    { clusterIP, publicBaseUrl: url, identity, integrations },
+    { clusterIP, publicBaseUrl: url, identity, integrations, ...gitlabSecrets },
     overlay,
   );
   const before = await templateHash(k);
@@ -635,7 +709,7 @@ then: bun run k8s:check --target ${deps.targetPath}`);
 devbox is installed in context ${context}. The CLI uses profile "${profile}".
 ${local ? `\n  bun run k8s:connect --target ${deps.targetPath}     # keep it running in another terminal` : ""}
   bun run devbox create "Add a /health endpoint to ${cfg.repos[0]?.owner}/${cfg.repos[0]?.name}"
-  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}`);
+  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}${gitlab ? `\n\nCheck GitLab with: bun run gitlab:status --target ${deps.targetPath}` : ""}`);
 }
 
 // A running `k8s:connect` already holds the profile's port: use it.

@@ -307,7 +307,7 @@ kube context, so a command never acts on a cluster you did not name.
 | `context` | yes | The kube context of the cluster. |
 | `profile` | no, default `k8s-<context>` | The CLI profile the installer writes. Lower-case letters, digits and `-`; the default is the context made lower-case with other characters replaced by `-`. |
 | `values` | no | Helm values for the chart, passed as they are. `storage.storageClass` and `storage.volumeSnapshotClass` are required by the chart. Sandbox sizing goes under `values.sandbox`; the Compose-only `devbox.config.json` block is ignored. `repos` and `llm` are refused: the installer copies the full `llm` block, including effort and stage overrides, from `devbox.config.json`. `integrations` is refused: it goes at the top level. |
-| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`, `notifySources`) and `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
+| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`, `notifySources`), `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`) and `gitlab` (`enabled`, `botUsername`, `botUserId`, `ciResults`, `webhookAuth`; written by `bun run gitlab:setup`, [docs/gitlab.md](gitlab.md)), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
 
 Any other key is an error: chart values go under `values`. The installer adds
 `repos`, `llm`, `integrations`, `ironProxy.clusterIP`,
@@ -796,7 +796,7 @@ trust. There are no defaults, and with nothing configured it reads none.
 | `GITHUB_TRUSTED_ORGS` | control plane | GitHub orgs whose members are trusted. Comma- or space-separated. |
 | `GITHUB_TRUSTED_USERS` | control plane | GitHub logins that are trusted. Comma- or space-separated. |
 | `HARNESS_TRUSTED_BOT_IDS` | sandbox | Numeric GitHub user IDs of bots, for example a review bot, whose comments are also trusted. Comma- or space-separated. |
-| `GITLAB_TRUSTED_GROUPS` | control plane | GitLab groups (`group` or `group/subgroup`) whose members, inherited ones included, are trusted on merge requests. Comma- or space-separated. |
+| `GITLAB_TRUSTED_GROUPS` | control plane | GitLab groups (`group` or `group/subgroup`) whose members, inherited ones included, are trusted on merge requests. Comma- or space-separated. `bun run gitlab:setup` fills the lists (`values.gitlab` in the target file). |
 | `GITLAB_TRUSTED_USERS` | control plane | GitLab usernames trusted on merge requests. Comma- or space-separated. |
 | `HARNESS_GITLAB_TRUSTED_BOT_IDS` | sandbox | Numeric GitLab user IDs of bots whose merge request notes are also trusted. |
 

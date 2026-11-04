@@ -73,9 +73,7 @@ describe("mrWebUrl / parseMrUrl", () => {
   it("returns null for other hosts, other objects and when GitLab is off", () => {
     expect(parseMrUrl("https://github.com/o/r/pull/1")).toBeNull();
     expect(parseMrUrl("https://gitlab.example.com/platform/api/-/issues/3")).toBeNull();
-    expect(
-      parseMrUrl("https://gitlab.example.com/platform/api/-/merge_requests/3", ""),
-    ).toBeNull();
+    expect(parseMrUrl("https://gitlab.example.com/platform/api/-/merge_requests/3", "")).toBeNull();
   });
 });
 
