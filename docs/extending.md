@@ -94,15 +94,25 @@ discussion to a follow-up only for `github` rounds
   disabled integration, bounds each call with a timeout and an abort signal,
   and logs a failure. `onTaskStarted` runs before every fresh-provision
   attempt, so it must be safe to repeat.
+- **The code host.** GitHub is the only code host, and the control plane
+  handles new pull requests itself
+  (`control-plane/src/services/codeHost.service.ts`). It posts a comment on
+  each one explaining @-mentions, but only while an enabled integration sets
+  `prMentionLogin` (the GitHub integration sets its bot login), and it assigns
+  the pull request to the person the task's integration returns from
+  `assignee()`, through that person's `githubAccount`. An integration whose
+  platform links GitHub accounts returns the link as it is, an account id or a
+  login, or `null` when the person hasn't linked one; one that can't link
+  accounts leaves it out.
 - **Reply targets.** Each round carries reply targets that say where the
   harness's answers go, each with a `spec` in the integration's own shape. The
   control plane stores the spec and hands it back to the `deliver` of the
   round's integration, which checks it and refuses anything else.
 - **The boundary.** A file in the folder imports only its own folder, the
-  shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), the
-  API clients in `control-plane/src/clients/`, the experimental-flag parser,
-  the database row types and packages: never another integration or the rest
-  of the control plane.
+  shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), its
+  own API clients in `control-plane/src/clients/` (those named after it), the
+  experimental-flag parser, the database row types and packages: never another
+  integration or the rest of the control plane.
   `control-plane/src/integrations/__tests__/boundary.test.ts` checks this.
 
 The database and the CLI don't list the sources: `tasks.source` is text, and
