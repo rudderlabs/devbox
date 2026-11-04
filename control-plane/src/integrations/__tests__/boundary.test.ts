@@ -77,7 +77,7 @@ describe("integration folders", () => {
     const code = [
       'import type { Task } from "../../db/schema";',
       'import { type Person } from "../../db/schema";',
-      'import { taskSource, type Task as T } from "../../db/schema";',
+      'import { tasks, type Task as T } from "../../db/schema";',
       'import {\n  type Logger, // isn\'t "core"; really\n  ReplyTarget,\n} from "../types";',
       'import type { InboxRow /* it\'s "a row" */ } from "../../repositories/inbox.repository";',
       'import { /* "x"; */ y } /* from "../types" */ from "../../services/inbox.service";',

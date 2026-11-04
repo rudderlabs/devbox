@@ -2,7 +2,6 @@ import type { Context } from "hono";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import type { Clock } from "../clock";
 import { ApiError } from "../errors";
-import type { TaskSource } from "../integrations/types";
 import { logger } from "../logger";
 import type {
   ApiTaskService,
@@ -148,7 +147,7 @@ export class ApiController {
   // Last-Event-ID / ?after=. Errors before the first byte are JSON; errors
   // after are logged and close the stream (no message to the client).
   async streamEvents(c: Context<ApiEnv>): Promise<Response> {
-    let target: { id: string; source: TaskSource };
+    let target: { id: string; source: string };
     let start: number;
     try {
       start = parseStreamStart(c.req.header("last-event-id"), c.req.query("after"));
@@ -211,7 +210,7 @@ export class ApiController {
 
   private async runStream(
     stream: SSEStreamingApi,
-    target: { id: string; source: TaskSource },
+    target: { id: string; source: string },
     start: number,
     signal: AbortSignal,
   ): Promise<void> {
@@ -380,7 +379,7 @@ function parseListQuery(c: Context, sources: readonly string[]): ListTasksInput 
         `source must be ${sources.slice(0, -1).join(", ")} or ${sources[sources.length - 1]}`,
       );
     }
-    q.source = source as TaskSource;
+    q.source = source;
   }
   const state = c.req.query("state");
   if (state !== undefined) {

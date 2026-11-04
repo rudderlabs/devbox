@@ -4,7 +4,6 @@ import { config } from "./config";
 import { ApiController } from "./controllers/api.controller";
 import { HealthController } from "./controllers/health.controller";
 import { db } from "./db";
-import { type Task, taskSource } from "./db/schema";
 import { definitions } from "./integrations";
 import { api } from "./integrations/api";
 import { apiTaskRepository } from "./repositories/apiTask.repository";
@@ -31,11 +30,6 @@ export type AppBundle = {
   taskProcessor: TaskProcessorService;
   stopApiStreams: () => void;
 };
-
-// The claim query and GET /api/tasks?source= compare against the task_source
-// type, which accepts only its own values.
-const isTaskSource = (s: string): s is Task["source"] =>
-  (taskSource.enumValues as readonly string[]).includes(s);
 
 // Trust lists are forwarded to the sandbox only when configured.
 function joinIfAny(list: string[]): string | undefined {
@@ -88,7 +82,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
   });
   // Only these sources are claimed and reconciled, so an older image never
   // works a task whose source it doesn't know.
-  const taskSources = registry.taskSources.filter(isTaskSource);
+  const taskSources = registry.taskSources;
   // The enabled integrations, for sends and hooks.
   const integrations = registry.live;
   // Integrations' lifecycle hooks; TaskProcessor.stop() drains detached ones.

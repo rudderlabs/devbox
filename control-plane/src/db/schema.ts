@@ -4,7 +4,6 @@ import {
   bigserial,
   index,
   jsonb,
-  pgEnum,
   pgSequence,
   pgTable,
   text,
@@ -12,8 +11,6 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-
-export const taskSource = pgEnum("task_source", ["linear", "api"]);
 
 // API task keys are `${API_TASK_KEY_PREFIX}${nextval}`. The sequence is not tied
 // to the prefix, so changing the prefix never reuses a number.
@@ -40,7 +37,9 @@ export const tasks = pgTable(
   "tasks",
   {
     id: uuid("id").primaryKey().default(sql`uuidv7()`),
-    source: taskSource("source").notNull(),
+    // The name of the integration that created the task. Plain text: the
+    // integrations registered in the code are the only list of sources.
+    source: text("source").notNull(),
     externalId: text("external_id").notNull(),
     // The human task key (ABC-123, DBX-API-42). Sent to the harness as
     // task_key. Set once at creation and never re-derived from external_url.

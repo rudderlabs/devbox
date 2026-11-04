@@ -1,5 +1,5 @@
 import type { Task } from "../db/schema";
-import type { Person, TaskSource } from "../integrations/types";
+import type { Person } from "../integrations/types";
 import { logger } from "../logger";
 import {
   type InboxRepository,
@@ -100,8 +100,7 @@ export class BoundTaskService implements TaskService {
     if ("hint" in p.key && !p.externalId) throw new Error("assign: a hint key needs externalId");
     const { prevSandboxId, prevTargetId, ...t } = await this.deps.taskRepo.assign({
       ...p,
-      // The task_source enum lists only the sources that create tasks.
-      source: this.source as TaskSource,
+      source: this.source,
       key:
         "hint" in p.key
           ? { hint: p.key.hint.replace(/[^A-Za-z0-9-]/g, "-") } // branch-safe
@@ -169,7 +168,7 @@ export class BoundTaskService implements TaskService {
   }
 
   findTask(externalId: string): Promise<Task | null> {
-    return this.deps.taskRepo.findByExternalId(this.source as TaskSource, externalId);
+    return this.deps.taskRepo.findByExternalId(this.source, externalId);
   }
 
   findTaskByPrUrl(prUrl: string): Promise<Task | null> {

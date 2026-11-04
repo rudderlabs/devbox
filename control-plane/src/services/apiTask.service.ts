@@ -1,5 +1,4 @@
 import { ApiError } from "../errors";
-import type { TaskSource } from "../integrations/types";
 import type { ApiTaskRecord, ApiTaskRepository } from "../repositories/apiTask.repository";
 import type { ReplyTarget } from "../repositories/inbox.repository";
 import type { TaskEventRepository, TaskEventRow } from "../repositories/taskEvent.repository";
@@ -23,7 +22,7 @@ export type CreateTaskInput = {
   experimentalFlags: string[];
 };
 export type ListTasksInput = {
-  source?: TaskSource;
+  source?: string;
   createdBy?: "me" | string;
   state?: ApiTaskState;
   before?: string;
@@ -125,7 +124,7 @@ export class ApiTaskService {
     return { events, next_after: events[events.length - 1]?.id ?? after, logging: "available" };
   }
 
-  async streamTarget(ref: string): Promise<{ id: string; source: TaskSource }> {
+  async streamTarget(ref: string): Promise<{ id: string; source: string }> {
     const task = await this.resolve(ref);
     return { id: task.id, source: task.source };
   }

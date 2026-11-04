@@ -1,6 +1,5 @@
 import { type SQL, sql } from "drizzle-orm";
 import { db } from "../db";
-import type { TaskSource } from "../integrations/types";
 import type { ApiRound, ApiTaskState } from "../types/api";
 
 // The API read model. API tasks are written through TaskService.
@@ -8,7 +7,7 @@ import type { ApiRound, ApiTaskState } from "../types/api";
 export type ApiTaskRecord = {
   id: string;
   key: string;
-  source: TaskSource;
+  source: string;
   title: string;
   description: string | null;
   external_url: string;
@@ -24,7 +23,7 @@ export type ApiTaskRecord = {
 };
 
 export type ApiTaskListFilter = {
-  source?: TaskSource;
+  source?: string;
   // undefined = no filter; null = matches nothing (created_by=me with auth off).
   createdBy?: string | null;
   state?: ApiTaskState;

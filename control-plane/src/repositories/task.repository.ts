@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "../db";
 import type { Task } from "../db/schema";
-import type { Person, TaskSource } from "../integrations/types";
+import type { Person } from "../integrations/types";
 import { logger } from "../logger";
 import type { TaskRef } from "../services/task.service";
 import type { HarnessEvent } from "../types/harnessEvent";
@@ -33,7 +33,7 @@ export class TaskRepository {
   // Returns the preempted sandbox for the caller to kill after commit, and on
   // a restart the replaced delegation's target id.
   async assign(p: {
-    source: TaskSource;
+    source: string;
     externalId?: string; // required with a hint key; a sequence key is its own
     key: { hint: string } | { sequencePrefix: string };
     title: string;
@@ -632,7 +632,7 @@ export class TaskRepository {
 
   // tasks.external_id is the platform's id (the Linear issue UUID, the API
   // task key).
-  async findByExternalId(source: TaskSource, externalId: string): Promise<Task | null> {
+  async findByExternalId(source: string, externalId: string): Promise<Task | null> {
     const rows = await db
       .select()
       .from(schema.tasks)
@@ -752,7 +752,7 @@ export class TaskRepository {
 // Raw row shape from db.execute (snake_case).
 type RawTaskRow = {
   id: string;
-  source: TaskSource;
+  source: string;
   external_id: string;
   key: string;
   created_by: string | null;

@@ -1,9 +1,8 @@
 import type { Context } from "hono";
-import type { Task, taskSource } from "../db/schema";
+import type { Task } from "../db/schema";
 import type { logger } from "../logger";
 import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
 import type { TaskService } from "../services/task.service";
-import type { ApiTaskSource } from "../types/api";
 import type { Outbound, SendCtx } from "./outbound";
 
 // What an integration module may use from core, besides ./outbound, ./http
@@ -12,17 +11,6 @@ export type { InboxRow as Round, ReplyTarget } from "../repositories/inbox.repos
 export type { TaskService } from "../services/task.service";
 export type Env = Record<string, string | undefined>;
 export type Logger = typeof logger;
-
-// The sources a task can have (the task_source enum).
-export type TaskSource = (typeof taskSource.enumValues)[number];
-
-// Compile-time check: the literal union kept where db/schema can't be imported
-// (types/api.ts is bundled into the CLI) matches the enum, so a new source
-// fails the build until both are updated.
-type Equal<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-type Assert<T extends true> = T;
-export type SourceChecks = [Assert<Equal<ApiTaskSource, TaskSource>>];
 
 // One per integration module; integrations/index.ts lists them all.
 export interface IntegrationDefinition<C = unknown> {
