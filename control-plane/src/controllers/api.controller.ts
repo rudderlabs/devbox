@@ -354,6 +354,9 @@ function parseIntParam(
   return n;
 }
 
+// "a", "a or b", "a, b, or c".
+const OR_LIST = new Intl.ListFormat("en", { type: "disjunction" });
+
 function parseListQuery(c: Context, sources: readonly string[]): ListTasksInput {
   const q: ListTasksInput = {
     limit: parseIntParam(
@@ -367,9 +370,7 @@ function parseListQuery(c: Context, sources: readonly string[]): ListTasksInput 
   const source = c.req.query("source");
   if (source !== undefined) {
     if (!sources.includes(source)) {
-      throw invalid(
-        `source must be ${sources.slice(0, -1).join(", ")} or ${sources[sources.length - 1]}`,
-      );
+      throw invalid(`source must be ${OR_LIST.format(sources)}`);
     }
     q.source = source;
   }

@@ -92,7 +92,7 @@ export class IntegrationRegistry {
   readonly taskSources: string[];
   // The enabled integrations by name. Core reaches them only through for(),
   // webhooks(), status() and prMentionLogin().
-  private readonly live: Readonly<Record<string, Integration>>;
+  private readonly live = new Map<string, Integration>();
   private readonly definitions = new Map<string, IntegrationDefinition>();
   private readonly taskServices = new Map<string, TaskService>();
   private readonly holds: Pick<ReplyHolds, "of">;
@@ -123,13 +123,11 @@ export class IntegrationRegistry {
       );
     }
     this.taskSources = definitions.filter((d) => d.createsTasks).map((d) => d.name);
-    const live: Record<string, Integration> = {};
     for (const def of definitions) {
       const cfg = configs.get(def.name);
       if (cfg === undefined) continue;
-      live[def.name] = def.create({ tasks: this.tasks(def.name), log: logger }, cfg);
+      this.live.set(def.name, def.create({ tasks: this.tasks(def.name), log: logger }, cfg));
     }
-    this.live = live;
   }
 
   // The TaskService bound to `name`: the one its integration was given.
@@ -171,12 +169,12 @@ export class IntegrationRegistry {
   // The login @-mentions on devbox's PRs go to, while an enabled integration
   // takes them.
   prMentionLogin(): string | undefined {
-    return Object.values(this.live).find((i) => i.prMentionLogin)?.prMentionLogin;
+    return [...this.live.values()].find((i) => i.prMentionLogin)?.prMentionLogin;
   }
 
   // The enabled integrations that take webhooks.
   webhooks(): { name: string; webhook(c: Context): Promise<Response> }[] {
-    return Object.entries(this.live).flatMap(([name, i]) =>
+    return [...this.live].flatMap(([name, i]) =>
       i.webhook ? [{ name, webhook: i.webhook.bind(i) }] : [],
     );
   }
@@ -186,7 +184,7 @@ export class IntegrationRegistry {
   status(name: string): Promise<object> | undefined {
     const def = this.definitions.get(name);
     if (!def) return undefined;
-    const live = this.live[name];
+    const live = this.live.get(name);
     return (async () => ({
       ...(live ? await live.status() : def.disabledStatus()),
       holds: this.holds.of(name),
@@ -202,7 +200,7 @@ export class IntegrationRegistry {
     const log = { ...meta, inboxId: round.id, source: round.source, targetId: target.id };
     // A source this build doesn't know (rows written by a newer build before
     // a rollback) or a disabled integration has no instance.
-    const live: Integration | undefined = this.live[round.source];
+    const live = this.live.get(round.source);
     if (!live) {
       logger.info(`${message.type} skipped: integration unknown or disabled`, log);
       return "ok";
@@ -230,7 +228,7 @@ export class IntegrationRegistry {
     run: (ctx: HookCtx, live: Integration) => Promise<T> | undefined,
     logMeta: Record<string, unknown> = {},
   ): Promise<T | undefined> {
-    const live: Integration | undefined = this.live[name];
+    const live = this.live.get(name);
     if (!live?.[hook]) return undefined;
     const meta = { ...logMeta, taskId: task.id, integration: name };
     // false once a restart re-pended the assignment under a new id, and when

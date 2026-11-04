@@ -329,6 +329,9 @@ describe("IntegrationRegistry.for: deliver", () => {
       expect(await r.for("jira").deliver(row("j-1", "comment", "jira"), target, reply, meta)).toBe(
         "ok",
       );
+      // A name that is also an Object property is still unknown.
+      const proto = row("p-1", "comment", "constructor");
+      expect(await r.for("constructor").deliver(proto, target, reply, meta)).toBe("ok");
       expect(info.mock.calls).toEqual([
         [
           "reply skipped: integration unknown or disabled",
@@ -337,6 +340,10 @@ describe("IntegrationRegistry.for: deliver", () => {
         [
           "reply skipped: integration unknown or disabled",
           { taskId: "task-1", inboxId: "j-1", source: "jira", targetId: "sess-1" },
+        ],
+        [
+          "reply skipped: integration unknown or disabled",
+          { taskId: "task-1", inboxId: "p-1", source: "constructor", targetId: "sess-1" },
         ],
       ]);
     } finally {
