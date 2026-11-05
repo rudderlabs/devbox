@@ -21,9 +21,9 @@ import type { Fetch } from "../up/preflight";
 import {
   checkGitlab,
   type GitlabIdentity,
+  identityKnown,
   SIGNING_TOKEN_MIN_VERSION,
   versionAtLeast,
-  identityKnown,
 } from "./check";
 import type { GitlabDeployment } from "./deployment";
 

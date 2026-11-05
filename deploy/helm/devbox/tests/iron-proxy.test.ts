@@ -317,4 +317,21 @@ describe("iron-proxy config with a GitLab instance", () => {
     const plain = (await chartConfig("https://llm.example.com/v1")).rendered;
     expect("GITLAB_BASE_URL" in envOf(plain["Deployment/devbox/devbox-control-plane"] as Doc)).toBe(false);
   });
+
+  it("passes gitlab.git as the commit identity for GitLab repos, next to git, only when set", async () => {
+    const envOf = (doc: Doc) =>
+      Object.fromEntries(doc.spec.template.spec.containers[0].env.map((e: Doc) => [e.name, e.value]));
+    const { rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      "gitlab.git.name=devbox",
+      "gitlab.git.email=2-devbox@users.noreply.git.example.com",
+    ]);
+    const env = envOf(rendered["Deployment/devbox/devbox-control-plane"] as Doc);
+    expect(env.SANDBOX_GITLAB_GIT_NAME).toBe("devbox");
+    expect(env.SANDBOX_GITLAB_GIT_EMAIL).toBe("2-devbox@users.noreply.git.example.com");
+    // The deployment's own identity is untouched.
+    expect(env.SANDBOX_GIT_NAME).toBe("devbox");
+    const unset = (await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB)).rendered;
+    expect("SANDBOX_GITLAB_GIT_NAME" in envOf(unset["Deployment/devbox/devbox-control-plane"] as Doc)).toBe(false);
+  });
 });

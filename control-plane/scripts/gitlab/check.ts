@@ -345,10 +345,10 @@ export function botMismatch(
   return `integrations.gitlab names the bot ${gitlab.botUsername} (id ${gitlab.botUserId}), but the GitLab token belongs to ${identity.username} (id ${identity.id}).`;
 }
 
-// The commit identity when there is no GitHub identity to borrow: the GitLab
-// user's name and GitLab's private commit email form
-// (<id>-<username>@users.noreply.<host>), which GitLab attributes to that user.
-// None when the token may not read its own user.
+// The commit identity for GitLab repos (and for every repo when there is no
+// GitHub identity): the GitLab user's name and GitLab's private commit email
+// form (<id>-<username>@users.noreply.<host>), which GitLab attributes to that
+// user. None when the token may not read its own user.
 export function gitlabCommitIdentity(
   instance: Pick<GitlabConfig, "baseUrl">,
   identity: GitlabIdentity,

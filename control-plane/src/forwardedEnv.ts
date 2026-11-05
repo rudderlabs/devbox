@@ -34,13 +34,15 @@ export const FORWARDED_HARNESS_ENV_NAMES = [
 ] as const;
 
 // These are harness settings too, but SandboxManager derives them from the
-// control plane's GITHUB_TRUSTED_* and GITLAB_TRUSTED_* configuration rather
-// than forwarding them.
+// control plane's GITHUB_TRUSTED_*, GITLAB_TRUSTED_* and SANDBOX_GITLAB_GIT_*
+// configuration rather than forwarding them.
 export const CONTROL_PLANE_DERIVED_HARNESS_ENV_NAMES = [
   "HARNESS_TRUSTED_ORGS",
   "HARNESS_TRUSTED_USERS",
   "HARNESS_GITLAB_TRUSTED_GROUPS",
   "HARNESS_GITLAB_TRUSTED_USERS",
+  "HARNESS_GITLAB_GIT_NAME",
+  "HARNESS_GITLAB_GIT_EMAIL",
 ] as const;
 
 export const HARNESS_CONFIGURATION_ENV_NAMES = [

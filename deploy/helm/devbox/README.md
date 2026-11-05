@@ -34,6 +34,8 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | github.trustedOrgs | list | `[]` | GitHub orgs whose members may drive devbox. Required with trustedUsers (either) when the GitHub App is enabled. |
 | github.trustedUsers | list | `[]` | GitHub users who may drive devbox. Required with trustedOrgs (either) when the GitHub App is enabled. |
 | gitlab.baseUrl | string | `""` | A GitLab instance repos may live on, self-managed or https://gitlab.com, for example https://gitlab.example.com (a relative URL root such as https://example.com/gitlab is fine; the default port only). Repos under it clone, push and open merge requests there with the token in secrets.gitlab.existingSecret. Empty turns GitLab off. |
+| gitlab.git.email | string | `""` |  |
+| gitlab.git.name | string | `""` | Commit identity for commits on GitLab repos, instead of `git` above (the GitHub user's). `bun run k8s:install` sets the token's GitLab user. Both or neither. |
 | gitlab.trustedGroups | list | `[]` | GitLab groups (`group` or `group/subgroup`) whose members may drive devbox. Required with trustedUsers (either) when integrations.gitlab is enabled. |
 | gitlab.trustedUsers | list | `[]` | GitLab usernames who may drive devbox. Required with trustedGroups (either) when integrations.gitlab is enabled. |
 | images.controlPlane | string | `"rudderlabs/devbox-control-plane"` | Control-plane image repository. Required; the default is the published image. |

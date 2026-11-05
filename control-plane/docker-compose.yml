@@ -186,6 +186,11 @@ services:
       GITLAB_CI_RESULT_ENABLED: ${GITLAB_CI_RESULT_ENABLED:-}
       GITLAB_TRUSTED_GROUPS: ${GITLAB_TRUSTED_GROUPS:-}
       GITLAB_TRUSTED_USERS: ${GITLAB_TRUSTED_USERS:-}
+      # The commit identity for GitLab repos (the token's GitLab user), which
+      # the harness applies per repo in place of the image's own; empty when
+      # `bun run up` could not learn it.
+      SANDBOX_GITLAB_GIT_NAME: ${SANDBOX_GITLAB_GIT_NAME:-}
+      SANDBOX_GITLAB_GIT_EMAIL: ${SANDBOX_GITLAB_GIT_EMAIL:-}
       # The instance's private CA for the control plane's own TLS (Bun reads
       # it once, at start); empty without one. The file always exists:
       # `bun run up` writes it empty when gitlab.caFile is not set.

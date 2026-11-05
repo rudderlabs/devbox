@@ -139,6 +139,26 @@ integrations Secret. To bring your own token Secret, name it in
 `secrets.gitlab.existingSecret` in the target file's values: the installer
 then writes none and runs no token check (`k8s:check` does).
 
+## Commit identity
+
+Commits on GitLab repos are authored as the token's GitLab user: its name and
+GitLab's private commit email, `<id>-<username>@users.noreply.<host>`, which
+GitLab attributes to that account. Commits on GitHub repos keep the GitHub
+identity ([configuration.md](configuration.md#the-github-token)), so a
+deployment with both hosts shows the right author on each.
+
+`bun run up` and `k8s:install` take the identity from the token check and pass
+it on. On Kubernetes, set it yourself when the installer cannot know it: with
+your own GitLab token Secret (`existingSecret`), with a plain Helm install, or
+with a token that may not read its own user and no bot configured. It is
+`gitlab.git.name` and `gitlab.git.email` under `values`, both or neither, and a
+value you set wins. Unset, commits on GitLab repos carry the deployment's one
+identity, like every other commit.
+
+The harness applies it at commit time, per repo, from the repo's origin. With
+harness-managed commit signing the signer's identity stays on every commit,
+because the signature is checked against the committer.
+
 ## Webhooks: notes and pipelines
 
 With `integrations.gitlab.enabled`, the control plane serves

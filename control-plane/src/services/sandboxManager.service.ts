@@ -78,6 +78,9 @@ export type SandboxManagerOptions = {
   // reconcile-tick Files-API call, independent of requestTimeoutSeconds.
   reconcileFilesTimeoutMs: number;
   gitIdentity?: GitIdentity;
+  // The commit identity for repos on the GitLab instance; the harness applies
+  // it per repo (HARNESS_GITLAB_GIT_NAME / _EMAIL).
+  gitlabGitIdentity?: GitIdentity;
   // Where each task's workspace volume is minted from (see config.ts):
   // k8s → PVC from the latest ready VolumeSnapshot in `pvcNamespace`, resolved
   // at creation time so each task gets the freshest repos; docker → Docker
@@ -127,6 +130,7 @@ export class SandboxManager {
   private readonly readyTimeoutSeconds: number;
   private readonly reconcileFilesTimeoutMs: number;
   private readonly gitIdentity: GitIdentity | undefined;
+  private readonly gitlabGitIdentity: GitIdentity | undefined;
   private readonly sandboxRuntime: "k8s" | "docker";
   private readonly reposBaseVolume: string;
   private readonly docker: DockerVolumeClient;
@@ -161,6 +165,7 @@ export class SandboxManager {
     this.readyTimeoutSeconds = opts.readyTimeoutSeconds;
     this.reconcileFilesTimeoutMs = opts.reconcileFilesTimeoutMs;
     this.gitIdentity = opts.gitIdentity;
+    this.gitlabGitIdentity = opts.gitlabGitIdentity;
     this.sandboxRuntime = opts.sandboxRuntime;
     this.reposBaseVolume = opts.reposBaseVolume;
     this.docker = opts.docker ?? dockerClient;
@@ -481,6 +486,13 @@ export class SandboxManager {
       env.GIT_AUTHOR_EMAIL = email;
       env.GIT_COMMITTER_NAME = name;
       env.GIT_COMMITTER_EMAIL = email;
+    }
+    // Only from the control plane's own setting, like the trust lists.
+    delete env.HARNESS_GITLAB_GIT_NAME;
+    delete env.HARNESS_GITLAB_GIT_EMAIL;
+    if (this.gitlabGitIdentity) {
+      env.HARNESS_GITLAB_GIT_NAME = this.gitlabGitIdentity.name;
+      env.HARNESS_GITLAB_GIT_EMAIL = this.gitlabGitIdentity.email;
     }
     for (const flag of experimentalFlags) {
       const key = experimentalEnvName(flag);

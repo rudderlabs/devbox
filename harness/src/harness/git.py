@@ -539,6 +539,7 @@ def commit_one_repo(
                 run_cmd(
                     ["git", "-C", str(repo), "commit", "-m", commit_message],
                     check=True,
+                    env=commit_identity_env(repo),
                 )
             except subprocess.CalledProcessError as e:
                 detail = e.stderr.strip() or e.stdout.strip() or str(e)
@@ -565,6 +566,7 @@ def commit_one_repo(
             run_cmd(
                 ["git", "-C", str(repo), "commit", "-m", commit_message],
                 check=True,
+                env=commit_identity_env(repo),
             )
         except subprocess.CalledProcessError as e:
             detail = e.stderr.strip() or e.stdout.strip() or str(e)
@@ -976,7 +978,11 @@ def update_existing_branch(repo: Path, *, commit_message: str) -> dict[str, str]
         raise CommitPublishError(f"No working tree changes in {repo}", branch=branch)
 
     try:
-        run_cmd(["git", "-C", str(repo), "commit", "-m", commit_message], check=True)
+        run_cmd(
+            ["git", "-C", str(repo), "commit", "-m", commit_message],
+            check=True,
+            env=commit_identity_env(repo),
+        )
     except subprocess.CalledProcessError as e:
         detail = e.stderr.strip() or e.stdout.strip() or str(e)
         raise CommitPublishError(
@@ -1118,6 +1124,42 @@ def _resolve_signing_key_fingerprint(configured: str | None) -> str:
             f"Multiple secret GPG keys are available; set {GPG_KEY_ID_ENV} explicitly"
         )
     return fingerprints[0]
+
+
+GITLAB_GIT_NAME_ENV = "HARNESS_GITLAB_GIT_NAME"
+GITLAB_GIT_EMAIL_ENV = "HARNESS_GITLAB_GIT_EMAIL"
+
+
+def commit_identity_env(repo: Path) -> dict[str, str] | None:
+    """The author and committer for a commit in `repo`, when they differ from
+    the sandbox's own.
+
+    The sandbox has one commit identity (GIT_AUTHOR_* / GIT_COMMITTER_*, the
+    GitHub user's or App bot's). A repo on the GitLab instance takes the GitLab
+    identity the control plane passes instead, so a merge request's commits are
+    attributed to the account that pushes them and pass a "committer must be a
+    GitLab user" push rule. None (no override) for a GitHub repo, without a
+    GitLab identity, or with harness-managed signing, where the signer's
+    identity must match the key.
+    """
+    name = os.environ.get(GITLAB_GIT_NAME_ENV, "").strip()
+    email = os.environ.get(GITLAB_GIT_EMAIL_ENV, "").strip()
+    if not name or not email:
+        return None
+    if any(_git_signing_inputs()[:3]):
+        return None
+    try:
+        kind, _owner, _repo = parse_remote_url(remote_origin_url(repo))
+    except RuntimeError:
+        return None
+    if kind != "gitlab":
+        return None
+    return {
+        "GIT_AUTHOR_NAME": name,
+        "GIT_AUTHOR_EMAIL": email,
+        "GIT_COMMITTER_NAME": name,
+        "GIT_COMMITTER_EMAIL": email,
+    }
 
 
 def _git_signing_inputs() -> tuple[str | None, str | None, str | None, str | None]:

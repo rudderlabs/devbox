@@ -801,9 +801,12 @@ class TestNativeSignedPublish(unittest.TestCase):
                     check=True,
                 ),
                 mock.call(["git", "-C", str(repo), "add", "-A"], check=True),
+                # env=None: no GitLab commit identity is configured, so the
+                # commit keeps the sandbox's own.
                 mock.call(
                     ["git", "-C", str(repo), "commit", "-m", "test: signed commit"],
                     check=True,
+                    env=None,
                 ),
                 mock.call(
                     [

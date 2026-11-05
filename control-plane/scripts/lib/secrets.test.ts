@@ -11,8 +11,8 @@ import {
   type ResolverDeps,
   resolveSecret,
   SecretError,
-  secretNamesFor,
   type SecretName,
+  secretNamesFor,
 } from "./secrets";
 
 const COMPOSE: Deployment = { kind: "compose" };

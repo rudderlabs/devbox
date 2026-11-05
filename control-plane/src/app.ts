@@ -72,6 +72,7 @@ export function createApp(): AppBundle {
     readyTimeoutSeconds: config.opensandbox.readyTimeoutSeconds,
     reconcileFilesTimeoutMs: config.opensandbox.reconcileFilesTimeoutMs,
     gitIdentity: config.opensandbox.gitIdentity,
+    gitlabGitIdentity: config.opensandbox.gitlabGitIdentity,
     sandboxRuntime: config.opensandbox.sandboxRuntime,
     reposBaseVolume: config.opensandbox.reposBaseVolume,
     snapshotNamePrefix: config.opensandbox.snapshotNamePrefix,

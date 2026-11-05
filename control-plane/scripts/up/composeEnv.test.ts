@@ -58,6 +58,8 @@ const GITLAB_OFF = {
   IRON_PROXY_GITLAB_HOST: "",
   IRON_PROXY_SSL_CERT_FILE: "",
   CONTROL_PLANE_NODE_EXTRA_CA_CERTS: "",
+  SANDBOX_GITLAB_GIT_NAME: "",
+  SANDBOX_GITLAB_GIT_EMAIL: "",
 };
 
 const common = {
@@ -649,6 +651,23 @@ describe("gitlabComposeEnv", () => {
     expect(legacy.GITLAB_WEBHOOK_SIGNING_TOKEN).toBe("");
     expect(() => gitlabComposeEnv(instance, webhooks, { token: "glpat" })).toThrow(
       "GITLAB_WEBHOOK_SIGNING_TOKEN was not resolved",
+    );
+  });
+
+  it("passes the commit identity for GitLab repos when it is known", () => {
+    const env = gitlabComposeEnv(
+      instance,
+      undefined,
+      { token: "glpat" },
+      {
+        gitName: "devbox",
+        gitEmail: "2-devbox@users.noreply.git.example.com",
+      },
+    );
+    expect(env.SANDBOX_GITLAB_GIT_NAME).toBe("devbox");
+    expect(env.SANDBOX_GITLAB_GIT_EMAIL).toBe("2-devbox@users.noreply.git.example.com");
+    expect(gitlabComposeEnv(instance, undefined, { token: "glpat" }).SANDBOX_GITLAB_GIT_NAME).toBe(
+      "",
     );
   });
 

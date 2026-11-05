@@ -388,6 +388,7 @@ export async function install(
   // TLS-dependent checks are k8s:check's, as for a token in the user's Secret.
   const userCa = userValue(deps.target, ["ironProxy", "caBundle"]);
   const caOnlyInCluster = typeof userCa === "string" && userCa !== "" && gitlabCa === undefined;
+  let gitlabGit: Identity | undefined;
   if (gitlabR && cfg.gitlab && caOnlyInCluster) {
     await offerSave(gitlabR, secretDeps);
     log(
@@ -421,8 +422,10 @@ export async function install(
         ? `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
         : `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: the token may not read /api/v4/user (no User: Read); its identity is unknown`,
     );
-    // With no GitHub identity, commits carry the GitLab user's.
-    identity ??= gitlabCommitIdentity(instance, gitlabIdentity);
+    // Commits on GitLab repos carry the GitLab user's identity; with no GitHub
+    // identity at all, every commit does.
+    gitlabGit = gitlabCommitIdentity(instance, gitlabIdentity);
+    identity ??= gitlabGit;
     const mismatch = gitlab && identityKnown(gitlabIdentity) && botMismatch(gitlab, gitlabIdentity);
     if (mismatch)
       throw new KubeError(
@@ -607,7 +610,14 @@ export async function install(
   const values = chartValues(
     cfg,
     deps.target.values,
-    { clusterIP, publicBaseUrl: url, identity, integrations, ...gitlabSecrets },
+    {
+      clusterIP,
+      publicBaseUrl: url,
+      identity,
+      integrations,
+      ...gitlabSecrets,
+      ...(gitlabGit ? { gitlabGit } : {}),
+    },
     overlay,
   );
   const before = await templateHash(k);

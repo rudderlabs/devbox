@@ -36,6 +36,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { parseArgs } from "node:util";
+import {
+  checkGitlab,
+  type GitlabIdentity,
+  gitlabCommitIdentity,
+  identityKnown,
+} from "./gitlab/check";
 import { capture } from "./lib/capture";
 import {
   appIdentity,
@@ -63,20 +69,14 @@ import {
   type ResolverDeps,
   resolveSecret,
 } from "./lib/secrets";
-import {
-  checkGitlab,
-  type GitlabIdentity,
-  gitlabCommitIdentity,
-  identityKnown,
-} from "./gitlab/check";
 import { checkLinear, type LinearIdentity } from "./linear/check";
 import { bunVersionError } from "./up/bunVersion";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput } from "./up/cliLogin";
 import {
   type ComposeDevboxConfig,
   type DevboxConfig,
-  githubRepos,
   type GitlabConfig,
+  githubRepos,
   gitlabRepos,
   LLM_STAGES,
   loadConfig,
@@ -242,7 +242,9 @@ type GitlabEnvName =
   | "GITLAB_TRUSTED_USERS"
   | "IRON_PROXY_GITLAB_HOST"
   | "IRON_PROXY_SSL_CERT_FILE"
-  | "CONTROL_PLANE_NODE_EXTRA_CA_CERTS";
+  | "CONTROL_PLANE_NODE_EXTRA_CA_CERTS"
+  | "SANDBOX_GITLAB_GIT_NAME"
+  | "SANDBOX_GITLAB_GIT_EMAIL";
 
 // The GitLab values for Compose. Every key is always set (empty when unused),
 // so a value left in the shell never reaches a container. The instance and
@@ -252,6 +254,8 @@ export function gitlabComposeEnv(
   gitlab: GitlabConfig | undefined,
   integration: GitlabIntegration | undefined,
   secrets?: GitlabSecrets,
+  // The commit identity for GitLab repos (the token's GitLab user), when known.
+  commitIdentity?: Identity,
 ): Record<GitlabEnvName, string> {
   const off: Record<GitlabEnvName, string> = {
     GITLAB_BASE_URL: "",
@@ -267,6 +271,8 @@ export function gitlabComposeEnv(
     IRON_PROXY_GITLAB_HOST: "",
     IRON_PROXY_SSL_CERT_FILE: "",
     CONTROL_PLANE_NODE_EXTRA_CA_CERTS: "",
+    SANDBOX_GITLAB_GIT_NAME: "",
+    SANDBOX_GITLAB_GIT_EMAIL: "",
   };
   if (!gitlab) return off;
   if (!secrets) throw new Error("gitlab.baseUrl is set but GITLAB_TOKEN was not resolved");
@@ -277,6 +283,12 @@ export function gitlabComposeEnv(
     GITLAB_TRUSTED_GROUPS: (gitlab.trustedGroups ?? []).join(","),
     GITLAB_TRUSTED_USERS: (gitlab.trustedUsers ?? []).join(","),
     IRON_PROXY_GITLAB_HOST: gitlabHostAndPrefix(gitlab.baseUrl).host,
+    ...(commitIdentity
+      ? {
+          SANDBOX_GITLAB_GIT_NAME: commitIdentity.gitName,
+          SANDBOX_GITLAB_GIT_EMAIL: commitIdentity.gitEmail,
+        }
+      : {}),
     ...(gitlab.caFile
       ? {
           IRON_PROXY_SSL_CERT_FILE: GITLAB_CA_IN_PROXY,
@@ -408,6 +420,7 @@ export function composeEnvFor(
     linear?: LinearSecrets;
     githubApp?: GithubAppSecrets;
     gitlab?: GitlabSecrets;
+    gitlabGit?: Identity;
   },
 ): Env {
   return {
@@ -427,7 +440,7 @@ export function composeEnvFor(
     ...llmComposeEnv(cfg.llm),
     ...linearComposeEnv(cfg.integrations.linear, values.linear),
     ...githubComposeEnv(enabledGithubApp(cfg.integrations), cfg, values.githubApp ?? {}),
-    ...gitlabComposeEnv(cfg.gitlab, cfg.integrations.gitlab, values.gitlab),
+    ...gitlabComposeEnv(cfg.gitlab, cfg.integrations.gitlab, values.gitlab, values.gitlabGit),
   };
 }
 
@@ -662,6 +675,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     github = "";
     log("GitHub: no GitHub repo and no GitHub App, so no GitHub token is used");
   }
+  let gitlabGit: Identity | undefined;
   // The GitLab CA, read once for the check and the copy the containers mount.
   const gitlabCa = cfg.gitlab?.caFile ? readFileSync(cfg.gitlab.caFile, "utf8") : undefined;
   if (gitlabR && cfg.gitlab) {
@@ -685,8 +699,10 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
           ? `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
           : `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: token accepted; its identity is unknown (no User: Read on the token)`,
       );
-      // With no GitHub identity, commits carry the GitLab user's.
-      identity ??= gitlabCommitIdentity(instance, gitlabIdentity);
+      // Commits on GitLab repos carry the GitLab user's identity; with no
+      // GitHub identity at all, every commit does.
+      gitlabGit = gitlabCommitIdentity(instance, gitlabIdentity);
+      identity ??= gitlabGit;
       if (
         gitlabOn &&
         identityKnown(gitlabIdentity) &&
@@ -754,6 +770,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     },
     githubApp: gh.app && { webhookSecret: gh.webhook.value, pem: gh.key?.pem },
     gitlab: gitlabR && { token: gitlabR.token.value, webhookToken: gitlabR.webhook?.value },
+    ...(gitlabGit ? { gitlabGit } : {}),
   });
   writeFileSync(
     OUTPUT_PATH,

@@ -2849,10 +2849,21 @@ devbox is installed in context kind-devbox. The CLI uses profile "k8s-kind-devbo
             integrations: GITLAB,
             gitlabSecret: "devbox-gitlab",
             gitlabCaSecret: "devbox-gitlab-ca",
+            // Both hosts: git stays the GitHub user's, gitlab.git is the bot's.
+            gitlabGit: {
+              gitName: "devbox",
+              gitEmail: "2-devbox@users.noreply.gitlab.example.com",
+            },
           },
           OVERLAY,
         ),
       );
+      const both = JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string) as Values;
+      expect(both.git).toEqual({ name: IDENTITY.gitName, email: IDENTITY.gitEmail });
+      expect((both.gitlab as Values).git).toEqual({
+        name: "devbox",
+        email: "2-devbox@users.noreply.gitlab.example.com",
+      });
       expect(calls.filter((c) => c.includes(BASE))).toEqual(Object.keys(GITLAB_ROUTES));
       expect(s.logs).toContain(`GitLab 19.5.3 at ${BASE}: devbox acts as devbox (id 2)`);
       expect(s.logs.at(-1)).toContain(
