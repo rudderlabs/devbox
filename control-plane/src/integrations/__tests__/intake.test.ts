@@ -400,6 +400,29 @@ describe("Intake", () => {
       expect(res).toEqual({ roundId: expect.any(String) });
     });
 
+    it("counts GitLab CI rounds toward the same loop breaker", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      const glTarget = (id: string) => ({
+        id,
+        spec: { kind: "mr_note" as const, projectId: 55, project: "g/p", mrIid: 3, noteId: 0 },
+      });
+      const glResult = (run: number): InboxMessageDraft =>
+        ({
+          ...ciResult(run),
+          source: "gitlab",
+          external_id: `pipeline:${run}:3:t${run}`,
+        }) as InboxMessageDraft;
+      for (let run = 1; run <= 20; run++) {
+        await intake.followUp({ task, message: glResult(run), targets: [glTarget(String(run))] });
+      }
+      const res = await intake.followUp({
+        task,
+        message: glResult(21),
+        targets: [glTarget("21")],
+      });
+      expect(res).toEqual({ dropped: "ci_limit" });
+    });
+
     it("drops the CI failure once the loop-breaker threshold is reached", async () => {
       const task = await insertTask({ key: "DBX-API-1" });
       for (let run = 1; run <= 20; run++) {

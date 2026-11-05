@@ -178,6 +178,7 @@ describe("parseGitlabEvent", () => {
       ref: "devbox/x",
       sha: "abc123",
       url: "https://gitlab.example.com/platform/backend/api/-/pipelines/7001",
+      finishedAt: "",
       mrIid: 3,
     });
   });
@@ -450,6 +451,7 @@ describe("GitlabWebhookController.handleWebhook", () => {
     expect(enqueueGitlabCiResult).toHaveBeenCalledWith({
       task,
       pipelineId: 7001,
+      finishedAt: "",
       name: "Pipeline #12",
       status: "failed",
       url: "https://gitlab.example.com/platform/backend/api/-/pipelines/7001",

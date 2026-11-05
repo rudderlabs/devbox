@@ -47,6 +47,10 @@ export type CommentPayload = TaskIdentity & {
   body: string;
   // null for linear-sourced (agent-session) comments; PrScope for github.
   pr: PrScope | null;
+  // The diff anchor of an inline comment (a GitHub review comment, a GitLab
+  // DiffNote), so "fix this" arrives with a location. Absent on plain comments.
+  path?: string;
+  line?: number;
   // ISO-8601 creation time of the triggering comment. Display-only today —
   // the daemon dedups this comment out of the injected PR-discussion history
   // by id (see discussion_context.py's exclude_ids), not by this timestamp.

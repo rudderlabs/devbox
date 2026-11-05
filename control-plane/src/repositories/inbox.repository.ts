@@ -256,19 +256,18 @@ export class InboxRepository {
         const [count] = asRows<{ n: number }>(
           await tx.execute(sql`
             SELECT COUNT(*)::int AS n FROM inbox
-             WHERE task_id = ${p.taskId} AND source = 'github' AND kind = 'ci_result';
+             WHERE task_id = ${p.taskId} AND source IN ('github', 'gitlab') AND kind = 'ci_result';
           `),
         );
         const seen = count?.n ?? 0;
         if (seen >= p.ciResultMax) {
-          // external_id is workflow_run:<run>:<attempt>:<pr>.
-          const [, runId, , prNumber] = message.external_id.split(":").map(Number);
+          // workflow_run:<run>:<attempt>:<pr> on GitHub, pipeline:<id>:<mr>:<finished> on GitLab.
           logger.warn("ci_result loop breaker tripped — dropping CI failure", {
             taskId: p.taskId,
             seen,
             max: p.ciResultMax,
-            runId,
-            prNumber,
+            source: message.source,
+            externalId: message.external_id,
           });
           return { dropped: "ci_limit" };
         }

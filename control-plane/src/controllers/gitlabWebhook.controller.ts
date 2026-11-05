@@ -49,6 +49,9 @@ export type ParsedGitlabEvent =
       ref: string;
       sha: string;
       url: string;
+      // When the pipeline finished, ISO-8601 or "". A retry re-runs jobs inside
+      // the same pipeline id, so this is what tells one failure from the next.
+      finishedAt: string;
       // The merge request the pipeline ran for, when GitLab names one (a
       // merge request pipeline). A branch pipeline names none: the controller
       // looks the open merge requests of `ref` up.
@@ -156,6 +159,7 @@ export function parseGitlabEvent(
       ref: str(attrs.ref),
       sha: str(attrs.sha),
       url: str(attrs.url) || `${proj.webUrl}/-/pipelines/${pipelineId}`,
+      finishedAt: str(attrs.finished_at),
       mrIid: mrIid || null,
     };
   }
@@ -369,6 +373,7 @@ export class GitlabWebhookController {
           await this.inboxService.enqueueGitlabCiResult({
             task,
             pipelineId: parsed.pipelineId,
+            finishedAt: parsed.finishedAt,
             name: parsed.name,
             status: parsed.status,
             url: parsed.url,

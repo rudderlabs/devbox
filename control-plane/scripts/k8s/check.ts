@@ -8,7 +8,7 @@
 // are decoded in memory only. It never saves, removes or prompts.
 import { createPrivateKey } from "node:crypto";
 import { GithubAppError } from "../../src/githubToken/mint";
-import { checkGitlab } from "../gitlab/check";
+import { botMismatch, checkGitlab } from "../gitlab/check";
 import { GithubAppSetupError, mintAppToken } from "../lib/githubApp";
 import { isPem, PrivateKeyError } from "../lib/githubAppKey";
 import {
@@ -213,12 +213,20 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
     const gitlabSecret = cfg.gitlab
       ? await secretItem(secretOf("gitlab", GITLAB_SECRET), { name: "token", verbatim: true })
       : undefined;
-    const gitlabCa = cfg.gitlab?.caFile
-      ? await secretItem(
-          { name: GITLAB_CA_SECRET, path: "gitlab.caFile", owned: true },
-          { name: "ca.crt", verbatim: false },
-        )
-      : undefined;
+    // A CA Secret the user names in ironProxy.caBundle wins over the installer's.
+    const userCa = userValue(target, ["ironProxy", "caBundle"]);
+    const gitlabCa =
+      cfg.gitlab && typeof userCa === "string" && userCa && userCa !== GITLAB_CA_SECRET
+        ? await secretItem(
+            { name: userCa, path: "ironProxy.caBundle", owned: false },
+            { name: "ca.crt", verbatim: false },
+          )
+        : cfg.gitlab?.caFile
+          ? await secretItem(
+              { name: GITLAB_CA_SECRET, path: "gitlab.caFile", owned: true },
+              { name: "ca.crt", verbatim: false },
+            )
+          : undefined;
     // The chart's integrations Secret is optional: used only with one enabled.
     const ints = enabled.length
       ? await secretItem(secretOf("integrations", INTEGRATIONS_SECRET))
@@ -287,6 +295,9 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
             ...(ca ? { ca } : {}),
             ...(gitlab ? { webhooks: { trustedGroups } } : {}),
           });
+          const mismatch = gitlab && botMismatch(gitlab, id);
+          if (mismatch)
+            throw new Error(`${mismatch} Run bun run gitlab:setup --target ${deps.targetPath}.`);
           return `(devbox acts as ${id.username}, id ${id.id}, on GitLab ${id.version})`;
         });
       }

@@ -59,7 +59,9 @@ spec:
     metadata:
       labels: {{- include "devbox.selectorLabels" "control-plane" | nindent 8 }}
       {{- with .Values.ironProxy.caBundle }}
-      # Bun reads the extra CAs once, at start: a renamed Secret rolls the pods.
+      # Bun reads the extra CAs once, at start. The chart sees the Secret's name,
+      # not its content: a renamed Secret rolls the pods, a rotated one does not
+      # (k8s:install says how to restart after a gitlab.caFile change).
       annotations:
         checksum/ca-bundle: {{ . | sha256sum }}
       {{- end }}

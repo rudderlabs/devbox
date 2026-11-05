@@ -597,6 +597,9 @@ describe("InboxService", () => {
           pr_url: "https://gitlab.example.com/platform/backend/api/-/merge_requests/3",
         },
         created_at: "2026-11-03T10:00:00Z",
+        // The diff note's anchor travels with the comment: the harness shows it.
+        path: "app.py",
+        line: 12,
       });
       expect(arg.targets).toEqual([
         { id: "901", spec: expect.objectContaining({ kind: "mr_diff_note" }) },
@@ -610,6 +613,7 @@ describe("InboxService", () => {
       await service.enqueueGitlabCiResult({
         task: makeTask(),
         pipelineId: 7001,
+        finishedAt: "2026-04-23T10:05:00Z",
         name: "Pipeline #12",
         status: "failed",
         url: "https://gitlab.example.com/platform/api/-/pipelines/7001",
@@ -632,7 +636,7 @@ describe("InboxService", () => {
       };
       expect(arg.message.source).toBe("gitlab");
       expect(arg.message.kind).toBe("ci_result");
-      expect(arg.message.external_id).toBe("pipeline:7001:3");
+      expect(arg.message.external_id).toBe("pipeline:7001:3:2026-04-23T10:05:00Z");
       expect(arg.message.payload).toEqual({
         target_id: "7001",
         workflow_name: "Pipeline #12",

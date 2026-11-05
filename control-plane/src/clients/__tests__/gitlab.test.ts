@@ -154,7 +154,7 @@ describe("requests", () => {
       { iid: 3, webUrl: "u3" },
     ]);
     expect(calls[0]?.url).toBe(
-      "https://gitlab.example.com/api/v4/projects/55/merge_requests?state=opened&source_branch=devbox%2FXYZ-1%20fix",
+      "https://gitlab.example.com/api/v4/projects/55/merge_requests?state=opened&source_branch=devbox%2FXYZ-1%20fix&per_page=100&page=1",
     );
   });
 

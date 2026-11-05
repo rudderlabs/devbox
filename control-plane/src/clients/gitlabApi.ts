@@ -208,13 +208,12 @@ export async function listOpenMergeRequestsForBranch(
   branch: string,
   signal?: AbortSignal,
 ): Promise<Array<{ iid: number; webUrl: string }>> {
-  const { json } = await gitlabFetch(
-    "GET",
+  // One open merge request per source and target branch, so this is a page at
+  // most; paginated anyway, so a long list of targets cannot hide one.
+  const list = await paginated(
     `/projects/${projectId}/merge_requests?state=opened&source_branch=${encodeURIComponent(branch)}`,
-    undefined,
     signal,
   );
-  const list = Array.isArray(json) ? json : [];
   return list
     .map((item) => {
       const r = asRecord(item);

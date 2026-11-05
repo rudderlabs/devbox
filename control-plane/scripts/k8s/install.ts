@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import { checkGitlab, type GitlabIdentity } from "../gitlab/check";
+import { botMismatch, checkGitlab, type GitlabIdentity } from "../gitlab/check";
 import {
   appIdentity,
   GithubAppSetupError,
@@ -394,6 +394,11 @@ export async function install(
     log(
       `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`,
     );
+    const mismatch = gitlab && botMismatch(gitlab, gitlabIdentity);
+    if (mismatch)
+      throw new KubeError(
+        `${mismatch} Run bun run gitlab:setup --target ${deps.targetPath} to re-register the webhooks for this token.`,
+      );
   } else if (cfg.gitlab) {
     log(
       `Skipping the GitLab checks: the token is in your Secret "${existingSecret(values0, "gitlab")}"; run bun run k8s:check --target ${deps.targetPath} after install`,
@@ -490,10 +495,14 @@ export async function install(
   });
   // kubectl says "configured" only when the Secret's data changed.
   let integrationsChanged = false;
+  let caChanged = false;
   for (const s of secrets) {
     const out = await k.kubectlOk(["apply", "-f", "-"], { stdin: secretManifest(s) });
     if (s.name === INTEGRATIONS_SECRET) {
       integrationsChanged = /^secret\/devbox-integrations configured$/m.test(out);
+    }
+    if (s.name === GITLAB_CA_SECRET) {
+      caChanged = /^secret\/devbox-gitlab-ca configured$/m.test(out);
     }
   }
   // An installer-owned Secret this install does not use goes; the user's own
@@ -617,6 +626,13 @@ export async function install(
   if (integrationsChanged && generationBefore && generationBefore === generationAfter) {
     log(`The integrations secrets changed; the control plane keeps the old values until it restarts:
   kubectl --context ${context} -n ${NAMESPACE} rollout restart deploy/devbox-control-plane
+then: bun run k8s:check --target ${deps.targetPath}`);
+  }
+  // The chart's checksum sees the Secret's name, not its content: a CA rotated
+  // under the same name rolls nothing, and both readers load CAs at start.
+  if (caChanged && previous) {
+    log(`gitlab.caFile changed; the control plane and iron-proxy keep the old CA until they restart:
+  kubectl --context ${context} -n ${NAMESPACE} rollout restart deploy/devbox-control-plane deploy/devbox-iron-proxy
 then: bun run k8s:check --target ${deps.targetPath}`);
   }
 

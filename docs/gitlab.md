@@ -41,6 +41,10 @@ mentioning note is one round), approvals as a signal, and an installer step
 
 ## Configure
 
+> Rotating the CA: a new `gitlab.caFile` is written to the same Secret, which
+> rolls nothing. `k8s:install` prints the `rollout restart` for the control
+> plane and iron-proxy; run it, then `k8s:check`.
+
 Kubernetes only: the local Compose stack takes GitHub repos. The pieces are
 the ones every integration has: the setup in `devbox.config.json`, the
 deployment's settings in the target file, the secrets in Secrets the

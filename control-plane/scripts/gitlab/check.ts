@@ -318,3 +318,15 @@ export async function checkGitlab(
   }
   return identity;
 }
+
+// The webhooks drop the bot's own notes by integrations.gitlab.botUserId and
+// mention it by botUsername: a token for another account would make every note
+// on a new merge request look foreign.
+export function botMismatch(
+  gitlab: { botUsername: string; botUserId: number },
+  identity: { username: string; id: number },
+): string | undefined {
+  if (gitlab.botUserId === identity.id && gitlab.botUsername === identity.username)
+    return undefined;
+  return `integrations.gitlab names the bot ${gitlab.botUsername} (id ${gitlab.botUserId}), but the GitLab token belongs to ${identity.username} (id ${identity.id}).`;
+}

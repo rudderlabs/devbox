@@ -56,6 +56,9 @@ export class InboxService {
           body: params.body,
           pr: { repo: params.spec.repo, pr_url: prUrl },
           created_at: params.createdAt,
+          ...(params.spec.kind === "review_comment"
+            ? { path: params.spec.path, line: params.spec.line }
+            : {}),
         },
       },
       targets: [{ id: externalId, spec: params.spec }],
@@ -251,6 +254,9 @@ export class InboxService {
           body: params.body,
           pr: { repo: repoName(params.project), pr_url: params.prUrl },
           created_at: params.createdAt,
+          ...(params.spec.kind === "mr_diff_note"
+            ? { path: params.spec.path, line: params.spec.line }
+            : {}),
         },
       },
       targets: [{ id: externalId, spec: params.spec }],
@@ -260,11 +266,15 @@ export class InboxService {
 
   // GitLab Pipeline Hook, status failed — one row per task whose merge request
   // URL matches. external_id includes the merge request iid (a branch pipeline
-  // can belong to several); a retried pipeline is a new pipeline id. followUp
-  // applies the per-task loop breaker.
+  // can belong to several) and the pipeline's finished_at: a retry (the
+  // harness's rerun, or a click on Retry) re-runs the failed jobs inside the
+  // SAME pipeline id, so without it the next failure would collapse into the
+  // first as a duplicate. A redelivery of one failure keeps its finished_at.
+  // followUp applies the per-task loop breaker.
   async enqueueGitlabCiResult(params: {
     task: Pick<Task, "id" | "key">;
     pipelineId: number;
+    finishedAt: string;
     name: string;
     status: string;
     url: string;
@@ -276,7 +286,7 @@ export class InboxService {
     prUrl: string;
   }): Promise<void> {
     const pipelineIdStr = String(params.pipelineId);
-    const externalId = `pipeline:${params.pipelineId}:${params.mrIid}`;
+    const externalId = `pipeline:${params.pipelineId}:${params.mrIid}:${params.finishedAt}`;
     await this.intake.followUp({
       task: params.task,
       message: {
