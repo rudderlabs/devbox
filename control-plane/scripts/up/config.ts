@@ -175,14 +175,14 @@ function parseGitlab(raw: unknown): GitlabConfig | undefined {
   }
   const baseUrl = raw.baseUrl;
   const url = typeof baseUrl === "string" && URL.canParse(baseUrl) ? new URL(baseUrl) : null;
-  if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
-    return fail(`gitlab.baseUrl: must be an http(s) URL, got ${String(baseUrl)}`);
+  if (!url || url.protocol !== "https:") {
+    return fail(`gitlab.baseUrl: must be an https URL, got ${String(baseUrl)}`);
   }
   if (!HOSTNAME.test(url.hostname)) {
     return fail(`gitlab.baseUrl: the host must be a DNS name, got ${url.hostname}`);
   }
   if (url.port) {
-    return fail(`gitlab.baseUrl: must use the default port (80 or 443), got ${url.port}`);
+    return fail(`gitlab.baseUrl: must use the default port (443), got ${url.port}`);
   }
   if (url.search || url.hash || url.username || url.password) {
     return fail("gitlab.baseUrl: must not have a query, fragment or credentials");

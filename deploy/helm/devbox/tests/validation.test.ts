@@ -30,7 +30,7 @@ describe("chart validation", () => {
     ],
     [
       ["gitlab.baseUrl=https://gitlab.example.com:8443", "secrets.gitlab.existingSecret=s"],
-      "gitlab.baseUrl: must use the default port (80 or 443)",
+      "gitlab.baseUrl: must use the default port (443)",
     ],
     [
       ["gitlab.baseUrl=https://user:pw@gitlab.example.com", "secrets.gitlab.existingSecret=s"],

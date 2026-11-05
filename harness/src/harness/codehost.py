@@ -156,9 +156,11 @@ def gitlab_base_url(env: Mapping[str, str] | None = None) -> str | None:
     if not raw:
         return None
     parsed = urllib.parse.urlsplit(raw)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    # https only: the token travels in a header, and the chart's schema and
+    # egress policy admit nothing else.
+    if parsed.scheme != "https" or not parsed.netloc:
         raise RuntimeError(
-            f"{GITLAB_BASE_URL_ENV} must be an http(s) URL such as "
+            f"{GITLAB_BASE_URL_ENV} must be an https URL such as "
             f"https://gitlab.example.com, got {raw!r}"
         )
     return raw

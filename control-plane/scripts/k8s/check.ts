@@ -234,6 +234,11 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
         skip("GitHub App token", `no usable key "private-key" in Secret ${appKey.name}`);
       } else {
         await serviceItem("GitHub App token", async () => {
+          if (minting.tokenScope === "repos" && githubRepos(cfg.repos).length === 0) {
+            throw new Error(
+              "tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation); not minting an installation-wide token",
+            );
+          }
           ({ token } = await mintAppToken(minting, pem, githubRepos(cfg.repos), {
             fetch: deps.fetch,
             checkCoverage: true,

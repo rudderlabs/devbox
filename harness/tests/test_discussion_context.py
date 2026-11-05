@@ -1386,6 +1386,44 @@ class FakeGitLabClient(FakeGitHubClient, discussion_context.GitLabClient):
     lists by the client's type. GitLabClient.__init__ is skipped on purpose."""
 
 
+class TestTrustCacheHostScoping(unittest.TestCase):
+    def test_a_github_cache_never_trusts_a_gitlab_author(self) -> None:
+        # Same group/org name on both hosts, numeric ids from unrelated sequences:
+        # the GitLab lookup must not read the GitHub cache, and both must leave
+        # the pre-scoping (unscoped) file alone.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "trusted-members.json"
+            stale = {
+                "org": "acme",
+                "member_ids": [1, 2, 3],
+                "fetched_at": datetime.now(UTC).isoformat(),
+            }
+            base.with_name("trusted-members.acme.json").write_text(json.dumps(stale))
+            github = FakeGitHubClient(members=[1, 2, 3], users={"bob": 7})
+            gitlab = FakeGitLabClient(members=[500], users={"bob": 9000})
+            gh_ids = discussion_context._trusted_principal_ids(
+                ["acme"], ["bob"], client=github, members_cache_path=base, host="github"
+            )
+            gl_ids = discussion_context._trusted_principal_ids(
+                ["acme"], ["bob"], client=gitlab, members_cache_path=base, host="gitlab"
+            )
+            self.assertEqual(gh_ids, {1, 2, 3, 7})
+            self.assertEqual(gl_ids, {500, 9000})
+            self.assertEqual(github.member_calls, 1)
+            self.assertEqual(gitlab.member_calls, 1)
+            names = sorted(p.name for p in Path(td).iterdir())
+            self.assertEqual(
+                names,
+                [
+                    "trusted-members.acme.json",
+                    "trusted-members.github.acme.json",
+                    "trusted-members.gitlab.acme.json",
+                    "trusted-users.github.json",
+                    "trusted-users.gitlab.json",
+                ],
+            )
+
+
 class TestGitLabTrust(unittest.TestCase):
     def _run(self, client: FakeGitHubClient, env: dict[str, str], *, td: str) -> str:
         with mock.patch.dict(os.environ, env, clear=True):

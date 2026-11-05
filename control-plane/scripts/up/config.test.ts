@@ -608,14 +608,21 @@ describe("parseConfig with gitlab", () => {
     [
       "a non-URL base",
       withGitlab([{ url: "https://github.com/acme/app.git" }], { baseUrl: "gitlab.example.com" }),
-      "gitlab.baseUrl: must be an http(s) URL, got gitlab.example.com",
+      "gitlab.baseUrl: must be an https URL, got gitlab.example.com",
+    ],
+    [
+      "a plain-http base",
+      withGitlab([{ url: "https://github.com/acme/app.git" }], {
+        baseUrl: "http://gitlab.example.com",
+      }),
+      "gitlab.baseUrl: must be an https URL, got http://gitlab.example.com",
     ],
     [
       "a base with a port",
       withGitlab([{ url: "https://github.com/acme/app.git" }], {
         baseUrl: "https://gitlab.example.com:8443",
       }),
-      "gitlab.baseUrl: must use the default port (80 or 443), got 8443",
+      "gitlab.baseUrl: must use the default port (443), got 8443",
     ],
     [
       "an unknown gitlab key",
