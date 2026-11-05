@@ -132,6 +132,35 @@
             "tokenScope": { "enum": ["repos", "installation"] },
             "ciResults": { "type": "boolean" }
           }
+        },
+        "jira": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "siteUrl": { "type": "string", "pattern": "^(https://[^/?#@\\s]+/?)?$" },
+            "cloudId": {
+              "type": "string",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$"
+            },
+            "botEmail": { "type": "string" },
+            "botAccountId": { "type": "string", "pattern": "^[A-Za-z0-9:_-]{0,128}$" },
+            "botName": { "type": "string" },
+            "projectKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" } },
+            "trustedGroups": { "type": "array", "items": { "type": "string", "pattern": "^[^,]+$" } },
+            "trustedUsers": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9:_-]{1,128}$" } },
+            "statuses": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "started": { "type": "string" },
+                "done": { "type": "string" },
+                "failed": { "type": "string" }
+              }
+            },
+            "tokenExpiresAt": { "type": "string", "pattern": "^(\\d{4}-\\d{2}-\\d{2}(T\\S*)?)?$" },
+            "allowRestrictedIssues": { "type": "boolean" }
+          }
         }
       }
     },

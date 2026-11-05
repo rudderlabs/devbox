@@ -163,6 +163,67 @@ describe("chart validation", () => {
     );
   });
 
+  describe("integrations.jira", () => {
+    const JIRA = join(import.meta.dir, "values", "jira.yaml");
+    const jiraFailure = async (set: string[], setJson: string[] = []) => {
+      const r = await helmTemplate([
+        ...BASE,
+        "-f",
+        JIRA,
+        ...set.flatMap((s) => ["--set", s]),
+        ...setJson.flatMap((s) => ["--set-json", s]),
+      ]);
+      expect(r.code).not.toBe(0);
+      return r.stderr;
+    };
+
+    it.each(["siteUrl", "cloudId", "botEmail", "botAccountId", "botName", "projectKeys", "tokenExpiresAt"])(
+      "requires %s when enabled",
+      async (key) => {
+        const empty = key === "projectKeys" ? [] : [`integrations.jira.${key}=`];
+        const json = key === "projectKeys" ? ["integrations.jira.projectKeys=[]"] : [];
+        expect(await jiraFailure(empty, json)).toContain(
+          `integrations.jira.enabled is true: integrations.jira.${key} is required`,
+        );
+      },
+    );
+
+    it("requires trustedGroups or trustedUsers when enabled", async () => {
+      expect(await jiraFailure([], ["integrations.jira.trustedGroups=[]"])).toContain(
+        "integrations.jira.enabled is true: integrations.jira.trustedGroups or integrations.jira.trustedUsers is required",
+      );
+      const r = await helmTemplate([
+        ...BASE,
+        "-f",
+        JIRA,
+        "--set-json",
+        "integrations.jira.trustedGroups=[]",
+        "--set-json",
+        'integrations.jira.trustedUsers=["712020:1"]',
+      ]);
+      expect(r.code).toBe(0);
+    });
+
+    it("a disabled block needs none of them", async () => {
+      const r = await helmTemplate([...BASE, "--set", "integrations.jira.siteUrl=https://example.atlassian.net"]);
+      expect(r.code).toBe(0);
+    });
+
+    it.each([
+      ["integrations.jira.apiToken=x", "apiToken"],
+      ["integrations.jira.webhookSecret=x", "webhookSecret"],
+      ["integrations.jira.siteUrl=http://example.atlassian.net", "siteUrl"],
+      ["integrations.jira.cloudId=abc", "cloudId"],
+      ["integrations.jira.projectKeys={eng}", "projectKeys"],
+      ["integrations.jira.tokenExpiresAt=soon", "tokenExpiresAt"],
+      ["integrations.jira.statuses.review=x", "review"],
+    ])("refuses %s through the schema", async (set, key) => {
+      const stderr = await jiraFailure([set]);
+      expect(stderr).toContain("values don't meet the specifications of the schema");
+      expect(stderr).toContain(key);
+    });
+  });
+
   it("refuses an unknown provider", async () => {
     expect(await failure(["llm.provider=gemini"])).toContain("provider");
   });

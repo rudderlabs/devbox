@@ -304,3 +304,48 @@ describe("integration env", () => {
     expect(await envOf([])).toEqual({});
   });
 });
+
+describe("Jira env", () => {
+  // The control plane's JIRA_* env, as a name -> value map.
+  async function jiraEnv(set: string[] = [], setJson: string[] = []): Promise<Record<string, string>> {
+    const r = await renderWith(["base.yaml", "jira.yaml"], set, setJson);
+    const c = (r["Deployment/devbox/devbox-control-plane"] as Doc).spec.template.spec.containers[0];
+    return Object.fromEntries((c.env as Doc[]).filter((e) => e.name.startsWith("JIRA_")).map((e) => [e.name, e.value]));
+  }
+
+  it("on: every setting, lists comma-joined; the secrets come from the integrations Secret", async () => {
+    expect(await jiraEnv()).toEqual({
+      JIRA_ENABLED: "true",
+      JIRA_SITE_URL: "https://example.atlassian.net",
+      JIRA_CLOUD_ID: "00000000-0000-0000-0000-000000000000",
+      JIRA_BOT_EMAIL: "devbox@example.com",
+      JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-0000-0000-000000000000",
+      JIRA_BOT_NAME: "devbox",
+      JIRA_PROJECT_KEYS: "ENG,OPS",
+      JIRA_TRUSTED_GROUPS: "jira-software-users,Site admins",
+      JIRA_STATUS_STARTED: "In Progress",
+      JIRA_STATUS_DONE: "Done",
+      JIRA_TOKEN_EXPIRES_AT: "2027-06-30",
+    });
+    const r = await renderWith(["base.yaml", "jira.yaml"]);
+    const c = (r["Deployment/devbox/devbox-control-plane"] as Doc).spec.template.spec.containers[0];
+    expect(c.envFrom).toEqual([{ secretRef: { name: "devbox-integrations", optional: true } }]);
+  });
+
+  it("the optional settings when set", async () => {
+    const env = await jiraEnv(
+      ["integrations.jira.statuses.failed=Blocked", "integrations.jira.allowRestrictedIssues=true"],
+      ['integrations.jira.trustedUsers=["712020:1","712020:2"]'],
+    );
+    expect(env).toMatchObject({
+      JIRA_TRUSTED_USERS: "712020:1,712020:2",
+      JIRA_STATUS_FAILED: "Blocked",
+      JIRA_ALLOW_RESTRICTED_ISSUES: "true",
+    });
+  });
+
+  it("off: none of the block renders, settings included", async () => {
+    expect(await jiraEnv(["integrations.jira.enabled=false"])).toEqual({});
+    expect(await jiraEnv([], ["integrations.jira=null"])).toEqual({});
+  });
+});
