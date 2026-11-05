@@ -229,6 +229,7 @@ def fetch_and_store_discussion(
         client=github,
         members_cache_path=members_cache_path
         or cache_path.parent / TRUSTED_MEMBERS_JSON.name,
+        host="gitlab" if gitlab else "github",
     )
 
     if members is None:
@@ -412,25 +413,32 @@ def _trusted_principal_ids(
     *,
     client: CodeHost,
     members_cache_path: Path,
+    host: str = "github",
 ) -> set[int] | None:
     """Numeric ids of every member of ``orgs`` plus every resolvable ``users`` login.
 
     ``None`` (fail closed) when any org's member set cannot be established, or when
     nothing at all resolved. An unresolvable user login only leaves that user
     untrusted. Each org and the users have their own TTL cache beside
-    ``members_cache_path``.
+    ``members_cache_path``, scoped by ``host``: GitHub and GitLab numeric ids are
+    unrelated sequences, so a group and an org of the same name must never share
+    a cache file, nor may a login's id resolved on one host trust an author on the
+    other.
     """
+    base = _host_cache_path(members_cache_path, host)
     ids: set[int] = set()
     for org in orgs:
         org_ids = _trusted_member_ids(
             org,
             client=client,
-            cache_path=_org_cache_path(members_cache_path, org),
+            cache_path=_org_cache_path(base, org),
         )
         if org_ids is None:
             return None
         ids |= org_ids
-    users_cache_path = members_cache_path.with_name(_TRUSTED_USERS_CACHE_NAME)
+    users_cache_path = _host_cache_path(
+        members_cache_path.with_name(_TRUSTED_USERS_CACHE_NAME), host
+    )
     for login in users:
         user_id = _trusted_user_id(login, client=client, cache_path=users_cache_path)
         if user_id is not None:
@@ -443,6 +451,12 @@ def _trusted_principal_ids(
         )
         return None
     return ids
+
+
+def _host_cache_path(base: Path, host: str) -> Path:
+    """``base`` scoped to a code host: ``trusted-members.github.json``. Entries
+    written before the scoping (the unscoped file) are left alone and never read."""
+    return base.with_name(f"{base.stem}.{host}{base.suffix}")
 
 
 def _org_cache_path(base: Path, org: str) -> Path:

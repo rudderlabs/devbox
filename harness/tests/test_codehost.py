@@ -45,6 +45,11 @@ class TestGitlabBaseUrl(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             codehost.gitlab_base_url({"GITLAB_BASE_URL": "gitlab.example.com"})
 
+    def test_rejects_plain_http(self) -> None:
+        # The token travels in a header; the chart admits only https anyway.
+        with self.assertRaises(RuntimeError):
+            codehost.gitlab_base_url({"GITLAB_BASE_URL": "http://gitlab.example.com"})
+
 
 class TestParseRemoteUrl(unittest.TestCase):
     def test_github_forms(self) -> None:

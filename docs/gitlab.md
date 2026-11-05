@@ -14,6 +14,11 @@ Kubernetes only: the local Compose stack takes GitHub repos.
 
 ## What you need
 
+- **A GitHub token as well.** GitLab is added beside GitHub, not instead of
+  it: the egress proxy and the snapshot builder read the GitHub token Secret
+  unconditionally, so a deployment with only GitLab repos still needs a GitHub
+  token (any account's, with no repos to reach) or the GitHub App. Making it
+  optional is tracked in [rudderlabs/devbox#8](https://github.com/rudderlabs/devbox/issues/8).
 - **A group or project access token** for the group that holds the repos,
   with the `api`, `read_repository` and `write_repository` scopes and at least
   the Developer role. Merge requests and commits are attributed to the token's

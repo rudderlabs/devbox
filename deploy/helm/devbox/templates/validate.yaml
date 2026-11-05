@@ -25,12 +25,12 @@ selectors all assume the release namespace devbox. */ -}}
 {{- end }}
 {{- with include "devbox.gitlabBaseUrl" . }}
 {{- $u := urlParse . }}
-{{- if or (not (has $u.scheme (list "http" "https"))) (not $u.host) }}
-{{- fail "gitlab.baseUrl: must be an http(s) URL such as https://gitlab.example.com" }}
+{{- if or (ne $u.scheme "https") (not $u.host) }}
+{{- fail "gitlab.baseUrl: must be an https URL such as https://gitlab.example.com (the repo URL schema and the egress policy admit only https)" }}
 {{- end }}
-{{- /* iron-proxy intercepts only ports 80 and 443. */ -}}
+{{- /* iron-proxy intercepts only port 443 for https. */ -}}
 {{- if regexMatch ":[0-9]+$" $u.host }}
-{{- fail "gitlab.baseUrl: must use the default port (80 or 443); iron-proxy intercepts only those" }}
+{{- fail "gitlab.baseUrl: must use the default port (443); iron-proxy intercepts only that" }}
 {{- end }}
 {{- if or $u.query $u.fragment $u.userinfo }}
 {{- fail "gitlab.baseUrl: must not have a query, fragment or credentials" }}
