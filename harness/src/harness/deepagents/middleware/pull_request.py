@@ -15,8 +15,8 @@ from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from pydantic import BaseModel, Field, create_model, model_validator
 
 from harness.codehost import (
+    CodeHost,
     CodeHostApiError,
-    FollowUpHost,
     client_for_kind,
     parse_change_request_url,
 )
@@ -49,13 +49,13 @@ class PullRequestMiddleware(SystemPromptMiddleware):
     def __init__(
         self,
         *,
-        github: FollowUpHost,
+        github: CodeHost,
         prs: Sequence[PullRequestRef],
         system_prompt: str | None = None,
     ) -> None:
         if not prs:
             raise ValueError("PullRequestMiddleware requires at least one pull request")
-        coords: dict[str, tuple[FollowUpHost, str, str, int]] = {}
+        coords: dict[str, tuple[CodeHost, str, str, int]] = {}
         for ref in prs:
             parsed = parse_change_request_url(ref.url)
             if parsed is None:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from harness import codehost
-from harness.codehost import FollowUpHost
+from harness.codehost import CodeHost
 from harness.git import GitHubClient
 
 
@@ -31,7 +31,7 @@ def fetch_failed_job_logs(
     run_id: int,
     output_dir: Path,
     *,
-    client: FollowUpHost | None = None,
+    client: CodeHost | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Fetch logs for all failed jobs in a CI run.
 

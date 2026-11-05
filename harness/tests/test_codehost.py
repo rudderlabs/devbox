@@ -387,7 +387,7 @@ class _RawResponse(io.BytesIO):
         self.close()
 
 
-class TestGitLabFollowUpHost(TestGitLabClient):
+class TestGitLabFollowUp(TestGitLabClient):
     """The follow-up calls, translated into GitHub's shapes."""
 
     def test_get_pull_request_mirrors_description_as_body(self) -> None:

@@ -15,7 +15,7 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
-from harness.codehost import FollowUpHost
+from harness.codehost import CodeHost
 from harness.deepagents.middleware.ci_rerun import CiRerunMiddleware, WorkflowRunRef
 from harness.deepagents.middleware.memory_writing import (
     MemoryWritingMiddleware,
@@ -265,7 +265,7 @@ def _round_middleware(
     prs: Sequence[PullRequestRef],
     memory_repos: Sequence[RepoScope],
     memory: MemoryStore,
-    github: FollowUpHost,
+    github: CodeHost,
     memory_stage: str,
 ) -> list[Any]:
     # create_deep_agent always offers the `task` subagent tool. A subagent would
@@ -299,7 +299,7 @@ class FollowUpAgent(DeepAgentSession[Any]):
         prs: Sequence[PullRequestRef],
         memory_repos: Sequence[RepoScope],
         memory: MemoryStore,
-        github: FollowUpHost,
+        github: CodeHost,
     ) -> None:
         super().__init__(
             events=events,
@@ -335,7 +335,7 @@ class CiAgent(DeepAgentSession[Any]):
         prs: Sequence[PullRequestRef],
         memory_repos: Sequence[RepoScope],
         memory: MemoryStore,
-        github: FollowUpHost,
+        github: CodeHost,
         run: WorkflowRunRef,
     ) -> None:
         middleware = _round_middleware(
