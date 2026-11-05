@@ -296,8 +296,11 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
             ...(gitlab ? { webhooks: { trustedGroups } } : {}),
           });
           const mismatch = gitlab && botMismatch(gitlab, id);
-          if (mismatch)
-            throw new Error(`${mismatch} Run bun run gitlab:setup --target ${deps.targetPath}.`);
+          if (mismatch) {
+            throw new PreflightError(
+              `${mismatch} Run bun run gitlab:setup --target ${deps.targetPath}.`,
+            );
+          }
           return `(devbox acts as ${id.username}, id ${id.id}, on GitLab ${id.version})`;
         });
       }

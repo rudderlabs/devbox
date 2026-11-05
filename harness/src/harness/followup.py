@@ -114,7 +114,7 @@ def comment_brief(
 ) -> str:
     # An inline comment names the file and line it sits on: the discussion
     # history excludes the triggering comment, so this is its only location.
-    heading = f"### Comment on `{anchor}`" if anchor else "### Comment"
+    heading = f"### Comment on `{defang(anchor)}`" if anchor else "### Comment"
     return "\n".join([
         *_header("addressing comment", channel, pr),
         "",

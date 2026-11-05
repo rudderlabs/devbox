@@ -123,8 +123,11 @@ async function paginated(path: string, signal?: AbortSignal): Promise<unknown[]>
     items.push(...json);
     const next = headers?.get("x-next-page") ?? "";
     if (!next || json.length < 100) return items;
-    page = Number(next);
-    if (!Number.isFinite(page) || page <= 0 || page > 100) return items;
+    const nextPage = Number(next);
+    // A list is complete or not at all: a header that does not advance ends it,
+    // nothing else does (a large group's members run past 10,000).
+    if (!Number.isFinite(nextPage) || nextPage <= page) return items;
+    page = nextPage;
   }
 }
 

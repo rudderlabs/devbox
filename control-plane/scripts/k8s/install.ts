@@ -373,7 +373,17 @@ export async function install(
     ));
     await offerSave(githubR, secretDeps);
   }
-  if (gitlabR && cfg.gitlab) {
+  // The instance's CA in the user's own Secret (ironProxy.caBundle, no
+  // gitlab.caFile): the installer never reads a Secret it does not own, so the
+  // TLS-dependent checks are k8s:check's, as for a token in the user's Secret.
+  const userCa = userValue(deps.target, ["ironProxy", "caBundle"]);
+  const caOnlyInCluster = typeof userCa === "string" && userCa !== "" && gitlabCa === undefined;
+  if (gitlabR && cfg.gitlab && caOnlyInCluster) {
+    await offerSave(gitlabR, secretDeps);
+    log(
+      `Skipping the GitLab checks: the instance's CA is in your Secret "${userCa}"; run bun run k8s:check --target ${deps.targetPath} after install`,
+    );
+  } else if (gitlabR && cfg.gitlab) {
     const instance = cfg.gitlab;
     const trust = (deps.target.values.gitlab ?? {}) as { trustedGroups?: unknown };
     const trustedGroups = Array.isArray(trust.trustedGroups)
