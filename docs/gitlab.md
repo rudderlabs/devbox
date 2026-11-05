@@ -28,6 +28,10 @@ mentioning note is one round) and approvals as a signal. Tracked in
   and replace it in the Secret before then. A personal access token works for
   a trial, but then the bot is you: your own notes are ignored as the bot's,
   so mention it from another account.
+  A gitlab.com fine-grained token works too, with Code DPR, Branch R, Merge
+  Request CRU, Project R, Work Item CRU, Pipeline RU, Job R and Member R;
+  "Metadata: Read" is optional (without it the version is unknown and the
+  signing token is assumed).
 - **The instance's URL** as `gitlab.baseUrl`: `https://gitlab.example.com`,
   or with a relative URL root `https://example.com/gitlab`. The default port
   only, like `llm.baseUrl`, because the egress proxy intercepts only 80 and

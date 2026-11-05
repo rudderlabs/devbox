@@ -63,7 +63,7 @@ import {
   type ResolverDeps,
   resolveSecret,
 } from "./lib/secrets";
-import { checkGitlab, type GitlabIdentity } from "./gitlab/check";
+import { checkGitlab, type GitlabIdentity, identityKnown } from "./gitlab/check";
 import { checkLinear, type LinearIdentity } from "./linear/check";
 import { bunVersionError } from "./up/bunVersion";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput } from "./up/cliLogin";
@@ -667,10 +667,13 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
       ));
       await offerSave(gitlabR.token, secretDeps);
       log(
-        `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`,
+        identityKnown(gitlabIdentity)
+          ? `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
+          : `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: token accepted; its identity is unknown (no User: Read on the token)`,
       );
       if (
         gitlabOn &&
+        identityKnown(gitlabIdentity) &&
         (gitlabOn.botUserId !== gitlabIdentity.id ||
           gitlabOn.botUsername !== gitlabIdentity.username)
       ) {

@@ -53,7 +53,7 @@ fi
 printf '%s\n%s\n' "$TOKEN" "$GITLAB_TOKEN_IN" | docker run -i --rm \
   -e REPOS="$REPOS" \
   -e GITLAB_BASE_URL="$GITLAB_BASE_URL" \
-  "${CA_MOUNT[@]}" \
+  ${CA_MOUNT[@]+"${CA_MOUNT[@]}"} \
   -v "$VOLUME:/repos" \
   --entrypoint sh \
   "$GIT_IMAGE" -c '
