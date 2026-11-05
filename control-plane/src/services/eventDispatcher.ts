@@ -41,9 +41,10 @@ export type DispatchResult = "ok" | "dropped" | "timed_out" | "hold" | "self_evi
 //
 // At-least-once dispatch semantics: the cursor advances AFTER handle()
 // completes. A crash between a side-effect and the cursor commit re-fires the
-// event on the next reconcile tick: pr_opened and completed side effects are
-// idempotent or run only the first time (appendPrUrl's firstTime,
-// markResponded's first transition).
+// event on the next reconcile tick. completed's side effects are idempotent or
+// run only on markResponded's first transition. pr_opened's onPrOpened is
+// idempotent; its onboarding comment and assignee mirror run on every dispatch
+// until the PR is recorded, so they can repeat.
 export class EventDispatcher {
   constructor(
     private taskRepo: TaskRepository,
@@ -117,9 +118,22 @@ export class EventDispatcher {
         return this.deliver(event, inboxRow, task);
 
       case "pr_opened": {
+        const pr = this.codeHost.prRef(event);
+        // A PR not yet on the task (the URL test appendPrUrl's firstTime uses)
+        // gets the code host's work: the onboarding comment and the assignee
+        // mirror. It runs before appendPrUrl records the PR, so it happens at
+        // least once: a crash in between replays the event and runs it
+        // again. Once recorded, a replay skips it, so a held onPrOpened,
+        // retried every tick, doesn't post again. An owner that lost its
+        // lease finds out only at appendPrUrl, after posting, and the new
+        // owner posts again. A repeated help comment is acceptable.
+        const isNew = !(
+          Array.isArray(task.prUrls) && task.prUrls.some((p) => p?.url === event.pr_url)
+        );
+        if (isNew) await this.codeHost.prOpened(task, pr);
         // appendPrUrl is owner-guarded; a 0-row return means the lease was
-        // taken over (stale-lease takeover). Self-evict BEFORE any side effect
-        // and before the cursor advance — a sibling pod now owns this task.
+        // taken over (stale-lease takeover). Self-evict BEFORE onPrOpened and
+        // before the cursor advance — a sibling pod now owns this task.
         const [appended] = await this.taskRepo.appendPrUrl({
           taskId: task.id,
           ownerId: config.podId,
@@ -135,13 +149,6 @@ export class EventDispatcher {
           });
           return "self_evict";
         }
-        const pr = this.codeHost.prRef(event);
-        // Only the dispatch that added the URL runs the code host's first-time
-        // work (the onboarding comment and the assignee mirror); a replay (the
-        // cursor advances only after handle() returns) finds the URL already
-        // there. It runs before onPrOpened, whose hold retries the event as
-        // such a replay.
-        if (appended.firstTime) await this.codeHost.prOpened(task, pr);
         // The owner's onPrOpened (Linear: attach the PR to the issue) runs on
         // every dispatch and is idempotent. Unlike other hooks, its
         // RetryableError escapes to handle(), which holds pr_opened.

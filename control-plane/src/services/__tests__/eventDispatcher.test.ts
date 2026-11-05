@@ -161,6 +161,10 @@ const prEvent = (): Extract<HarnessEvent, { type: "pr_opened" }> => ({
   commit_sha: "sha",
 });
 
+// The task once prEvent's PR is recorded on it.
+const taskWithPr = (): Task =>
+  makeTask({ prUrls: [{ repo: "r", url: prEvent().pr_url, branch: "b", commit_sha: "sha" }] });
+
 describe("EventDispatcher", () => {
   let taskRepo: TaskRepository;
   let inboxRepo: InboxRepository;
@@ -776,15 +780,18 @@ describe("EventDispatcher", () => {
       );
     });
 
-    it("Linear task: a token fetch failure holds the event at onPrOpened, after appendPrUrl", async () => {
+    it("Linear task: a token fetch failure holds the event at onPrOpened; the replay doesn't post again", async () => {
       (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
         linearUnreachable(),
       );
       expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
       expect(appendPrUrl).toHaveBeenCalledTimes(1);
       expect(attachUrlToIssue).not.toHaveBeenCalled();
-      // The code host's first-time work ran before the hold: the retry is a
-      // replay (firstTime false) and won't run it.
+      // The held event comes back on later ticks, with the PR now recorded:
+      // the code host's work, done before the hold, doesn't run again.
+      appendPrUrl.mockResolvedValue([{ id: "task-1", firstTime: false }]);
+      expect(await dispatcher.handle(prEvent(), taskWithPr())).toBe("hold");
+      expect(appendPrUrl).toHaveBeenCalledTimes(2);
       expect(postIssueComment).toHaveBeenCalledTimes(1);
     });
 
@@ -796,25 +803,73 @@ describe("EventDispatcher", () => {
       attachUrlToIssue
         .mockRejectedValueOnce(rateLimited)
         .mockRejectedValueOnce(new LinearError(refused as never));
+      getIssueHumanAssignee.mockResolvedValue({
+        id: "usr-1",
+        name: "Ada Lovelace",
+        displayName: "ada",
+        email: "ada@acme.com",
+        gitHubUserId: "octocat",
+      });
+      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
       expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
-      expect(await dispatcher.handle(prEvent(), makeTask())).toBe("hold");
+      // The replay finds the PR recorded: no second comment or assignment.
+      expect(await dispatcher.handle(prEvent(), taskWithPr())).toBe("hold");
+      await flushMicrotasks();
       expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
       expect(holds.of("linear").heldTasks).toBe(1);
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
+      expect(addPrAssignees).toHaveBeenCalledTimes(1);
     });
 
-    it("self-evicts when appendPrUrl returns 0 rows (lease lost); skips attachUrlToIssue", async () => {
+    it("self-evicts when appendPrUrl returns 0 rows (lease lost), before onPrOpened", async () => {
       appendPrUrl.mockResolvedValue([]);
       const result = await dispatcher.handle(prEvent(), makeTask());
       await flushMicrotasks();
       expect(result).toBe("self_evict");
-      // attachUrlToIssue must NOT run after a lost-lease self-evict.
+      // The sibling pod that owns the task now attaches the PR.
       expect(attachUrlToIssue).not.toHaveBeenCalled();
-      // Nor may the assignee mirror — the sibling pod now owns this task.
-      expect(getIssueHumanAssignee).not.toHaveBeenCalled();
-      expect(addPrAssignees).not.toHaveBeenCalled();
+      // The code host ran before the lease loss showed; the new owner runs it
+      // again, so the comment can appear twice.
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
     });
 
-    it("posts the onboarding comment after appendPrUrl succeeds", async () => {
+    it("runs the code host, then appendPrUrl, then onPrOpened", async () => {
+      const order: string[] = [];
+      postIssueComment.mockImplementation(async () => {
+        order.push("comment");
+        return { id: 1, url: "u" };
+      });
+      appendPrUrl.mockImplementation(async () => {
+        order.push("append");
+        return [{ id: "task-1", firstTime: true }];
+      });
+      attachUrlToIssue.mockImplementation(async () => {
+        order.push("attach");
+      });
+      await dispatcher.handle(prEvent(), makeTask());
+      expect(order).toEqual(["comment", "append", "attach"]);
+    });
+
+    it("passes appendPrUrl's firstTime to onPrOpened", async () => {
+      const seen: boolean[] = [];
+      const d = dispatcherOver(
+        registryOf({
+          linear: {
+            status: async () => ({}),
+            deliver: async () => {},
+            onPrOpened: async (c) => {
+              seen.push(c.firstTime);
+            },
+          },
+        }),
+      );
+      await d.handle(prEvent(), makeTask());
+      appendPrUrl.mockResolvedValue([{ id: "task-1", firstTime: false }]);
+      await d.handle(prEvent(), makeTask());
+      expect(seen).toEqual([true, false]);
+    });
+
+    it("posts the onboarding comment on a PR the task hasn't recorded", async () => {
       await dispatcher.handle(prEvent(), makeTask());
       expect(postIssueComment).toHaveBeenCalledTimes(1);
       expect(postIssueComment).toHaveBeenCalledWith(
@@ -1591,27 +1646,42 @@ describe("EventDispatcher", () => {
       expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
     });
 
-    it("pr_opened: the onboarding comment and the PR assignee mirror run only the first time", async () => {
-      // appendPrUrl finds the URL already there on the replay.
-      appendPrUrl
-        .mockResolvedValueOnce([{ id: "task-1", firstTime: true }])
-        .mockResolvedValueOnce([{ id: "task-1", firstTime: false }]);
-      getIssueHumanAssignee.mockResolvedValue({
-        id: "usr-1",
-        name: "Ada Lovelace",
-        displayName: "ada",
-        email: "ada@acme.com",
-        gitHubUserId: "octocat",
+    describe("pr_opened: the onboarding comment and the PR assignee mirror", () => {
+      beforeEach(() => {
+        getIssueHumanAssignee.mockResolvedValue({
+          id: "usr-1",
+          name: "Ada Lovelace",
+          displayName: "ada",
+          email: "ada@acme.com",
+          gitHubUserId: "octocat",
+        });
+        addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
       });
-      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
-      await dispatcher.handle(prEvent(), makeTask());
-      await dispatcher.handle(prEvent(), makeTask());
-      await flushMicrotasks();
 
-      expect(postIssueComment).toHaveBeenCalledTimes(1);
-      expect(addPrAssignees).toHaveBeenCalledTimes(1);
-      // The owner's onPrOpened (the idempotent Linear attach) runs every time.
-      expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
+      it("run again when a crash came before the PR was recorded", async () => {
+        appendPrUrl.mockRejectedValueOnce(new Error("connection terminated"));
+        await expect(dispatcher.handle(prEvent(), makeTask())).rejects.toThrow(
+          "connection terminated",
+        );
+        await dispatcher.handle(prEvent(), makeTask());
+        await flushMicrotasks();
+
+        expect(postIssueComment).toHaveBeenCalledTimes(2);
+        expect(addPrAssignees).toHaveBeenCalledTimes(2);
+        expect(attachUrlToIssue).toHaveBeenCalledTimes(1);
+      });
+
+      it("don't run again once the PR is recorded", async () => {
+        await dispatcher.handle(prEvent(), makeTask());
+        appendPrUrl.mockResolvedValue([{ id: "task-1", firstTime: false }]);
+        await dispatcher.handle(prEvent(), taskWithPr());
+        await flushMicrotasks();
+
+        expect(postIssueComment).toHaveBeenCalledTimes(1);
+        expect(addPrAssignees).toHaveBeenCalledTimes(1);
+        // The owner's onPrOpened (the idempotent Linear attach) runs every time.
+        expect(attachUrlToIssue).toHaveBeenCalledTimes(2);
+      });
     });
 
     it("agent_response and agent_error post again on every dispatch", async () => {

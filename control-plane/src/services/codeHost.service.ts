@@ -6,7 +6,7 @@ import { logger } from "../logger";
 import type { BackgroundWork } from "./backgroundWork";
 import type { IntegrationRegistry } from "./integrationRegistry";
 
-// One-time onboarding comment posted on every PR harness opens — comment
+// Onboarding comment posted on every PR harness opens — comment
 // interactivity is invisible unless users know it exists. Built per-call from
 // the login @-mentions go to, so the displayed name and the `@mention` example
 // always match the actual GitHub App identity (GITHUB_BOT_LOGIN).
@@ -41,10 +41,11 @@ export class CodeHost {
     return { url: e.pr_url, repo: e.repo, branch: e.branch, github: parsePrUrl(e.pr_url) };
   }
 
-  // The first dispatch of a pr_opened: the onboarding comment (awaited and
-  // bounded), then the assignee mirror in BackgroundWork, since its upstream
-  // round trips must not stall the tick and nothing reads its result.
-  // Best-effort: never throws.
+  // A pr_opened for a PR the task hasn't recorded yet: the onboarding comment
+  // (awaited and bounded), then the assignee mirror in BackgroundWork, since
+  // its upstream round trips must not stall the tick and nothing reads its
+  // result. A replay before the PR is recorded runs it again, so a PR can get
+  // the comment twice. Best-effort: never throws.
   async prOpened(task: Task, pr: PrRef): Promise<void> {
     await this.postOnboardingComment(task, pr);
     this.background.track(task.id, "assignee", this.mirrorAssignee(task, pr));
