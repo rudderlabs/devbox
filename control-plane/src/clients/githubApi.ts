@@ -1,8 +1,8 @@
 // GitHub REST wrappers + PR-URL parsing. Plain function exports, mirrors
-// clients/linear.ts. This is the IMPLEMENTATION module; production code and
-// tests import it through the ../clients/github barrel. github.test.ts imports
-// it directly because this specifier is never mock.module'd — see github.ts and
-// control-plane/README.md (Conventions) for why that matters.
+// integrations/linear/client.ts. This is the IMPLEMENTATION module; production
+// code and tests import it through the ../clients/github barrel. github.test.ts
+// imports it directly because this specifier is never mock.module'd — see
+// github.ts and control-plane/README.md (Conventions) for why that matters.
 //
 // Auth: a bearer token from the GitHub token provider (./githubToken):
 // GITHUB_TOKEN_FILE re-read on a TTL, or GITHUB_TOKEN. The control plane is

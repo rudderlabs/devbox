@@ -12,7 +12,7 @@ const SOURCE = /\.[cm]?([jt]sx?)$/;
 
 // Besides its own folder and packages (node:*, hono, npm), a file under
 // integrations/<name>/ may import these, its own API clients (named <name>
-// up to their first capital, such as clients/linearOauth for linear, so Linear
+// up to their first capital, such as clients/githubToken for github, so Linear
 // never calls GitHub: the code host does), and the database row types
 // (type-only).
 const SHARED = [
@@ -93,7 +93,7 @@ describe("integration folders", () => {
       'import { Hono } from "hono";',
       'import { AgentSessionService } from "./agentSession.js";',
       'import { getUserById } from "../../clients/github";',
-      'import { LinearTokenError } from "../../clients/linearOauth";',
+      'import { LinearTokenError } from "./oauth";',
     ].join("\n");
     expect(violations(file, code)).toEqual([
       "integrations/linear/index.ts imports ../../db/schema",
@@ -113,10 +113,10 @@ describe("integration folders", () => {
         join(INTEGRATIONS, name, "index.ts"),
         `import { x } from "../../clients/${client}";`,
       ).length === 0;
-    expect(["linear", "linearApi", "linearOauth"].map((c) => allowed("linear", c))).toEqual([
-      true,
-      true,
-      true,
+    expect(["github", "githubApi", "githubToken"].map((c) => allowed("linear", c))).toEqual([
+      false,
+      false,
+      false,
     ]);
     expect(["github", "githubApi", "githubToken"].map((c) => allowed("github", c))).toEqual([
       true,

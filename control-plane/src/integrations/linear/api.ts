@@ -1,9 +1,9 @@
 import type { LinearClient } from "@linear/sdk";
 
 // Linear SDK wrappers and issue helpers. This is the IMPLEMENTATION module;
-// production code and boundary tests import it through the ../clients/linear
-// barrel. linear.test.ts imports it directly because this specifier is never
-// mock.module'd. See linear.ts and control-plane/README.md (Conventions).
+// production code and boundary tests import it through the ./client barrel.
+// api.test.ts imports it directly because this specifier is never
+// mock.module'd. See client.ts and control-plane/README.md (Conventions).
 
 type ActivityContent =
   | { type: "thought"; body: string }

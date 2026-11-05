@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
-// Type-only import — erased at link time, so it can't collide with the
-// mock.module barrel factories below, and it pins the real contract.
-import type { LinearHumanUser } from "../../clients/linearApi";
 import type { Task } from "../../db/schema";
 import { fakeDefinitions, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
+// Type-only import — erased at link time, so it can't collide with the
+// mock.module barrel factories below, and it pins the real contract.
+import type { LinearHumanUser } from "../../integrations/linear/api";
 import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { HookCtx, Integration } from "../../integrations/types";
 import type { InboxRepository, InboxRow, InboxStatus } from "../../repositories/inbox.repository";
@@ -29,7 +29,7 @@ const attachUrlToIssue = mock(() => Promise.resolve());
 const uploadIssueAttachment = mock(() => Promise.resolve());
 const getIssueHumanAssignee = mock(() => Promise.resolve(null as LinearHumanUser | null));
 
-mock.module("../../clients/linear", () => ({
+mock.module("../../integrations/linear/client", () => ({
   emitThought,
   emitAction,
   emitResponse,
@@ -89,7 +89,7 @@ const { HttpError } = await import("../../integrations/http");
 const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
 const { BackgroundWork } = await import("../backgroundWork");
-const { LinearTokenError } = await import("../../clients/linearOauth");
+const { LinearTokenError } = await import("../../integrations/linear/oauth");
 const { logger } = await import("../../logger");
 
 // What the token provider throws when Linear's token endpoint can't be reached

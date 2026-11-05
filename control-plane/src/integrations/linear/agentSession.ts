@@ -1,7 +1,7 @@
-import { emitAction, emitResponse, requireLinearTicketId } from "../../clients/linear";
 import type { Task } from "../../db/schema";
 import { parseExperimentalFlags } from "../../services/experimentalFlags";
 import type { Logger, ReplyTarget, TaskService } from "../types";
+import { emitAction, emitResponse, requireLinearTicketId } from "./client";
 import type { LinearTokenProvider } from "./tokenProvider";
 import type { HandleAgentSessionResult, ParsedAgentSessionEvent } from "./types";
 

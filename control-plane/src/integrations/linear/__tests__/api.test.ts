@@ -9,7 +9,7 @@ const {
   parseLinearIssueIdentifier,
   setIssueStarted,
   uploadIssueAttachment,
-} = await import("../linearApi.ts" + "?linear-impl-test");
+} = await import("../api.ts" + "?linear-impl-test");
 
 describe("parseLinearIssueIdentifier", () => {
   it("extracts identifier from a standard Linear issue URL", () => {

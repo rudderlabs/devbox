@@ -1,11 +1,11 @@
 import { LinearClient, LinearErrorType, parseLinearError } from "@linear/sdk";
+import type { Logger } from "../types";
 import {
   type ClientCredentialsToken,
   type LinearCredentials,
   LinearTokenError,
   requestClientCredentialsToken,
-} from "../../clients/linearOauth";
-import type { Logger } from "../types";
+} from "./oauth";
 
 // Renew a cached token once less than this much of its lifetime remains.
 const RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;

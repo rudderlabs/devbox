@@ -21,7 +21,7 @@ const setIssueStarted = mock(() => Promise.resolve());
 const attachUrlToIssue = mock(() => Promise.resolve());
 const uploadIssueAttachment = mock(() => Promise.resolve());
 
-mock.module("../../clients/linear", () => ({
+mock.module("../../integrations/linear/client", () => ({
   emitAction,
   emitError,
   emitResponse,
@@ -76,7 +76,7 @@ const { ApiIntegration } = await import("../../integrations/api");
 const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
 const { BackgroundWork } = await import("../backgroundWork");
 const { ReplyHolds } = await import("../replyHolds");
-const { LinearTokenError } = await import("../../clients/linearOauth");
+const { LinearTokenError } = await import("../../integrations/linear/oauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",

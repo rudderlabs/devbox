@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 
-const { LINEAR_SCOPES, LinearTokenError, requestClientCredentialsToken } = await import(
-  "../linearOauth"
-);
+const { LINEAR_SCOPES, LinearTokenError, requestClientCredentialsToken } = await import("../oauth");
 
 type Recorded = { url: string; init: RequestInit };
 

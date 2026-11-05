@@ -1,16 +1,5 @@
 import { type LinearClient, LinearError, RatelimitedLinearError } from "@linear/sdk";
 import type { Context } from "hono";
-import {
-  attachUrlToIssue,
-  emitAction,
-  emitError,
-  emitResponse,
-  emitThought,
-  getIssueHumanAssignee,
-  setIssueStarted,
-  uploadIssueAttachment,
-} from "../../clients/linear";
-import { LinearTokenError } from "../../clients/linearOauth";
 import type { Task } from "../../db/schema";
 import { rateLimitWaitMs, retryable } from "../http";
 import { type Outbound, RetryableError, type SendCtx } from "../outbound";
@@ -24,7 +13,18 @@ import type {
   Round,
 } from "../types";
 import { AgentSessionService, isLinearSpec } from "./agentSession";
+import {
+  attachUrlToIssue,
+  emitAction,
+  emitError,
+  emitResponse,
+  emitThought,
+  getIssueHumanAssignee,
+  setIssueStarted,
+  uploadIssueAttachment,
+} from "./client";
 import { type LinearConfig, parseLinearConfig } from "./config";
+import { LinearTokenError } from "./oauth";
 import { type LinearStatus, LinearStatusService } from "./status";
 import { LinearTokenProvider } from "./tokenProvider";
 import { LinearWebhookController } from "./webhook";

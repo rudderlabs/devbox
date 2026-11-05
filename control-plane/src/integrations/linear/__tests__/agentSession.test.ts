@@ -9,7 +9,7 @@ import type { AgentSessionCreated, AgentSessionPrompted } from "../types";
 const emitResponse = mock(() => Promise.resolve());
 const emitAction = mock(() => Promise.resolve());
 
-mock.module("../../../clients/linear", () => ({
+mock.module("../client", () => ({
   emitResponse,
   emitAction,
   emitThought: mock(() => Promise.resolve()),

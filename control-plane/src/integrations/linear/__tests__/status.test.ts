@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import type { ClientCredentialsToken } from "../../../clients/linearOauth";
+import type { ClientCredentialsToken } from "../oauth";
 import { LinearStatusService } from "../status";
 import { LinearTokenProvider } from "../tokenProvider";
 

@@ -47,7 +47,7 @@ const emitAction = mock(() => Promise.resolve());
 const emitThought = mock(() => Promise.resolve());
 const emitError = mock(() => Promise.resolve());
 
-mock.module("../../clients/linear", () => ({
+mock.module("../../integrations/linear/client", () => ({
   setIssueStarted,
   emitAction,
   emitThought,
@@ -109,7 +109,7 @@ const { config: mockedConfig } = (await import("../../config")) as unknown as {
 };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const { RetryableError } = await import("../../integrations/outbound");
-const { LinearTokenError } = await import("../../clients/linearOauth");
+const { LinearTokenError } = await import("../../integrations/linear/oauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",

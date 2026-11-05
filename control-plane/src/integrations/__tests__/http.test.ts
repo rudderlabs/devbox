@@ -11,9 +11,7 @@ mock.module("../../config", () => ({
 const { HttpError, parseRetryAfter, retryable, withTimeout } = await import("../http");
 const { RetryableError } = await import("../outbound");
 const { LinearIntegration } = await import("../linear");
-const { LinearTokenError, requestClientCredentialsToken } = await import(
-  "../../clients/linearOauth"
-);
+const { LinearTokenError, requestClientCredentialsToken } = await import("../linear/oauth");
 const { LinearTokenProvider } = await import("../linear/tokenProvider");
 // A fresh instance (see github.test.ts): never the possibly-mocked barrel.
 const { postIssueComment } = (await import(
