@@ -26,10 +26,11 @@ one that owns the app.
 ## The public URL
 
 Linear delivers webhooks only to a public HTTPS URL. The URL is the
-deployment's top-level `publicUrl`, shared with the GitHub App: one tunnel or
-Ingress serves `/webhook/linear` and `/webhook/github`
-([GitHub](github.md#the-public-url)). `linear:setup` and `github:setup` both
-read and write it, and both refuse anything but a public HTTPS URL: `http://`,
+deployment's top-level `publicUrl`, shared with the GitHub App and Jira: one
+tunnel or Ingress serves `/webhook/linear`, `/webhook/github` and
+`/webhook/jira` ([GitHub](github.md#the-public-url), [Jira](jira.md#the-public-url)).
+`linear:setup`, `github:setup` and `jira:setup` all read and write it, and all
+refuse anything but a public HTTPS URL: `http://`,
 `localhost`, and loopback, link-local or private (RFC 1918, ULA) addresses. A
 path prefix is kept (`https://example.com/devbox`) and a trailing slash
 dropped; a query, a fragment or credentials are refused.
@@ -60,9 +61,9 @@ this limit is therefore lost. Keep any tunnel, reverse-proxy, or Ingress body
 limit at or below 1 MiB so it rejects oversized requests before they reach the
 control plane.
 
-Only `linear:setup` and `github:setup` (for the apps) and `linear:status` and
-`github:status` (for the probe) use the public URL. The control plane does not
-read it.
+Only `linear:setup`, `github:setup` and `jira:setup` (for the apps and the
+webhook) and the `*:status` commands (for the probe) use the public URL. The
+control plane does not read it.
 
 ## Setup
 
@@ -353,7 +354,10 @@ With the GitHub App on, the URL is the App's too, and `linear:setup` also
 prints `Run bun run github:setup to update the GitHub App's webhook URL`, with
 `--target <file>` on Kubernetes (with external tokens: `Update the webhook URL in the GitHub App to <new>/webhook/github: <link>`).
 Run `bun run github:setup --public-url <new>` and it updates the App's webhook
-for you ([GitHub](github.md#the-public-url)).
+for you ([GitHub](github.md#the-public-url)). With Jira on, `linear:setup`
+also prints
+`Update the webhook URL in Jira (Settings → System → WebHooks) to <new>/webhook/jira`:
+edit the webhook in Jira yourself ([Jira](jira.md#the-public-url)).
 
 ## Troubleshooting
 

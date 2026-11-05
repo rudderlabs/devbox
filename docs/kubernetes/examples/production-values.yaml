@@ -176,6 +176,7 @@ extraManifests:
         - toFQDNs:
             - matchName: api.github.com
             - matchName: api.linear.app   # with integrations.linear enabled
+            - matchName: api.atlassian.com   # with integrations.jira enabled
           toPorts:
             - ports: [{ port: "443", protocol: TCP }]
         - toFQDNs:

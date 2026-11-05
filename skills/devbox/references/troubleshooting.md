@@ -21,8 +21,9 @@ variable or the fix. Then the status command for the part that fails.
 
 ## Integrations
 
-- `bun run github:status [--target <file>]` and
-  `bun run linear:status [--target <file>]` show the settings, where each
+- `bun run github:status [--target <file>]`,
+  `bun run linear:status [--target <file>]` and
+  `bun run jira:status [--target <file>]` show the settings, where each
   secret is found, what the control plane reports, and whether the public URL
   reaches devbox.
 - "no answer": the tunnel is down, or the Ingress or DNS is not ready.
@@ -31,8 +32,14 @@ variable or the fix. Then the status command for the part that fails.
 - `Entity not found: Organization` from a Linear check: the Linear app was
   just created, and Linear answers this for about a minute. The check retries
   for 60 seconds; if it still fails, run the command again a little later.
-- Tables of symptoms: [docs/github.md](../../../docs/github.md#troubleshooting)
-  and [docs/linear.md](../../../docs/linear.md).
+- Assigning a Jira issue does nothing: read the control plane's log for
+  `jira_webhook.ignored` and its `reason` (`untrusted` assigner or reporter,
+  `foreign_project`, `restricted_issue`, `non_human`), for
+  `jira_webhook.trust_unresolved` (group lookups fail: the service account
+  needs Browse users and groups), or for a webhook signature mismatch.
+- Tables of symptoms: [docs/github.md](../../../docs/github.md#troubleshooting),
+  [docs/linear.md](../../../docs/linear.md) and
+  [docs/jira.md](../../../docs/jira.md#troubleshooting).
 
 ## Tasks
 

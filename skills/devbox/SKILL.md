@@ -1,14 +1,15 @@
 ---
 name: devbox
-description: How devbox works and how to run it — the self-hosted coding agent that takes a task, opens a draft pull request and takes follow-ups. Use when setting devbox up (bun run quickstart, devbox.config.json, Docker Compose, kind, Kubernetes, Helm, GitOps, EKS), when using it (bun run devbox create/logs/send, CLI profiles), when connecting the GitHub App, Linear or Slack, when upgrading or uninstalling it, or when something about it fails (bun run up, k8s:install, *:status, iron-proxy, sandboxes, secrets, the keychain, tunnels).
+description: How devbox works and how to run it — the self-hosted coding agent that takes a task, opens a draft pull request and takes follow-ups. Use when setting devbox up (bun run quickstart, devbox.config.json, Docker Compose, kind, Kubernetes, Helm, GitOps, EKS), when using it (bun run devbox create/logs/send, CLI profiles), when connecting the GitHub App, Linear, Jira or Slack, when upgrading or uninstalling it, or when something about it fails (bun run up, k8s:install, *:status, iron-proxy, sandboxes, secrets, the keychain, tunnels).
 ---
 
 # devbox
 
 devbox is a coding agent that runs on the user's own infrastructure and works
-on their GitHub repos. A task goes in through the CLI (or a Linear issue, or a
-GitHub `@mention`); the agent plans, implements, reviews its own work and opens
-a draft pull request; follow-ups push new commits to the same pull request.
+on their GitHub repos. A task goes in through the CLI (or a Linear or Jira
+issue, or a GitHub `@mention`); the agent plans, implements, reviews its own
+work and opens a draft pull request; follow-ups push new commits to the same
+pull request.
 
 ```
 devbox CLI ──HTTP──> control plane ──OpenSandbox──> sandbox, one per task (harness)
@@ -38,7 +39,7 @@ the real ones and allows writes only to the configured repos. Details:
   and every task's workspace), `k8s:uninstall --purge`, `*:disable --forget`,
   `bun run secrets rm|clear`.
 - **Diagnose with the status commands first:** `github:status`,
-  `linear:status`, `k8s:check`, `bun run devbox show <task>`.
+  `linear:status`, `jira:status`, `k8s:check`, `bun run devbox show <task>`.
 - **Read the linked doc before changing a setting** instead of guessing a
   field: the config parsers reject unknown keys.
 
@@ -48,7 +49,7 @@ the real ones and allows writes only to the configured repos. Details:
 |---|---|
 | Set devbox up on this machine for the first time | [references/quickstart.md](references/quickstart.md) |
 | Run tasks, follow them, switch control planes | [references/using.md](references/using.md) |
-| Connect the GitHub App, Linear or Slack | [references/integrations.md](references/integrations.md) |
+| Connect the GitHub App, Linear, Jira or Slack | [references/integrations.md](references/integrations.md) |
 | Run on Kubernetes: installer, GitOps, EKS, upgrade, uninstall | [references/kubernetes.md](references/kubernetes.md) |
 | Something fails | [references/troubleshooting.md](references/troubleshooting.md) |
 
@@ -76,6 +77,7 @@ Kubernetes those live in the target file (`--target`) instead
 | `bun run secrets ls\|rm\|clear` | Show or remove the secrets saved in the keychain |
 | `bun run github:setup\|status\|disable` | The GitHub App |
 | `bun run linear:setup\|status\|disable` | Linear |
+| `bun run jira:setup\|status\|disable` | Jira |
 | `bun run k8s:kind` | A local kind cluster with devbox installed |
 | `bun run k8s:install\|connect\|check\|refresh-snapshot\|uninstall` | Kubernetes, with `--target <file>` |
 
@@ -90,7 +92,7 @@ Say so instead of looking for a way around it:
 - Two LLM APIs: OpenAI's Responses API and Anthropic's Messages API. A
   self-hosted model needs a server that speaks the Responses API with
   reasoning, on port 80 or 443 under a DNS name.
-- Work comes in from the CLI, Linear and GitHub. Slack only gets completion
-  updates for Linear tasks. No Jira, no web UI.
-- A task can't be stopped from Linear yet.
+- Work comes in from the CLI, Linear, Jira (Cloud only) and GitHub. Slack
+  only gets completion updates for Linear tasks. No web UI.
+- A task can't be stopped from Linear or Jira yet.
 - No stable extension interface ([docs/extending.md](../../docs/extending.md)).

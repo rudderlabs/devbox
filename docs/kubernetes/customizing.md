@@ -41,7 +41,7 @@ The control plane has a ClusterIP Service, `devbox-control-plane` on port
 They take the same fields: `enabled`, `className`, `host`, `annotations` and
 `tls`.
 
-- `ingress.webhooks` routes `/webhook/` only, for GitHub and Linear.
+- `ingress.webhooks` routes `/webhook/` only, for GitHub, Linear and Jira.
 - `ingress.api` routes `/`, webhooks included, for the API, the CLI and event
   streams. The API requires an API token.
 
@@ -241,9 +241,9 @@ Each integration has a switch, `enabled`, and its settings as chart values.
 Only `enabled: true` turns one on: its secrets alone, in a Secret or in your
 shell, never do. With the installer, set them in the target file's top-level
 `integrations` block, which the installer copies into these values (`values`
-refuses `integrations`); `bun run linear:setup` writes the Linear part. With
-GitOps, set the values directly, and keep the target file's `integrations`
-block in step with them: `bun run k8s:check` reads which integrations are
+refuses `integrations`); `bun run linear:setup` writes the Linear part and
+`bun run jira:setup` the Jira part. With GitOps, set the values directly, and
+keep the target file's `integrations` block in step with them: `bun run k8s:check` reads which integrations are
 enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 
 | Value | Meaning |
@@ -260,6 +260,14 @@ enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 | `integrations.githubApp.ciResults` | Default `true`: failed CI runs on the agent's pull requests reach the agent. |
 | `secrets.githubApp.existingSecret` | Your own Secret for the App's private key (key `private-key`), instead of `devbox-github-app` ([secrets.md](secrets.md#the-github-app-key-and-the-minter)). |
 | `github.trustedOrgs`, `github.trustedUsers` | Lists of GitHub orgs and logins whose pull request discussion the agent reads ([trust settings](../configuration.md#trust-settings)). One is required with the GitHub App enabled; they apply without it too. |
+| `integrations.jira.enabled` | Turns Jira on: webhooks at `/webhook/jira`. See [docs/jira.md](../jira.md). |
+| `integrations.jira.siteUrl`, `integrations.jira.cloudId` | The site's `https` origin and its cloud ID. Required when enabled. |
+| `integrations.jira.botEmail`, `integrations.jira.botAccountId`, `integrations.jira.botName` | The service account's email, account ID and display name. Required when enabled. |
+| `integrations.jira.projectKeys` | The keys of the projects devbox works in. Required when enabled. |
+| `integrations.jira.trustedGroups`, `integrations.jira.trustedUsers` | Jira groups, and account IDs, of the people who may assign issues to devbox and ask it to follow up ([docs/jira.md](../jira.md#trust)). One is required when enabled. |
+| `integrations.jira.statuses.started`, `.done`, `.failed` | The statuses devbox moves an issue to. Empty: no move ([docs/jira.md](../jira.md#statuses)). |
+| `integrations.jira.tokenExpiresAt` | When the API token expires, `YYYY-MM-DD`. Required when enabled. |
+| `integrations.jira.allowRestrictedIssues` | Default `false`. `true` acts on issues with a security level too. |
 
 For example, in a target file:
 
@@ -271,14 +279,21 @@ For example, in a target file:
     "slack": { "enabled": true, "channelId": "C0123456789" },
     "githubApp": { "enabled": true, "appId": 123456, "slug": "example-devbox",
                    "installationId": 7890123, "botUserId": 1234567,
-                   "tokens": "devbox", "tokenScope": "repos", "ciResults": true } } }
+                   "tokens": "devbox", "tokenScope": "repos", "ciResults": true },
+    "jira": { "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
+              "botEmail": "…", "botAccountId": "…", "botName": "devbox",
+              "projectKeys": ["ENG"], "trustedGroups": ["devbox-users"],
+              "statuses": { "started": "In Progress", "done": "Done" },
+              "tokenExpiresAt": "2027-01-31" } } }
 ```
 
 `bun run github:setup --target <file>` writes the `githubApp` block, and the
 trust list when none is set ([docs/github.md](../github.md)). The installer
 copies the block into the chart values, with `slug` as `botLogin`. `org` and
-`pending`, which setup also writes, are not chart values. `publicUrl` stays in
-the target file, and Linear and GitHub share it.
+`pending`, which setup also writes, are not chart values.
+`bun run jira:setup --target <file>` writes the `jira` block, which the
+installer copies as it is. `publicUrl` stays in the target file, and Linear,
+GitHub and Jira share it.
 
 The chart refuses to render an enabled integration with a required setting
 missing, for example `integrations.slack.enabled is true:
@@ -293,20 +308,25 @@ the control plane. For the GitHub App it also refuses:
 - `tokenScope: repos` with no `repos`:
   `tokenScope: repos needs at least one entry in repos (or use tokenScope: installation)`.
 
-Each message starts with `integrations.githubApp.enabled is true: `.
+Each message starts with `integrations.githubApp.enabled is true: `. For
+Jira it refuses an enabled block without `siteUrl`, `cloudId`, `botEmail`,
+`botAccountId`, `botName`, `projectKeys` or `tokenExpiresAt`, or without
+`trustedGroups` or `trustedUsers`.
 
 - **The secrets** go in the Secret `devbox-integrations`, or your own with
   `secrets.integrations.existingSecret`, under their env names:
   `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`,
-  `GITHUB_WEBHOOK_SECRET` ([secrets.md](secrets.md)). The installer writes
-  only those of the enabled integrations.
+  `GITHUB_WEBHOOK_SECRET`, `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET`
+  ([secrets.md](secrets.md)). The installer writes only those of the enabled
+  integrations.
 - **Webhooks** need a public route to `/webhook/`: the `webhooks` or `api`
   Ingress, or an `HTTPRoute`.
 - **Egress.** With an egress policy on the control plane, allow
-  `api.linear.app` for Linear and `slack.com` for Slack. The GitHub App's
-  minter has its own NetworkPolicy: DNS, port 443 and the Kubernetes API.
-- **Slack is Kubernetes-only** for now; the local stack refuses it. Linear and
-  the GitHub App run on both.
+  `api.linear.app` for Linear, `api.atlassian.com` for Jira and `slack.com`
+  for Slack. The GitHub App's minter has its own NetworkPolicy: DNS, port 443
+  and the Kubernetes API.
+- **Slack is Kubernetes-only** for now; the local stack refuses it. Linear,
+  Jira and the GitHub App run on both.
 
 **Restarting the control plane.** It reads the integrations Secret as env at
 start, so a changed Secret takes effect only after a restart. `k8s:install`

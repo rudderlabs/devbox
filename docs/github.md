@@ -61,11 +61,11 @@ The personal-token mode is the quickstart, unchanged. To go back to it, run
 ## The public URL
 
 GitHub delivers webhooks only to a public HTTPS URL, and the App stores that
-URL. It is the same setting as for Linear: the top-level `publicUrl` of the
-config file (`devbox.config.json`, or the target file on Kubernetes). One
-tunnel or Ingress serves `/webhook/github` and `/webhook/linear`. How the URL
-is chosen and which URLs are refused is described in
-[Linear: The public URL](linear.md#the-public-url).
+URL. It is the same setting as for Linear and Jira: the top-level `publicUrl`
+of the config file (`devbox.config.json`, or the target file on Kubernetes).
+One tunnel or Ingress serves `/webhook/github`, `/webhook/linear` and
+`/webhook/jira`. How the URL is chosen and which URLs are refused is described
+in [Linear: The public URL](linear.md#the-public-url).
 
 In short:
 
@@ -87,9 +87,9 @@ devbox-minted tokens it updates the App's webhook URL itself and prints
 `Updated the GitHub App's webhook URL to <new>/webhook/github`. With external
 tokens, or when no private key is available to it, it prints
 `Update the webhook URL in the GitHub App to <new>/webhook/github: <settings link>`
-and you change it on the App's settings page. If Linear is on, it prints
-Linear's line too. `linear:setup` run with a new URL prints
-`Run bun run github:setup to update the GitHub App's webhook URL` (with
+and you change it on the App's settings page. If Linear or Jira is on, it
+prints their lines too. `linear:setup` and `jira:setup` run with a new URL
+print `Run bun run github:setup to update the GitHub App's webhook URL` (with
 `--target <file>` on Kubernetes): it does not hold the key.
 
 ## Set up
