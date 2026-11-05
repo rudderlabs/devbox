@@ -52,7 +52,7 @@ export async function disable(
     {
       command: "gitlab:disable --forget",
       items: [
-        `integrations.gitlab and values.gitlab in ${d.configPath}`,
+        `integrations.gitlab and the ${d.trustKey} trust lists in ${d.configPath}`,
         ...saved.map((name) => `${name} for ${scope} in the system keychain`),
       ],
       question: "Remove these? [y/N] ",
@@ -67,7 +67,11 @@ export async function disable(
   for (const name of saved) await k?.delete(entryName(d.deployment, name));
   writeConfigKeys(d.configPath, {
     "integrations.gitlab": undefined,
-    "values.gitlab": undefined,
+    // On Compose the `gitlab` block also holds the instance: only its trust
+    // lists go; on k8s values.gitlab holds nothing else.
+    ...(d.trustKey === "values.gitlab"
+      ? { "values.gitlab": undefined }
+      : { "gitlab.trustedGroups": undefined, "gitlab.trustedUsers": undefined }),
   });
   log(`Next: ${d.applyCommand}`);
   if (d.instance) {

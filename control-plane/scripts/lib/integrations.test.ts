@@ -145,7 +145,7 @@ describe("parseIntegrations", () => {
       'integrations: unknown key "jira" (allowed: linear, slack, gitlab, githubApp)',
     );
     expect(failure({ jira: {} }, COMPOSE)).toBe(
-      'integrations: unknown key "jira" (allowed: linear, githubApp)',
+      'integrations: unknown key "jira" (allowed: linear, githubApp, gitlab)',
     );
   });
 
@@ -477,9 +477,15 @@ describe("integrations.gitlab", () => {
     );
   });
 
-  it("is Kubernetes only", () => {
-    expect(failure({ enabled: false }, "compose")).toBe(
-      "integrations.gitlab: supported on Kubernetes only (the target file)",
+  it("is accepted on Compose as on Kubernetes", () => {
+    expect(parse({ enabled: true, botUsername: "devbox", botUserId: 2 }, "compose").gitlab).toEqual(
+      {
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: true,
+        webhookAuth: "signing",
+      },
     );
   });
 

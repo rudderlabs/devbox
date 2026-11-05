@@ -48,7 +48,10 @@ import { type PrivateKey, resolvePrivateKey } from "./lib/githubAppKey";
 import {
   type EnabledGithubApp,
   enabledGithubApp,
+  enabledGitlab,
   enabledLinear,
+  type GitlabIntegration,
+  gitlabWebhookSecretName,
   type LinearIntegration,
 } from "./lib/integrations";
 import { keychainFor } from "./lib/keychain";
@@ -60,6 +63,7 @@ import {
   type ResolverDeps,
   resolveSecret,
 } from "./lib/secrets";
+import { checkGitlab, type GitlabIdentity } from "./gitlab/check";
 import { checkLinear, type LinearIdentity } from "./linear/check";
 import { bunVersionError } from "./up/bunVersion";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput } from "./up/cliLogin";
@@ -67,6 +71,7 @@ import {
   type ComposeDevboxConfig,
   type DevboxConfig,
   githubRepos,
+  type GitlabConfig,
   gitlabRepos,
   LLM_STAGES,
   loadConfig,
@@ -75,6 +80,7 @@ import {
   DEFAULT_DNS_RESOLVER,
   DNS_RESOLVER,
   GITHUB_TOKEN_FILE,
+  gitlabHostAndPrefix,
   llmHost,
   OUTPUT_PATH,
   renderIronProxyConfig,
@@ -89,6 +95,11 @@ const ROOT = join(CP, "..");
 const CONFIG_PATH = join(ROOT, "devbox.config.json");
 const COMPOSE = ["docker", "compose", "-f", join(CP, "docker-compose.yml")];
 const CA = join(CP, "infra", "local", "certs", "ca.crt");
+// gitlab.caFile, copied here for the iron-proxy and control-plane mounts
+// (docker-compose.yml); written empty when there is none, so the mount exists.
+export const GITLAB_CA_COPY = join(CP, "infra", "local", "certs", "gitlab-ca.crt");
+const GITLAB_CA_IN_PROXY = "/certs/gitlab-ca.crt";
+const GITLAB_CA_IN_CONTROL_PLANE = "/etc/devbox/ca/ca.crt";
 const OPENSANDBOX_KEY = join(CP, "infra", "local", "opensandbox.key");
 const API_URL = "http://localhost:3000";
 const HEALTH_TIMEOUT_MS = 180_000;
@@ -211,6 +222,79 @@ export function githubComposeEnv(
   };
 }
 
+type GitlabSecrets = { token: string; webhookToken?: string };
+type GitlabEnvName =
+  | "GITLAB_BASE_URL"
+  | "GITLAB_TOKEN"
+  | "GITLAB_WEBHOOKS_ENABLED"
+  | "GITLAB_WEBHOOK_SIGNING_TOKEN"
+  | "GITLAB_WEBHOOK_SECRET"
+  | "GITLAB_BOT_USERNAME"
+  | "GITLAB_BOT_USER_ID"
+  | "GITLAB_CI_RESULT_ENABLED"
+  | "GITLAB_TRUSTED_GROUPS"
+  | "GITLAB_TRUSTED_USERS"
+  | "IRON_PROXY_GITLAB_HOST"
+  | "IRON_PROXY_SSL_CERT_FILE"
+  | "CONTROL_PLANE_NODE_EXTRA_CA_CERTS";
+
+// The GitLab values for Compose. Every key is always set (empty when unused),
+// so a value left in the shell never reaches a container. The instance and
+// token come with `gitlab.baseUrl`; the webhook settings only with
+// `integrations.gitlab` enabled; the CA paths only with `gitlab.caFile`.
+export function gitlabComposeEnv(
+  gitlab: GitlabConfig | undefined,
+  integration: GitlabIntegration | undefined,
+  secrets?: GitlabSecrets,
+): Record<GitlabEnvName, string> {
+  const off: Record<GitlabEnvName, string> = {
+    GITLAB_BASE_URL: "",
+    GITLAB_TOKEN: "",
+    GITLAB_WEBHOOKS_ENABLED: "",
+    GITLAB_WEBHOOK_SIGNING_TOKEN: "",
+    GITLAB_WEBHOOK_SECRET: "",
+    GITLAB_BOT_USERNAME: "",
+    GITLAB_BOT_USER_ID: "",
+    GITLAB_CI_RESULT_ENABLED: "",
+    GITLAB_TRUSTED_GROUPS: "",
+    GITLAB_TRUSTED_USERS: "",
+    IRON_PROXY_GITLAB_HOST: "",
+    IRON_PROXY_SSL_CERT_FILE: "",
+    CONTROL_PLANE_NODE_EXTRA_CA_CERTS: "",
+  };
+  if (!gitlab) return off;
+  if (!secrets) throw new Error("gitlab.baseUrl is set but GITLAB_TOKEN was not resolved");
+  const env: Record<GitlabEnvName, string> = {
+    ...off,
+    GITLAB_BASE_URL: gitlab.baseUrl,
+    GITLAB_TOKEN: secrets.token,
+    GITLAB_TRUSTED_GROUPS: (gitlab.trustedGroups ?? []).join(","),
+    GITLAB_TRUSTED_USERS: (gitlab.trustedUsers ?? []).join(","),
+    IRON_PROXY_GITLAB_HOST: gitlabHostAndPrefix(gitlab.baseUrl).host,
+    ...(gitlab.caFile
+      ? {
+          IRON_PROXY_SSL_CERT_FILE: GITLAB_CA_IN_PROXY,
+          CONTROL_PLANE_NODE_EXTRA_CA_CERTS: GITLAB_CA_IN_CONTROL_PLANE,
+        }
+      : {}),
+  };
+  const on = enabledGitlab({ gitlab: integration });
+  if (!on) return env;
+  if (!secrets.webhookToken) {
+    throw new Error(
+      `integrations.gitlab is enabled but ${gitlabWebhookSecretName(on)} was not resolved`,
+    );
+  }
+  return {
+    ...env,
+    GITLAB_WEBHOOKS_ENABLED: "true",
+    [gitlabWebhookSecretName(on)]: secrets.webhookToken,
+    GITLAB_BOT_USERNAME: on.botUsername,
+    GITLAB_BOT_USER_ID: String(on.botUserId),
+    GITLAB_CI_RESULT_ENABLED: String(on.ciResults),
+  };
+}
+
 // The Compose profiles to start: the token minter for devbox-minted tokens.
 export const composeProfiles = (app: EnabledGithubApp | undefined): string[] =>
   app?.tokens === "devbox" ? ["github-app"] : [];
@@ -317,6 +401,7 @@ export function composeEnvFor(
     opensandboxKey: string;
     linear?: LinearSecrets;
     githubApp?: GithubAppSecrets;
+    gitlab?: GitlabSecrets;
   },
 ): Env {
   return {
@@ -336,6 +421,7 @@ export function composeEnvFor(
     ...llmComposeEnv(cfg.llm),
     ...linearComposeEnv(cfg.integrations.linear, values.linear),
     ...githubComposeEnv(enabledGithubApp(cfg.integrations), cfg, values.githubApp ?? {}),
+    ...gitlabComposeEnv(cfg.gitlab, cfg.integrations.gitlab, values.gitlab),
   };
 }
 
@@ -356,12 +442,6 @@ async function prerequisites(): Promise<ComposeDevboxConfig> {
   const tooOld = bunVersionError(Bun.version);
   if (tooOld) throw new UpError(tooOld);
   const cfg = loadConfig(CONFIG_PATH);
-  // The Compose stack routes and authenticates only GitHub traffic.
-  if (gitlabRepos(cfg.repos).length > 0) {
-    throw new UpError(
-      "devbox.config.json: repos on GitLab (gitlab.baseUrl) are supported on Kubernetes only (bun run k8s:install); the local stack takes GitHub repos",
-    );
-  }
   let docker: Awaited<ReturnType<typeof capture>>;
   try {
     docker = await capture(["docker", "info", "--format", "{{.ServerVersion}}"], {
@@ -524,6 +604,18 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     }
   }
   let llmR = await resolveSecret("LLM_API_KEY", secretDeps);
+  // The GitLab token with an instance configured, and its webhook token with
+  // the webhooks on (the key integrations.gitlab.webhookAuth names).
+  const gitlabOn = enabledGitlab(cfg.integrations);
+  let gitlabR: { token: Resolved; webhook?: Resolved } | undefined;
+  if (cfg.gitlab) {
+    gitlabR = {
+      token: await resolveSecret("GITLAB_TOKEN", secretDeps),
+      ...(gitlabOn
+        ? { webhook: await resolveSecret(gitlabWebhookSecretName(gitlabOn), secretDeps) }
+        : {}),
+    };
+  }
   // Both Linear secrets, only when Linear is enabled (with a terminal they are
   // asked for; without one `up` fails naming the variable).
   const linear = enabledLinear(cfg.integrations);
@@ -555,6 +647,40 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     }
     await offerSave(githubR, secretDeps);
     github = githubR.value;
+  }
+  // The GitLab CA, read once for the check and the copy the containers mount.
+  const gitlabCa = cfg.gitlab?.caFile ? readFileSync(cfg.gitlab.caFile, "utf8") : undefined;
+  if (gitlabR && cfg.gitlab) {
+    const instance = cfg.gitlab;
+    if (skipChecks) {
+      await offerSave(gitlabR.token, secretDeps);
+    } else {
+      let gitlabIdentity: GitlabIdentity;
+      ({ resolved: gitlabR.token, result: gitlabIdentity } = await checkWithRetry(
+        gitlabR.token,
+        secretDeps,
+        (token) =>
+          checkGitlab(instance, token, gitlabRepos(cfg.repos), fetch, {
+            ...(gitlabCa !== undefined ? { ca: gitlabCa } : {}),
+            ...(gitlabOn ? { webhooks: { trustedGroups: instance.trustedGroups ?? [] } } : {}),
+          }),
+      ));
+      await offerSave(gitlabR.token, secretDeps);
+      log(
+        `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`,
+      );
+      if (
+        gitlabOn &&
+        (gitlabOn.botUserId !== gitlabIdentity.id ||
+          gitlabOn.botUsername !== gitlabIdentity.username)
+      ) {
+        throw new UpError(
+          `integrations.gitlab names the bot ${gitlabOn.botUsername} (id ${gitlabOn.botUserId}), but the GitLab token belongs to ${gitlabIdentity.username} (id ${gitlabIdentity.id}). Run bun run gitlab:setup to re-register the webhooks for this token.`,
+        );
+      }
+    }
+    // GitLab only signs with the webhook token: it cannot be checked here.
+    if (gitlabR.webhook) await offerSave(gitlabR.webhook, secretDeps);
   }
   if (skipChecks) {
     await offerSave(llmR, secretDeps);
@@ -606,6 +732,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
       webhookSecret: linearR.webhook.value,
     },
     githubApp: gh.app && { webhookSecret: gh.webhook.value, pem: gh.key?.pem },
+    gitlab: gitlabR && { token: gitlabR.token.value, webhookToken: gitlabR.webhook?.value },
   });
   writeFileSync(
     OUTPUT_PATH,
@@ -617,10 +744,14 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     ),
   );
   log(`wrote ${relative(ROOT, OUTPUT_PATH)}`);
+  // The mount exists in every mode; empty, nothing reads it.
+  writeFileSync(GITLAB_CA_COPY, gitlabCa ?? "");
+  if (gitlabCa !== undefined) log(`wrote ${relative(ROOT, GITLAB_CA_COPY)} from gitlab.caFile`);
 
   step(6, "Repos volume");
   await run(["bash", join(CP, "scripts", "build-repos-volume.sh"), CONFIG_PATH], {
-    stdin: `${github}\n`,
+    stdin: `${github}\n${gitlabR?.token.value ?? ""}\n`,
+    ...(cfg.gitlab?.caFile ? { env: { ...process.env, GITLAB_CA_FILE: cfg.gitlab.caFile } } : {}),
   });
 
   step(7, "Images and startup");
@@ -676,6 +807,8 @@ with more than one, name the repo in the task.
   bun run down`);
   if (linear) log("\nCheck Linear with: bun run linear:status");
   if (app) log("\nCheck GitHub with: bun run github:status");
+  if (gitlabOn) log("\nCheck GitLab with: bun run gitlab:status");
+  else if (cfg.gitlab) log("\nFor merge request notes and pipelines: bun run gitlab:setup");
 }
 
 if (import.meta.main) {

@@ -6,11 +6,11 @@ devbox can work on repos hosted on a GitLab instance: self-managed, or
 the webhooks on, an `@<bot>` note on that merge request and a failed pipeline
 on it reach the running task, and the agent answers in the note's thread. A
 deployment may mix GitHub and GitLab repos; each repo's host is read from its
-URL. Kubernetes only: the local Compose stack takes GitHub repos.
+URL. Both deployments take GitLab repos: the local Compose stack (`bun run
+up`) and Kubernetes (`k8s:install`).
 
 Not there yet: a batched review (GitLab sends each note on its own, so each
-mentioning note is one round), approvals as a signal, and an installer step
-(`gitlab:setup`). Tracked in
+mentioning note is one round) and approvals as a signal. Tracked in
 [rudderlabs/devbox#8](https://github.com/rudderlabs/devbox/issues/8).
 
 ## What you need
@@ -45,10 +45,11 @@ mentioning note is one round), approvals as a signal, and an installer step
 > rolls nothing. `k8s:install` prints the `rollout restart` for the control
 > plane and iron-proxy; run it, then `k8s:check`.
 
-Kubernetes only: the local Compose stack takes GitHub repos. The pieces are
-the ones every integration has: the setup in `devbox.config.json`, the
-deployment's settings in the target file, the secrets in Secrets the
-installer writes.
+The pieces are the ones every integration has: the instance and the repos in
+`devbox.config.json`; the deployment's settings (`integrations.gitlab` and
+the trust lists) in `devbox.config.json` on Compose or the target file on
+Kubernetes; the secrets in the system keychain (Compose) or in Secrets the
+installer writes (Kubernetes).
 
 1. Put the instance and the repos in `devbox.config.json`:
 
@@ -66,12 +67,15 @@ installer writes.
    Nested groups are fine. Repo names (the last path segment) must be unique
    across both hosts, because each is cloned to `/workspace/<name>`. `caFile`
    is the PEM of the instance's private CA, absolute path, only when it has
-   one; the installer puts it in a Secret for the chart.
+   one; `bun run up` mounts it into iron-proxy and the control plane, the
+   installer puts it in a Secret for the chart. On Compose the trust lists
+   also live here, as `gitlab.trustedGroups` and `gitlab.trustedUsers`
+   (`gitlab:setup` writes them).
 
 2. Run the setup, with the token in `GITLAB_TOKEN` or at its prompt:
 
    ```
-   bun run gitlab:setup --target <file> [--public-url <url>]
+   bun run gitlab:setup [--target <file>] [--public-url <url>]
                         [--trusted-group <group>]... [--trusted-user <name>]...
                         [--secret-token] [--skip-webhook] [--skip-push-check] [--no-keychain]
    ```
@@ -81,13 +85,14 @@ installer writes.
    webhooks, that it can read pipelines, jobs and the trusted groups'
    members), learns the bot's identity from the token, registers a webhook
    on each project with a signing token it generates, saves the token in the
-   system keychain (or shows it once), and writes `integrations.gitlab`,
-   `values.gitlab` (the trust lists) and `publicUrl` to the target file. It
-   applies nothing and never touches the cluster.
+   system keychain (or shows it once), and writes `integrations.gitlab`, the
+   trust lists and `publicUrl` to `devbox.config.json` (Compose) or the
+   target file (Kubernetes, as `values.gitlab`). It applies nothing and never
+   touches the stack or the cluster.
 
    | Flag | Effect |
    |---|---|
-   | `--target <file>` | The Kubernetes deployment. Required. |
+   | `--target <file>` | A Kubernetes deployment's target file. Without it, the Compose stack. |
    | `--public-url <url>` | The public HTTPS URL GitLab sends webhooks to; else the saved `publicUrl`, else the Ingress ([GitHub: The public URL](github.md#the-public-url)). |
    | `--trusted-group`, `--trusted-user` | Who may drive devbox from GitLab. Default: what the target file holds, else the first repo's group. |
    | `--secret-token` | Verify webhooks with the legacy `X-Gitlab-Token` instead of the signing token. Chosen by itself below GitLab 19.1. |
@@ -99,7 +104,14 @@ installer writes.
    instructions instead: URL `<public URL>/webhook/gitlab`, triggers
    **Comments** and **Pipeline events**, the token setup printed.
 
-3. `bun run k8s:install --target <file>` as usual. It checks the token again,
+3. Apply. On Compose, `bun run up`: it resolves `GITLAB_TOKEN` and the
+   webhook token (environment, then the keychain, then a prompt), checks the
+   token against the instance and the repos, clones the GitLab repos into the
+   repos volume, renders the proxy rules for the instance, and passes the
+   settings to the control plane. `bun run gitlab:status`, `gitlab:disable`
+   and `bun run secrets ls` work the same without `--target`.
+
+   On Kubernetes, `bun run k8s:install --target <file>` as usual. It checks the token again,
    writes `devbox-gitlab` (the token), `devbox-gitlab-ca` (the CA, with
    `caFile`) and the webhook token into `devbox-integrations`, and sets
    `secrets.gitlab.existingSecret`, `ironProxy.caBundle` and the

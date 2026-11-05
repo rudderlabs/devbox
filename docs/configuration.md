@@ -643,7 +643,7 @@ accepted or forwarded. Rename operator settings to the corresponding
 ### Configuring the local stack
 
 Configure the Compose deployment only through the supported settings in
-`devbox.config.json` and then run `bun run up` again. `llm`, `sandbox`, `github`
+`devbox.config.json` and then run `bun run up` again. `llm`, `sandbox`, `github`, `gitlab`
 and `integrations` are translated to the control-plane and sandbox environment
 by `up`; same-named values in your shell do not override them. Agent model and
 effort settings therefore belong in `llm`, not in hand-set `HARNESS_*` variables.

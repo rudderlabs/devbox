@@ -1,6 +1,6 @@
 ---
 name: devbox
-description: How devbox works and how to run it — the self-hosted coding agent that takes a task, opens a draft pull request and takes follow-ups. Use when setting devbox up (bun run quickstart, devbox.config.json, Docker Compose, kind, Kubernetes, Helm, GitOps, EKS), when using it (bun run devbox create/logs/send, CLI profiles), when connecting the GitHub App, GitLab (Kubernetes only), Linear or Slack, when upgrading or uninstalling it, or when something about it fails (bun run up, k8s:install, *:status, iron-proxy, sandboxes, secrets, the keychain, tunnels).
+description: How devbox works and how to run it — the self-hosted coding agent that takes a task, opens a draft pull request and takes follow-ups. Use when setting devbox up (bun run quickstart, devbox.config.json, Docker Compose, kind, Kubernetes, Helm, GitOps, EKS), when using it (bun run devbox create/logs/send, CLI profiles), when connecting the GitHub App, GitLab, Linear or Slack, when upgrading or uninstalling it, or when something about it fails (bun run up, k8s:install, *:status, iron-proxy, sandboxes, secrets, the keychain, tunnels).
 ---
 
 # devbox
@@ -76,7 +76,7 @@ Kubernetes those live in the target file (`--target`) instead
 | `bun run secrets ls\|rm\|clear` | Show or remove the secrets saved in the keychain |
 | `bun run github:setup\|status\|disable` | The GitHub App |
 | `bun run linear:setup\|status\|disable` | Linear |
-| `bun run gitlab:setup\|status\|disable` | GitLab merge request notes and pipelines; Kubernetes only, so `--target <file>` is required |
+| `bun run gitlab:setup\|status\|disable` | GitLab merge request notes and pipelines |
 | `bun run k8s:kind` | A local kind cluster with devbox installed |
 | `bun run k8s:install\|connect\|check\|refresh-snapshot\|uninstall` | Kubernetes, with `--target <file>` |
 
@@ -87,14 +87,13 @@ Kubernetes deployment with it (`--target devbox.kind.json` on kind).
 
 Say so instead of looking for a way around it:
 
-- Code hosts: GitHub everywhere, GitLab (gitlab.com or self-managed) on
-  Kubernetes only; the Compose stack takes GitHub repos. No Bitbucket.
-  [docs/gitlab.md](../../docs/gitlab.md).
+- Code hosts: GitHub, and GitLab (gitlab.com or self-managed, one instance
+  per deployment). No Bitbucket. [docs/gitlab.md](../../docs/gitlab.md).
 - Two LLM APIs: OpenAI's Responses API and Anthropic's Messages API. A
   self-hosted model needs a server that speaks the Responses API with
   reasoning, on port 80 or 443 under a DNS name.
 - Work comes in from the CLI, Linear and GitHub, plus GitLab merge request
-  notes and failed pipelines on Kubernetes. Slack only gets completion
+  notes and failed pipelines. Slack only gets completion
   updates, for Linear tasks unless `notifySources` adds API tasks. No Jira, no
   web UI.
 - A task can't be stopped from Linear yet.
