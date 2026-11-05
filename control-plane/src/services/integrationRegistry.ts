@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { Task } from "../db/schema";
-import { SEND_TIMEOUT_MS, TimeoutError, withTimeout } from "../integrations/http";
+import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import { type Outbound, RetryableError } from "../integrations/outbound";
 import type {
   Env,
@@ -42,8 +42,6 @@ export function parseIntegrationConfigs(
 // What every TaskService shares; the registry binds each to its integration.
 type TaskServiceDeps = Omit<ConstructorParameters<typeof BoundTaskService>[1], "createsTasks">;
 
-type DeliverResult = "ok" | "dropped" | "timed_out";
-
 // An integration as core calls it. Each call runs under its timeout with an
 // abort signal. A failure is logged and the caller goes on, except a
 // RetryableError (nothing was sent) from deliver or onPrOpened, which escapes
@@ -53,15 +51,15 @@ type DeliverResult = "ok" | "dropped" | "timed_out";
 // onRoundFinished go to the round's own integration (round.source), whichever
 // name they were looked up by, so a round can't reach another integration.
 export type WrappedIntegration = {
-  // One message for one of the round's targets: "timed_out" when it ran out
-  // of time, "dropped" when it failed for good (both logged). An unknown or
-  // disabled integration's send is skipped (logged) and counts as sent.
+  // One message for one of the round's targets: "dropped" when it timed out
+  // or failed for good (logged). An unknown or disabled integration's send is
+  // skipped (logged) and counts as sent.
   deliver(
     round: Round,
     target: ReplyTarget,
     message: Outbound,
     meta: Record<string, unknown>,
-  ): Promise<DeliverResult>;
+  ): Promise<"ok" | "dropped">;
   // A fresh provision, on every attempt, before the sandbox is created.
   // runId is the assignment's id and target its first reply target.
   onTaskStarted(task: Task, runId: string, target: ReplyTarget): Promise<void>;
@@ -195,7 +193,7 @@ export class IntegrationRegistry {
     target: ReplyTarget,
     message: Outbound,
     meta: Record<string, unknown>,
-  ): Promise<DeliverResult> {
+  ): Promise<"ok" | "dropped"> {
     const log = { ...meta, inboxId: round.id, source: round.source, targetId: target.id };
     // A source this build doesn't know (rows written by a newer build before
     // a rollback) or a disabled integration has no instance.
@@ -212,7 +210,7 @@ export class IntegrationRegistry {
     } catch (err) {
       if (err instanceof RetryableError) throw err;
       logErr(`deliver ${message.type} failed`, err, log);
-      return err instanceof TimeoutError ? "timed_out" : "dropped";
+      return "dropped";
     }
   }
 

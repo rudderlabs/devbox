@@ -73,13 +73,9 @@ export function parseRetryAfter(value: string | null): number | undefined {
   return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
 }
 
-// What withTimeout throws when `ms` passes first.
-export class TimeoutError extends Error {}
-
 // Runs `send` with an abort signal and stops waiting after `ms`, whether or not
 // the client honours the signal. The send may still land after the timeout, so
-// a timeout is never a retry. The registry's deliver reports it as
-// "timed_out", which ends the task's events for the tick.
+// a timeout is a plain failure (dropped), never a retry.
 export async function withTimeout<T>(
   ms: number,
   send: (signal: AbortSignal) => Promise<T>,
@@ -88,7 +84,7 @@ export async function withTimeout<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      const err = new TimeoutError(`timed out after ${ms} ms`);
+      const err = new Error(`timed out after ${ms} ms`);
       ac.abort(err);
       reject(err);
     }, ms);

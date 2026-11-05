@@ -14,12 +14,8 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 
 // Outcome of dispatching a single event.
 // - `ok`: handled; reconcileOne advances the cursor and goes on.
-// - `dropped`: the event's send failed for good without timing out.
-//   reconcileOne advances past it and goes on, while the task's time budget
-//   for the tick lasts.
-// - `timed_out`: the event's send ran out of time. reconcileOne advances past
-//   it, then stops this task's events for the tick, so a slow platform can't
-//   eat the tick.
+// - `dropped`: the event's send timed out or failed for good (logged).
+//   reconcileOne advances past it and goes on to the task's next event.
 // - `hold`: a send (or the owner's onPrOpened) failed before anything went out
 //   (RetryableError); the hold is recorded in ReplyHolds. reconcileOne stops
 //   this task's events BEFORE advancing the cursor, so the event is retried
@@ -33,7 +29,7 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 //   advancing the cursor and WITHOUT applying the side effect. We deliberately
 //   stop-and-alarm rather than skip-and-continue, so a foreign event is visible
 //   and cannot trigger a side effect.
-export type DispatchResult = "ok" | "dropped" | "timed_out" | "hold" | "self_evict" | "abort";
+export type DispatchResult = "ok" | "dropped" | "hold" | "self_evict" | "abort";
 
 // Replaces taskState.service.ts + taskStateHandlers.ts. Flat switch on
 // event.type — each case applies a side effect the same way the old handlers
@@ -212,8 +208,7 @@ export class EventDispatcher {
   // never checks what an integration can show. A disabled integration's send
   // is skipped and counts as sent. The send runs under the registry's send
   // timeout. A RetryableError (nothing was sent) holds the event on the
-  // round's integration. A timeout is logged and returns "timed_out", which
-  // ends the task's events for the tick; any other failure is logged and the
+  // round's integration; a timeout or any other failure is logged and the
   // event dropped.
   private async deliver(
     event: AgentEmit,

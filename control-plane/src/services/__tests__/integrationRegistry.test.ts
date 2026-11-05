@@ -454,7 +454,7 @@ describe("IntegrationRegistry.for: hooks", () => {
     }
   });
 
-  it("cuts a hung call at its timeout: the call resolves, the send times out and the signal aborts", async () => {
+  it("cuts a hung call at its timeout: the call resolves, the send drops and the signal aborts", async () => {
     const error = spyOn(logger, "error").mockImplementation(() => logger);
     try {
       const signals: Record<string, AbortSignal> = {};
@@ -468,7 +468,7 @@ describe("IntegrationRegistry.for: hooks", () => {
         20,
       );
       const linear = r.for("linear");
-      expect(await linear.deliver(row("a-1"), target, reply, {})).toBe("timed_out");
+      expect(await linear.deliver(row("a-1"), target, reply, {})).toBe("dropped");
       expect(await linear.onTaskStarted(task, "a-1", target)).toBeUndefined();
       expect(await linear.onPrOpened(task, "a-1", pr, true)).toBeUndefined();
       expect(await linear.assignee(task, {})).toBeUndefined();
