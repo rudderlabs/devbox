@@ -37,7 +37,8 @@ runs it with `bun run dev`, which restarts the server when a file changes.
 
 The control plane's own settings are environment variables without a prefix,
 read in `src/config.ts`, `src/apiConfig.ts`, `src/integrationsConfig.ts` (Slack),
-and `config.ts` in `src/integrations/linear/` and `src/integrations/github/`.
+and `config.ts` in `src/integrations/api/`, `src/integrations/linear/` and
+`src/integrations/github/`.
 `.env.example` lists them. Compose sets them explicitly in `docker-compose.yml`
 and reads no `.env` file. `bun run dev` outside Compose reads `.env` from this
 directory.

@@ -1,6 +1,7 @@
 // createApp's wiring, end to end through HTTP and the test database: the API
 // creates tasks through its own TaskService, and the task sources the API and
-// the claim filter use are the registry's.
+// the claim filter use are the registry's. Its task key and URL come from the
+// API integration's own settings.
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
 import { sql } from "drizzle-orm";
 import { parseApiConfig } from "../apiConfig";
@@ -11,7 +12,8 @@ const TEST_DATABASE_URL =
 const ENV = {
   API_ENABLED: "true",
   API_AUTH_ENABLED: "false",
-  API_PUBLIC_BASE_URL: "https://devbox.example",
+  API_PUBLIC_BASE_URL: "https://devbox.example/",
+  API_TASK_KEY_PREFIX: "TST-API-",
 };
 mock.module("../config", () => ({
   config: {
@@ -43,13 +45,16 @@ describe("createApp", () => {
     bundle.stopApiStreams();
   });
 
-  it("creates API tasks through the API's own TaskService", async () => {
+  it("creates API tasks through the API's own TaskService, keyed and linked by its settings", async () => {
     const res = await bundle.app.request("/api/tasks", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: "Add a health check" }),
     });
     expect(res.status).toBe(201);
+    const { key, external_url } = (await res.json()) as { key: string; external_url: string };
+    expect(key).toMatch(/^TST-API-\d+$/);
+    expect(external_url).toBe(`https://devbox.example/api/tasks/${key}`);
     expect(await db.execute(sql`SELECT source FROM tasks`)).toEqual([{ source: "api" }]);
   });
 

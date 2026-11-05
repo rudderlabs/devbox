@@ -236,6 +236,7 @@ describe("the integrations this build has", () => {
   });
 
   it("are on from their own settings", async () => {
+    const apiOn = { API_ENABLED: "true", API_PUBLIC_BASE_URL: "https://devbox.example" };
     const env = {
       LINEAR_ENABLED: "true",
       LINEAR_CLIENT_ID: "cid",
@@ -246,14 +247,14 @@ describe("the integrations this build has", () => {
       GITHUB_BOT_LOGIN: "my-bot",
       GITHUB_BOT_USER_ID: "42",
       GITHUB_TRUSTED_USERS: "alice",
-      API_ENABLED: "true",
+      ...apiOn,
     };
     // Linear and GitHub take webhooks only while on; the API has none, so its
     // status tells.
     const r = registry([...definitions], env);
     expect(r.webhooks().map((w) => w.name)).toEqual(["linear", "github"]);
     expect(await r.status("api")).toEqual({ enabled: true, holds: none });
-    const apiOnly = registry([...definitions], { API_ENABLED: "true" });
+    const apiOnly = registry([...definitions], apiOn);
     expect(apiOnly.webhooks()).toEqual([]);
     expect(await apiOnly.status("api")).toEqual({ enabled: true, holds: none });
   });

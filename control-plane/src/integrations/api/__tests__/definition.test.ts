@@ -7,7 +7,7 @@ it("is on only with API_ENABLED=true, takes no webhooks, and reports whether it 
   for (const value of [undefined, "", "false", "1", "TRUE"]) {
     expect(api.parseConfig({ API_ENABLED: value })).toBeUndefined();
   }
-  const cfg = api.parseConfig({ API_ENABLED: "true" });
+  const cfg = api.parseConfig({ API_ENABLED: "true", API_PUBLIC_BASE_URL: "https://api.example" });
   if (!cfg) throw new Error("the API should be on");
   const integration = api.create({ tasks: {} as never, log: logger }, cfg);
   expect(integration.webhook).toBeUndefined();
