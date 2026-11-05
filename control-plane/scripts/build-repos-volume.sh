@@ -39,9 +39,13 @@ REPOS="$(bun -e '
   const { repos } = await Bun.file(process.argv[1]).json();
   for (const r of repos) console.log(r.url, r.branch ?? "main");
 ' "$CONFIG_FILE")"
+# Normalised as parseGitlab does (origin + path, no default port, no trailing
+# slash): the repo URLs are matched and the auth header scoped against it.
 GITLAB_BASE_URL="$(bun -e '
   const { gitlab } = await Bun.file(process.argv[1]).json();
-  console.log((gitlab?.baseUrl ?? "").replace(/\/+$/, ""));
+  if (!gitlab?.baseUrl) { console.log(""); process.exit(0); }
+  const u = new URL(gitlab.baseUrl);
+  console.log(`${u.origin}${u.pathname.replace(/\/+$/, "")}`);
 ' "$CONFIG_FILE")"
 
 CA_MOUNT=()
