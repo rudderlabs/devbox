@@ -158,7 +158,6 @@ export const config = {
     pvcStorageClass: sandbox.pvcStorageClass,
     pvcStorageSize: process.env.PVC_STORAGE_SIZE ?? "15Gi",
   },
-  // /api's own settings. Parsed by apiConfig.ts, which also checks the API
-  // integration's task settings; a bad value fails boot.
+  // /api settings. Parsed by apiConfig.ts; a bad value fails boot.
   api: parseApiConfig(process.env),
 };

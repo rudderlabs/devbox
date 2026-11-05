@@ -6,7 +6,6 @@ import { HealthController } from "./controllers/health.controller";
 import { db } from "./db";
 import { definitions } from "./integrations";
 import { api } from "./integrations/api";
-import type { ApiSettings } from "./integrations/api/config";
 import { apiTaskRepository } from "./repositories/apiTask.repository";
 import { apiTokenRepository } from "./repositories/apiToken.repository";
 import { inboxRepository } from "./repositories/inbox.repository";
@@ -126,14 +125,15 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
   // internal ingress exists must expose nothing.
   let stopApiStreams = () => {};
   if (config.api.enabled) {
-    // The API integration's own settings shape the tasks it creates. It is on
-    // here: config.api.enabled comes from its definition.
-    const { publicBaseUrl, taskKeyPrefix } = integrationConfigs.get(api.name) as ApiSettings;
     const apiTaskService = new ApiTaskService(
       apiTaskRepository,
       registry.tasks(api.name),
       taskEventRepository,
-      { publicBaseUrl, taskKeyPrefix, now: () => new Date() },
+      {
+        publicBaseUrl: config.api.publicBaseUrl,
+        taskKeyPrefix: config.api.taskKeyPrefix,
+        now: () => new Date(),
+      },
     );
     const apiController = new ApiController(apiTaskService, {
       authEnabled: config.api.authEnabled,

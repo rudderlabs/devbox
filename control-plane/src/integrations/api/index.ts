@@ -1,14 +1,11 @@
 import type { Integration, IntegrationDefinition } from "../types";
-import { type ApiSettings, parseApiSettings } from "./config";
 
-// On with API_ENABLED=true, the switch that also mounts /api. Its settings
-// (config.ts) shape the tasks it creates; /api's own settings, such as auth and
-// allowed hosts, are core's (apiConfig.ts), since /api serves every source's
-// tasks.
-export const api: IntegrationDefinition<ApiSettings> = {
+// On with API_ENABLED=true, the switch that mounts /api; the rest of the API's
+// settings are core's (apiConfig.ts).
+export const api: IntegrationDefinition<true> = {
   name: "api",
   createsTasks: true,
-  parseConfig: parseApiSettings,
+  parseConfig: (env) => (env.API_ENABLED === "true" ? true : undefined),
   create: () => new ApiIntegration(),
   disabledStatus: () => ({ enabled: false }),
 };
