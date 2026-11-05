@@ -635,10 +635,15 @@ issue or posting anything to it. So:
 
 - **Upgrade with Jira off**, and turn it on once every replica runs the
   release that has it.
-- **Before rolling back** to a release without Jira, turn Jira off
-  (`jira:disable`, then the command it prints), disable the webhook in Jira,
-  and wait until no Jira task is queued or running
-  (`bun run devbox ls --source jira`).
+- **Before rolling back** to a release without Jira:
+  1. Disable the webhook in Jira, so no new work arrives.
+  2. With Jira still on, wait until no Jira task is queued or running
+     (`bun run devbox ls --source jira`), so their results still reach Jira.
+  3. Turn Jira off (`jira:disable`, then the command it prints), then roll
+     back.
+
+  Turning Jira off before the tasks finish has the same effect as the
+  rollback: they finish without posting to Jira.
 
 ## Jira Free
 
@@ -683,6 +688,7 @@ issue or posting anything to it. So:
 | Jira | The bot is not offered as an assignee | Give the service account the Assignable User permission in the project. `jira:setup` warns about it, and `jira:status` shows `missing ASSIGNABLE_USER …`. |
 | Jira | Assigning does nothing; `jira:status` shows `last webhook from Jira none yet` | The webhook is missing or disabled, its URL is wrong, its JQL leaves the project out, or its events lack Issue updated. Then read the control plane's logs for a rejected signature. |
 | Jira | Assigning does nothing; webhooks arrive | Read the logs for `jira_webhook.ignored` and its `reason`: `untrusted` with `side: assigner` or `side: reporter` ([Trust](#trust)), `foreign_project` (add the key to `projectKeys` and the JQL), `restricted_issue`, or `non_human` (an app, or an automation rule running as Automation for Jira, assigned it). `jira_webhook.trust_unresolved` means group lookups fail, often because the service account lacks Browse users and groups ([The service account](#1-the-service-account)); Jira retries up to five times. |
+| Jira | Assigning does nothing; the log shows `jira webhook failed` with `code: 23505` | The issue's key is already the key of a task from another source, such as a Linear issue with the same key: task keys are unique across sources regardless of case. Jira retries and then gives up; nothing is posted on the issue. Use a project key that no other source uses. |
 | Jira | A comment that mentions the bot does nothing | The author is not trusted, the comment is restricted, the mention is inside a code block, the typed name differs from the bot's name, or the bot was never assigned the issue (`jira_webhook.ignored` with `reason: no_task`). When the bot is the assignee but has no task there, as after an ignored assignment, devbox answers 503 in case the assignment is still on its way, and logs `jira_webhook.task_not_found` at each of Jira's retries. |
 | Jira | The issue doesn't move | See [Statuses](#statuses): no `started` status, the issue was re-assigned or moved, or the logs show `jira transition skipped` or `jira transition refused`. |
 
