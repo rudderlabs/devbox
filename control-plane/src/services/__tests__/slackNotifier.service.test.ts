@@ -87,12 +87,6 @@ describe("SlackNotifierService", () => {
     taskRepo = { getById } as unknown as TaskRepository;
   });
 
-  it("bounds the post with an abort signal", async () => {
-    await make().notifyTerminal(makeTask(), "completed");
-    const arg = (post.mock.calls[0] as unknown as [{ signal?: unknown }])[0];
-    expect(arg.signal).toBeInstanceOf(AbortSignal);
-  });
-
   it("posts a ✅ completion into the configured channel with the ticket + PR links", async () => {
     await make().notifyTerminal(makeTask(), "completed");
 
@@ -263,7 +257,7 @@ describe("SlackNotifierService", () => {
       assignee.mockResolvedValue(unmapped);
       lookupSlackUser.mockResolvedValue("U0ADA");
       await make().notifyTerminal(makeTask(), "completed");
-      expect(lookupSlackUser).toHaveBeenCalledWith("ada@acme.com", expect.any(AbortSignal));
+      expect(lookupSlackUser).toHaveBeenCalledWith("ada@acme.com");
       const text = postedText();
       expect(text).toContain("⚠️ <@U0ADA>: I couldn't assign the PR");
       expect(text).not.toContain("⚠️ ada:");
