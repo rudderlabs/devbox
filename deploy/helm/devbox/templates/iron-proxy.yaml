@@ -34,7 +34,9 @@ spec:
         # iron-proxy reads its config once; a changed allowlist rolls the pods.
         checksum/config: {{ include (print $.Template.BasePath "/iron-proxy-config.yaml") . | sha256sum }}
         {{- with .Values.ironProxy.caBundle }}
-        # The bundle is read once too; a renamed Secret rolls the pods.
+        # The bundle is read once too. The chart sees the Secret's name, not its
+        # content: a renamed Secret rolls the pods, a rotated one does not
+        # (k8s:install says how to restart after a gitlab.caFile change).
         checksum/ca-bundle: {{ . | sha256sum }}
         {{- end }}
     spec:
