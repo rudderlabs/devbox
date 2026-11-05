@@ -538,10 +538,10 @@ class TestSeedInboxTaskIdDerivation(unittest.TestCase):
 
 
 class TestSeedInboxSourceMatrix(unittest.TestCase):
-    def _assert_rejected(self, argv: list[str]) -> None:
+    def _assert_rejected(self, argv: list[str], source: str = "api") -> None:
         stderr = io.StringIO()
         with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(stderr):
-            seed_inbox.main([*argv, "--source", "api", "--dry-run"])
+            seed_inbox.main([*argv, "--source", source, "--dry-run"])
         self.assertEqual(cm.exception.code, 2)
         self.assertIn("not valid for kind", stderr.getvalue())
 
@@ -555,6 +555,16 @@ class TestSeedInboxSourceMatrix(unittest.TestCase):
         for argv in (["assignment", "T"], ["comment", "C"]):
             code, _, _ = _run_main([*argv, "--source", "api", "--dry-run"])
             self.assertEqual(code, 0)
+
+    def test_review_and_ci_result_reject_jira_source(self) -> None:
+        self._assert_rejected(["review", "Summary."], source="jira")
+        self._assert_rejected(["ci_result", "--run-url", RUN_URL], source="jira")
+
+    def test_assignment_and_comment_accept_jira_source(self) -> None:
+        for argv in (["assignment", "T"], ["comment", "C"]):
+            code, out, _ = _run_main([*argv, "--source", "jira", "--dry-run"])
+            self.assertEqual(code, 0)
+            self.assertEqual(_dry_run_entry(out)["source"], "jira")
 
 
 if __name__ == "__main__":
