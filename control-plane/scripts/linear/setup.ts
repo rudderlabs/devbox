@@ -182,7 +182,11 @@ export async function setup(
   for (const line of publicUrlChangeLines(
     d.publicUrl,
     publicUrl,
-    { linear: !register, ...(d.githubApp ? { githubApp: d.githubApp } : {}) },
+    {
+      linear: !register,
+      jira: d.jira === true,
+      ...(d.githubApp ? { githubApp: d.githubApp } : {}),
+    },
     "linear",
     d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : "",
   )) {

@@ -410,6 +410,21 @@ describe("publicUrlChangeLines", () => {
     ]);
   });
 
+  it("Jira: its webhook is updated by hand, after Linear and GitHub", () => {
+    const JIRA_LINE = `Update the webhook URL in Jira (Settings → System → WebHooks) to ${NEXT}/webhook/jira`;
+    const all: Configured = { linear: true, jira: true, githubApp: app("devbox") };
+    expect(publicUrlChangeLines(OLD, NEXT, all, "linear")).toEqual([
+      LINEAR_LINE,
+      RUN_GITHUB,
+      JIRA_LINE,
+    ]);
+    // From jira:setup, which prints the webhook's settings itself: a devbox
+    // App's URL is github:setup's to update.
+    expect(
+      publicUrlChangeLines(OLD, NEXT, { linear: false, githubApp: app("devbox") }, "jira"),
+    ).toEqual([RUN_GITHUB]);
+  });
+
   it("no lines when the URL is new or unchanged", () => {
     const all: Configured = { linear: true, githubApp: app("external") };
     expect(publicUrlChangeLines(undefined, NEXT, all, "linear")).toEqual([]);

@@ -8,7 +8,7 @@ import { installCommand } from "../k8s/kind";
 import { NAMESPACE } from "../k8s/run";
 import { existingSecret } from "../k8s/secrets";
 import { loadTarget } from "../k8s/target";
-import { enabledLinear, type GithubAppIntegration } from "../lib/integrations";
+import { enabledJira, enabledLinear, type GithubAppIntegration } from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
 import { composeApi, k8sApi } from "../linear/deployment";
@@ -24,6 +24,8 @@ export type GithubDeployment = {
   githubApp: GithubAppIntegration | undefined;
   // Whether Linear is on: its webhook URL follows the shared public URL.
   linear: boolean;
+  // Likewise Jira's.
+  jira?: boolean;
   // The repos the App's installation must cover (devbox.config.json).
   repos: RepoConfig[];
   // Who may drive the agent from GitHub: Compose's top-level `github`, or
@@ -65,6 +67,7 @@ export function loadDeployment(opts: {
       configPath,
       githubApp: cfg.integrations.githubApp,
       linear: enabledLinear(cfg.integrations) !== undefined,
+      ...(enabledJira(cfg.integrations) ? { jira: true } : {}),
       repos: cfg.repos,
       trust: { trustedOrgs: cfg.github.trustedOrgs, trustedUsers: cfg.github.trustedUsers },
       ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
@@ -88,6 +91,7 @@ export function loadDeployment(opts: {
     configPath: path,
     githubApp: target.integrations?.githubApp,
     linear: enabledLinear(target.integrations ?? {}) !== undefined,
+    ...(enabledJira(target.integrations ?? {}) ? { jira: true } : {}),
     repos: cfg.repos,
     trust: { trustedOrgs: strings(github.trustedOrgs), trustedUsers: strings(github.trustedUsers) },
     ...(target.publicUrl !== undefined ? { publicUrl: target.publicUrl } : {}),

@@ -58,6 +58,9 @@ const URL_ = "http://localhost:13000";
 
 const LINEAR_TOKEN_URL = "https://api.linear.app/oauth/token";
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
+const JIRA_CLOUD = "00000000-0000-0000-0000-000000000000";
+const JIRA_API = `https://api.atlassian.com/ex/jira/${JIRA_CLOUD}/rest/api/3`;
+const JIRA_BOT_ID = "712020:00000000-0000-0000-0000-000000000000";
 
 // GitHub, the LLM endpoint, Linear and the control plane's /health and /api/me.
 function fakeFetch(me: number, base = URL_) {
@@ -82,6 +85,10 @@ function fakeFetch(me: number, base = URL_) {
       return Response.json({
         data: { viewer: { name: "devbox" }, organization: { name: "Example", urlKey: "example" } },
       });
+    }
+    if (url === `${JIRA_API}/myself`) {
+      calls.push(`jira ${Buffer.from((auth ?? "").slice(6), "base64").toString()}`);
+      return Response.json({ accountId: JIRA_BOT_ID, accountType: "app", displayName: "devbox" });
     }
     if (url === `${base}/health`) return new Response("ok");
     if (url === `${base}/api/me`) return new Response("", { status: me });
@@ -158,6 +165,7 @@ const OPTS: InstallOptions = {
   skipPushCheck: false,
   skipLlmCheck: false,
   skipLinearCheck: false,
+  skipJiraCheck: false,
   netpol: "auto",
   timeout: "15m",
 };
@@ -1967,6 +1975,114 @@ devbox is installed in context kind-devbox. The CLI uses profile "k8s-kind-devbo
   bun run devbox logs -f <task>
 
 Check Linear with: bun run linear:status --target devbox.k8s.json`);
+    });
+  });
+
+  describe("Jira", () => {
+    const JIRA = {
+      jira: {
+        enabled: true,
+        siteUrl: "https://example.atlassian.net",
+        cloudId: JIRA_CLOUD,
+        botEmail: "devbox@example.com",
+        botAccountId: JIRA_BOT_ID,
+        botName: "devbox",
+        projectKeys: ["ENG"],
+        trustedGroups: ["jira-software-users"],
+        statuses: { started: "In Progress", done: "Done" },
+        tokenExpiresAt: "2027-06-30",
+      },
+    };
+    const jiraTarget = (expires = "2027-06-30"): Target => ({
+      ...target(),
+      integrations: { jira: { ...JIRA.jira, tokenExpiresAt: expires } },
+    });
+    const ENV = { GITHUB_TOKEN: "ghp_x", LLM_API_KEY: "sk-y" };
+    const SAVED = {
+      "k8s:kind-devbox/devbox/JIRA_API_TOKEN": "jira-saved",
+      "k8s:kind-devbox/devbox/JIRA_WEBHOOK_SECRET": "jwh-saved",
+    };
+    const integrationsSecret = (s: ReturnType<typeof setup>) =>
+      stdinOf(s.f, APPLY)
+        .map((t) => JSON.parse(t as string))
+        .at(-1);
+    const END = `
+devbox is installed in context kind-devbox. The CLI uses profile "k8s-kind-devbox".
+
+  bun run k8s:connect --target devbox.k8s.json     # keep it running in another terminal
+  bun run devbox create "Add a /health endpoint to acme/widgets"
+  bun run devbox logs -f <task>
+
+Check Jira with: bun run jira:status --target devbox.k8s.json`;
+
+    it("configured Jira: resolves, checks the token, writes the Secret and the chart values", async () => {
+      const script = writingIntegrations(FRESH([TOKEN]));
+      const s = setup(script, {
+        target: jiraTarget(),
+        keychain: new MemoryKeychain(SAVED),
+        env: ENV,
+      });
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(commands(s.f)).toEqual(script.map((c) => c.cmd.join(" ")));
+      expect(integrationsSecret(s)).toEqual(
+        JSON.parse(
+          secretManifest({
+            name: "devbox-integrations",
+            data: { JIRA_API_TOKEN: "jira-saved", JIRA_WEBHOOK_SECRET: "jwh-saved" },
+          }),
+        ),
+      );
+      // The settings go to the chart; the secrets never do.
+      const values = JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string) as Values;
+      expect(values.integrations).toEqual(JIRA);
+      expect(JSON.stringify(values)).not.toContain("jira-saved");
+      expect(JSON.stringify(values)).not.toContain("jwh-saved");
+      expect(s.fetchCalls).toContain("jira devbox@example.com:jira-saved");
+      expect(s.logs.slice(2, 7)).toEqual([
+        "GITHUB_TOKEN: from your environment",
+        "LLM_API_KEY: from your environment",
+        "JIRA_API_TOKEN: from the system keychain (k8s:kind-devbox/devbox)",
+        "JIRA_WEBHOOK_SECRET: from the system keychain (k8s:kind-devbox/devbox)",
+        "Jira: devbox acts as devbox on https://example.atlassian.net",
+      ]);
+      expect(s.logs.at(-1)).toBe(END);
+    });
+
+    it("--skip-jira-check: no call to Jira, the Secret still written; a near expiry warned about", async () => {
+      const script = writingIntegrations(FRESH([TOKEN]));
+      const s = setup(script, {
+        target: jiraTarget("2026-10-20"),
+        env: { ...ENV, JIRA_API_TOKEN: "jt", JIRA_WEBHOOK_SECRET: "jw" },
+      });
+      await install(s.deps, { ...OPTS, skipJiraCheck: true }, OVERLAY);
+      s.f.done();
+      expect(s.fetchCalls.some((c) => c.includes("atlassian") || c.startsWith("jira"))).toBe(false);
+      expect(s.logs.slice(4, 8)).toEqual([
+        "JIRA_API_TOKEN: from your environment",
+        "JIRA_WEBHOOK_SECRET: from your environment",
+        "warning: Jira check skipped (--skip-jira-check)",
+        "warning: the Jira API token expires in 5 days (2026-10-20): create a new one for the service account, then run bun run jira:setup --target devbox.k8s.json",
+      ]);
+      expect(integrationsSecret(s)).toEqual(
+        JSON.parse(
+          secretManifest({
+            name: "devbox-integrations",
+            data: { JIRA_API_TOKEN: "jt", JIRA_WEBHOOK_SECRET: "jw" },
+          }),
+        ),
+      );
+    });
+
+    it("a token of another account fails before the cluster is touched", async () => {
+      const s = setup([...TOOLS], {
+        target: { ...target(), integrations: { jira: { ...JIRA.jira, botAccountId: "712020:x" } } },
+        env: { ...ENV, JIRA_API_TOKEN: "jt", JIRA_WEBHOOK_SECRET: "jw" },
+      });
+      await expect(install(s.deps, OPTS, OVERLAY)).rejects.toThrow(
+        `JIRA_API_TOKEN belongs to devbox (${JIRA_BOT_ID}), not the configured bot devbox (712020:x): run bun run jira:setup --target devbox.k8s.json`,
+      );
+      s.f.done();
     });
   });
 

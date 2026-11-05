@@ -22,9 +22,12 @@
 // Linear is on only with `integrations.linear.enabled: true`: Compose then
 // gets LINEAR_ENABLED=true, the client ID and both secrets, and otherwise all
 // four empty, so a LINEAR_* variable left in the shell never turns it on.
+// Jira likewise, with `integrations.jira.enabled: true`: its settings and its
+// two secrets (JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET), every JIRA_* empty
+// otherwise.
 //
-// --skip-checks skips the GitHub, LLM and Linear checks before startup, for
-// offline verification and development.
+// --skip-checks skips the GitHub, LLM, Linear and Jira checks before startup,
+// for offline verification and development; --skip-jira-check only Jira's.
 //
 // --no-keychain never reads or writes the keychain.
 //
@@ -36,6 +39,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { parseArgs } from "node:util";
+import { jiraPreflight, type JiraSecrets as ResolvedJira } from "./jira/check";
 import { capture } from "./lib/capture";
 import {
   appIdentity,
@@ -48,7 +52,9 @@ import { type PrivateKey, resolvePrivateKey } from "./lib/githubAppKey";
 import {
   type EnabledGithubApp,
   enabledGithubApp,
+  enabledJira,
   enabledLinear,
+  type JiraIntegration,
   type LinearIntegration,
 } from "./lib/integrations";
 import { keychainFor } from "./lib/keychain";
@@ -126,6 +132,60 @@ export function linearComposeEnv(
     LINEAR_CLIENT_ID: on.clientId,
     LINEAR_CLIENT_SECRET: secrets.clientSecret,
     LINEAR_WEBHOOK_SECRET: secrets.webhookSecret,
+  };
+}
+
+type JiraSecrets = { apiToken: string; webhookSecret: string };
+const JIRA_ENV_NAMES = [
+  "JIRA_ENABLED",
+  "JIRA_SITE_URL",
+  "JIRA_CLOUD_ID",
+  "JIRA_BOT_EMAIL",
+  "JIRA_BOT_ACCOUNT_ID",
+  "JIRA_BOT_NAME",
+  "JIRA_PROJECT_KEYS",
+  "JIRA_TRUSTED_GROUPS",
+  "JIRA_TRUSTED_USERS",
+  "JIRA_STATUS_STARTED",
+  "JIRA_STATUS_DONE",
+  "JIRA_STATUS_FAILED",
+  "JIRA_TOKEN_EXPIRES_AT",
+  "JIRA_ALLOW_RESTRICTED_ISSUES",
+  "JIRA_API_TOKEN",
+  "JIRA_WEBHOOK_SECRET",
+] as const;
+
+// The Jira values for Compose: every one empty unless `integrations.jira` is
+// enabled, whatever the shell or the secrets say. Lists are comma-joined
+// (group names may hold spaces, never commas).
+export function jiraComposeEnv(
+  jira: JiraIntegration | undefined,
+  secrets?: JiraSecrets,
+): Record<string, string> {
+  const off = Object.fromEntries(JIRA_ENV_NAMES.map((name) => [name, ""]));
+  const on = enabledJira({ jira });
+  if (!on) return off;
+  if (!secrets) {
+    throw new Error("integrations.jira is enabled but the Jira secrets were not resolved");
+  }
+  return {
+    ...off,
+    JIRA_ENABLED: "true",
+    JIRA_SITE_URL: on.siteUrl,
+    JIRA_CLOUD_ID: on.cloudId,
+    JIRA_BOT_EMAIL: on.botEmail,
+    JIRA_BOT_ACCOUNT_ID: on.botAccountId,
+    JIRA_BOT_NAME: on.botName,
+    JIRA_PROJECT_KEYS: on.projectKeys.join(","),
+    JIRA_TRUSTED_GROUPS: (on.trustedGroups ?? []).join(","),
+    JIRA_TRUSTED_USERS: (on.trustedUsers ?? []).join(","),
+    JIRA_STATUS_STARTED: on.statuses?.started ?? "",
+    JIRA_STATUS_DONE: on.statuses?.done ?? "",
+    JIRA_STATUS_FAILED: on.statuses?.failed ?? "",
+    JIRA_TOKEN_EXPIRES_AT: on.tokenExpiresAt,
+    JIRA_ALLOW_RESTRICTED_ISSUES: on.allowRestrictedIssues ? "true" : "",
+    JIRA_API_TOKEN: secrets.apiToken,
+    JIRA_WEBHOOK_SECRET: secrets.webhookSecret,
   };
 }
 
@@ -309,6 +369,7 @@ export function composeEnvFor(
     llm: string;
     opensandboxKey: string;
     linear?: LinearSecrets;
+    jira?: JiraSecrets;
     githubApp?: GithubAppSecrets;
   },
 ): Env {
@@ -328,6 +389,7 @@ export function composeEnvFor(
     HARNESS_MODEL: cfg.llm.model,
     ...llmComposeEnv(cfg.llm),
     ...linearComposeEnv(cfg.integrations.linear, values.linear),
+    ...jiraComposeEnv(cfg.integrations.jira, values.jira),
     ...githubComposeEnv(enabledGithubApp(cfg.integrations), cfg, values.githubApp ?? {}),
   };
 }
@@ -458,11 +520,24 @@ export async function appToken(
   return token;
 }
 
+// Whether and when `up` runs Jira's preflight: not at all without Jira;
+// "unchecked" (expiry warning and save offers only) before the other checks
+// with --skip-checks or --skip-jira-check, so a failing GitHub or LLM check
+// doesn't lose its typed secrets; else "checked" after them.
+export function jiraPreflightMode(
+  jiraOn: boolean,
+  values: { "skip-checks"?: boolean; "skip-jira-check"?: boolean },
+): "unchecked" | "checked" | undefined {
+  if (!jiraOn) return undefined;
+  return values["skip-checks"] || values["skip-jira-check"] ? "unchecked" : "checked";
+}
+
 export async function up(argv: string[], env: Env = process.env): Promise<void> {
   const { values } = parseArgs({
     args: argv,
     options: {
       "skip-checks": { type: "boolean" },
+      "skip-jira-check": { type: "boolean" },
       "dns-resolver": { type: "string" },
       "no-keychain": { type: "boolean" },
     },
@@ -521,6 +596,16 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
       webhook: await resolveSecret("LINEAR_WEBHOOK_SECRET", secretDeps),
     };
   }
+  // Both Jira secrets, likewise only when Jira is enabled.
+  const jira = enabledJira(cfg.integrations);
+  const jiraMode = jiraPreflightMode(jira !== undefined, values);
+  let jiraR: ResolvedJira | undefined;
+  if (jira) {
+    jiraR = {
+      token: await resolveSecret("JIRA_API_TOKEN", secretDeps),
+      webhook: await resolveSecret("JIRA_WEBHOOK_SECRET", secretDeps),
+    };
+  }
 
   // Each typed value is offered for saving once its own check passed, so a
   // mistyped one is not saved and an accepted one is not lost to the other
@@ -528,6 +613,11 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
   let identity: Identity | undefined;
   let github: string;
   step(3, skipChecks ? "Checks before startup: skipped (--skip-checks)" : "Checks before startup");
+  // Unchecked: offered now, so a failing GitHub or LLM check does not lose them.
+  if (jira && jiraMode === "unchecked") {
+    if (!skipChecks) log("warning: Jira check skipped (--skip-jira-check)");
+    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: true, fetch, now: new Date() });
+  }
   if (gh.app) {
     github = await appToken(gh.app, cfg, gh.key, secretDeps, { skipChecks, fetch });
     identity = appIdentity(gh.app.slug, gh.app.botUserId);
@@ -575,6 +665,9 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
       );
     }
   }
+  if (jira && jiraMode === "checked") {
+    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: false, fetch, now: new Date() });
+  }
   const llm = llmR.value;
   if (!github) {
     log("warning: no GitHub token: cloning anonymously; GitHub calls from devbox will fail");
@@ -592,6 +685,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
       clientSecret: linearR.client.value,
       webhookSecret: linearR.webhook.value,
     },
+    jira: jiraR && { apiToken: jiraR.token.value, webhookSecret: jiraR.webhook.value },
     githubApp: gh.app && { webhookSecret: gh.webhook.value, pem: gh.key?.pem },
   });
   writeFileSync(
@@ -662,6 +756,7 @@ with more than one, name the repo in the task.
   bun run devbox send <task> "Also add a test"
   bun run down`);
   if (linear) log("\nCheck Linear with: bun run linear:status");
+  if (jira) log("\nCheck Jira with: bun run jira:status");
   if (app) log("\nCheck GitHub with: bun run github:status");
 }
 

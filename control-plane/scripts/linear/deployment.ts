@@ -9,7 +9,12 @@ import { installCommand } from "../k8s/kind";
 import { kube, NAMESPACE, realRunner } from "../k8s/run";
 import { existingSecret } from "../k8s/secrets";
 import { loadTarget, type Target } from "../k8s/target";
-import { enabledGithubApp, type Integrations, type LinearIntegration } from "../lib/integrations";
+import {
+  enabledGithubApp,
+  enabledJira,
+  type Integrations,
+  type LinearIntegration,
+} from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
 import { CliConfigError, cliConfigPath, readCliProfile } from "../up/cliLogin";
@@ -35,6 +40,8 @@ export type LinearDeployment = {
   // The enabled GitHub App (slug and who mints its tokens): used for the public
   // URL change lines and, as `<slug>[bot]`, as the bot's GitHub username.
   githubApp?: { tokens: "devbox" | "external"; slug: string; org?: string };
+  // Whether Jira is on: its webhook URL follows the shared public URL.
+  jira?: boolean;
   // GET through the deployment's CLI profile; the body is read in full.
   api: (path: string) => Promise<Response>;
 };
@@ -101,6 +108,7 @@ export function loadDeployment(opts: { target?: string; noKeychain: boolean }): 
       configPath: CONFIG_PATH,
       linear: cfg.integrations.linear,
       ...(app ? { githubApp: app } : {}),
+      ...(enabledJira(cfg.integrations) ? { jira: true } : {}),
       ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
       applyCommand: "bun run up",
       statusCommand: "bun run linear:status",
@@ -118,6 +126,7 @@ export function loadDeployment(opts: { target?: string; noKeychain: boolean }): 
     configPath: path,
     linear: target.integrations?.linear,
     ...(app ? { githubApp: app } : {}),
+    ...(enabledJira(target.integrations ?? {}) ? { jira: true } : {}),
     ...(target.publicUrl !== undefined ? { publicUrl: target.publicUrl } : {}),
     ingressUrl: ingressPublicUrl(target),
     fromApiIngress: ingressSource(target) === "api",

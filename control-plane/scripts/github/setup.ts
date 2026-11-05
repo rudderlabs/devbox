@@ -908,6 +908,7 @@ export async function setup(
     publicUrl,
     {
       linear: d.linear,
+      jira: d.jira === true,
       ...(isNew
         ? {}
         : {
