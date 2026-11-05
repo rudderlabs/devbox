@@ -75,7 +75,7 @@ export function parseRetryAfter(value: string | null): number | undefined {
 
 // Runs `send` with an abort signal and stops waiting after `ms`, whether or not
 // the client honours the signal. The send may still land after the timeout, so
-// a timeout is a plain failure (dropped), never a retry.
+// a timeout is a failure, never a retry.
 export async function withTimeout<T>(
   ms: number,
   send: (signal: AbortSignal) => Promise<T>,

@@ -886,6 +886,34 @@ describe("EventDispatcher", () => {
       );
     });
 
+    it("a second PR on a task that already records another gets its own comment and assignee", async () => {
+      getIssueHumanAssignee.mockResolvedValue({
+        id: "usr-1",
+        name: "Ada Lovelace",
+        displayName: "ada",
+        email: "ada@acme.com",
+        gitHubUserId: "octocat",
+      });
+      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
+      const task = makeTask({
+        prUrls: [
+          { repo: "r", url: "https://github.com/o/r/pull/99", branch: "b", commit_sha: "sha" },
+        ],
+      });
+      expect(await dispatcher.handle(prEvent(), task)).toBe("ok");
+      await flushMicrotasks();
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
+      expect(postIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        1,
+        expect.any(String),
+        expect.any(AbortSignal),
+      );
+      expect(addPrAssignees).toHaveBeenCalledTimes(1);
+      expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
+    });
+
     it("posts no onboarding comment while no integration sets prMentionLogin, but still mirrors the assignee", async () => {
       getIssueHumanAssignee.mockResolvedValue({
         id: "usr-1",

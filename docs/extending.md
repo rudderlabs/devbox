@@ -109,9 +109,11 @@ rounds (`harness/src/harness/followup.py`).
   login, or `null` when the person hasn't linked one; one that can't link
   accounts leaves it out. An all-digit `githubAccount` is taken as an account
   id and anything else as a login. Only github.com pull request URLs get the
-  comment or an assignee. Both happen before the control plane records the
-  pull request on the task, so a restart in between repeats them, and the
-  comment can appear twice.
+  comment or an assignee. The comment is posted, and the assignee started,
+  before the control plane records the pull request on the task, so a restart
+  before the record repeats them, and the comment can appear twice. The
+  assignee is best-effort: it finishes in the background, and a crash while it
+  is still running is not retried.
 - **Reply targets.** Each round carries reply targets that say where the
   harness's answers go, each with a `spec` in the integration's own shape. The
   control plane stores the spec and hands it back to the `deliver` of the

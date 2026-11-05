@@ -117,12 +117,15 @@ export class EventDispatcher {
         const pr = this.codeHost.prRef(event);
         // A PR not yet on the task (the URL test appendPrUrl's firstTime uses)
         // gets the code host's work: the onboarding comment and the assignee
-        // mirror. It runs before appendPrUrl records the PR, so it happens at
-        // least once: a crash in between replays the event and runs it
-        // again. Once recorded, a replay skips it, so a held onPrOpened,
-        // retried every tick, doesn't post again. An owner that lost its
-        // lease finds out only at appendPrUrl, after posting, and the new
-        // owner posts again. A repeated help comment is acceptable.
+        // mirror. The comment is posted, and the mirror started, before
+        // appendPrUrl records the PR, so a crash before the record replays the
+        // event and repeats both. The mirror runs in BackgroundWork and isn't
+        // awaited (that would stall the tick), so it is best-effort: a crash
+        // while it is still running, after the record, is not retried. Once
+        // recorded, a replay skips both, so a held onPrOpened, retried every
+        // tick, doesn't post again. An owner that lost its lease finds out
+        // only at appendPrUrl, after posting, and the new owner posts again.
+        // A repeated help comment is acceptable.
         const isNew = !(
           Array.isArray(task.prUrls) && task.prUrls.some((p) => p?.url === event.pr_url)
         );
