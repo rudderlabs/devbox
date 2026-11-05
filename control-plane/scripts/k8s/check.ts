@@ -18,7 +18,7 @@ import {
   gitlabWebhookSecretName,
 } from "../lib/integrations";
 import { checkLinear } from "../linear/check";
-import { type DevboxConfig, githubRepos, gitlabRepos } from "../up/config";
+import { type DevboxConfig, githubRepos, gitlabRepos, needsGithub } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, PreflightError } from "../up/preflight";
 import { KubeError, kube, NAMESPACE, type Runner } from "./run";
 import {
@@ -184,10 +184,13 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
 
   log(`Checking Secrets in namespace ${NAMESPACE} (context ${target.context})`);
   try {
-    const github = await secretItem(secretOf("github", GITHUB_SECRET), {
-      name: "token",
-      verbatim: true,
-    });
+    // Without a GitHub repo or the App the Secret only has to exist: the chart
+    // mounts it, and its token may be empty.
+    const usesGithub = needsGithub(cfg.repos, app);
+    const github = await secretItem(
+      secretOf("github", GITHUB_SECRET),
+      usesGithub ? { name: "token", verbatim: true } : undefined,
+    );
     // The App's key Secret: present, with a key that parses.
     const appKey = minting
       ? await secretItem(secretOf("githubApp", GITHUB_APP_SECRET), {
@@ -268,7 +271,8 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
       tokenName = "the GitHub App's token";
       if (token === undefined) skip("GitHub token", "no GitHub App token to check");
     } else {
-      token = usable(github, "token", true, "GitHub token");
+      if (usesGithub) token = usable(github, "token", true, "GitHub token");
+      else skip("GitHub token", "no GitHub repo and no GitHub App: not used");
     }
     if (token !== undefined) {
       const checked = token;

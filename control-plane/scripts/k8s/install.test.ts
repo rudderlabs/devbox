@@ -2860,6 +2860,53 @@ devbox is installed in context kind-devbox. The CLI uses profile "k8s-kind-devbo
       );
     });
 
+    it("GitLab repos only: no GitHub token is asked for or checked, and the token Secret is created empty", async () => {
+      const CREATE = kc("create", "-f", "-");
+      const fresh = FRESH([TOKEN]);
+      const j = fresh.findIndex((st) => st.cmd === DELETE_INTEGRATIONS);
+      const i = fresh.findIndex((st) => st.cmd === DELETE_APP_KEY);
+      // ns, then the empty token Secret's create, then gitlab and llm; the CA
+      // Secret (no gitlab.caFile) goes with the installer's other unused ones.
+      const script = [
+        ...fresh.slice(0, j - 2),
+        step(CREATE),
+        ...fresh.slice(j - 2, i + 1),
+        step(deleteOwned("devbox-gitlab-ca")),
+        ...fresh.slice(i + 1),
+      ];
+      const s = setup(script, { env: { LLM_API_KEY: "sk-y", GITLAB_TOKEN: "glpat-x" } });
+      s.deps.cfg = {
+        ...config(),
+        repos: [
+          {
+            url: `${BASE}/platform/api.git`,
+            branch: "main",
+            host: "gitlab",
+            owner: "platform",
+            name: "api",
+          },
+        ],
+        gitlab: { baseUrl: BASE },
+      };
+      const calls = appFetch(s, GITLAB_ROUTES);
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(commands(s.f)).toEqual(script.map((c) => c.cmd.join(" ")));
+      expect(calls.filter((c) => c.includes("github.com"))).toEqual([]);
+      expect(stdinOf(s.f, CREATE).map((t) => JSON.parse(t as string))).toEqual([
+        JSON.parse(secretManifest({ name: "devbox-github", data: { token: "" } })),
+      ]);
+      expect(s.logs).toContain(
+        "No GitHub repo and no GitHub App: the token Secret devbox-github stays empty",
+      );
+      // Commits carry the GitLab user's identity, there being no GitHub one.
+      const values = JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string) as Values;
+      expect(values.git).toEqual({
+        name: "devbox",
+        email: "2-devbox@users.noreply.gitlab.example.com",
+      });
+    });
+
     it("the user's own token Secret: no check, the installer's GitLab Secrets go", async () => {
       const fresh = FRESH([TOKEN]);
       // After the installer's own key Secret goes, its GitLab ones do.

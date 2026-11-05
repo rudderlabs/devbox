@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, loadConfig, parseConfig } from "./config";
+import { ConfigError, loadConfig, needsGithub, parseConfig } from "./config";
 
 const dir = mkdtempSync(join(tmpdir(), "devbox-config-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -657,5 +657,27 @@ describe("parseConfig with gitlab", () => {
     ],
   ])("refuses %s", (_name, raw, message) => {
     expect(() => parseConfig(raw)).toThrow(new ConfigError(`devbox.config.json: ${message}`));
+  });
+});
+
+describe("needsGithub", () => {
+  const gh = {
+    url: "https://github.com/a/x.git",
+    branch: "main",
+    host: "github",
+    owner: "a",
+    name: "x",
+  } as const;
+  const gl = {
+    url: "https://git.example.com/g/p.git",
+    branch: "main",
+    host: "gitlab",
+    owner: "g",
+    name: "p",
+  } as const;
+  it("is true with a GitHub repo or the GitHub App, false with GitLab repos alone", () => {
+    expect(needsGithub([gh, gl], undefined)).toBe(true);
+    expect(needsGithub([gl], { enabled: true })).toBe(true);
+    expect(needsGithub([gl], undefined)).toBe(false);
   });
 });

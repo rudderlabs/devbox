@@ -63,7 +63,12 @@ import {
   type ResolverDeps,
   resolveSecret,
 } from "./lib/secrets";
-import { checkGitlab, type GitlabIdentity, identityKnown } from "./gitlab/check";
+import {
+  checkGitlab,
+  type GitlabIdentity,
+  gitlabCommitIdentity,
+  identityKnown,
+} from "./gitlab/check";
 import { checkLinear, type LinearIdentity } from "./linear/check";
 import { bunVersionError } from "./up/bunVersion";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput } from "./up/cliLogin";
@@ -75,6 +80,7 @@ import {
   gitlabRepos,
   LLM_STAGES,
   loadConfig,
+  needsGithub,
 } from "./up/config";
 import {
   DEFAULT_DNS_RESOLVER,
@@ -589,11 +595,16 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
   // With the GitHub App there is no GITHUB_TOKEN to resolve: the token is
   // minted (devbox) or read from tokenFile (external).
   const app = enabledGithubApp(cfg.integrations);
+  // No GitHub repo and no App: no GitHub token is asked for, checked or used.
+  const usesGithub = needsGithub(cfg.repos, app);
   let gh:
-    | { app: undefined; token: Resolved }
+    | { app: undefined; token?: Resolved }
     | { app: EnabledGithubApp; webhook: Resolved; key?: PrivateKey };
   if (!app) {
-    gh = { app, token: await resolveSecret("GITHUB_TOKEN", secretDeps) };
+    gh = {
+      app,
+      ...(usesGithub ? { token: await resolveSecret("GITHUB_TOKEN", secretDeps) } : {}),
+    };
   } else {
     gh = { app, webhook: await resolveSecret("GITHUB_WEBHOOK_SECRET", secretDeps) };
     if (app.tokens === "devbox") {
@@ -638,7 +649,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     identity = appIdentity(gh.app.slug, gh.app.botUserId);
     // The webhook secret can't be checked here: GitHub only uses it to sign.
     await offerSave(gh.webhook, secretDeps);
-  } else {
+  } else if (gh.token) {
     let githubR = gh.token;
     if (!skipChecks) {
       ({ resolved: githubR, result: identity } = await checkWithRetry(githubR, secretDeps, (t) =>
@@ -647,6 +658,9 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     }
     await offerSave(githubR, secretDeps);
     github = githubR.value;
+  } else {
+    github = "";
+    log("GitHub: no GitHub repo and no GitHub App, so no GitHub token is used");
   }
   // The GitLab CA, read once for the check and the copy the containers mount.
   const gitlabCa = cfg.gitlab?.caFile ? readFileSync(cfg.gitlab.caFile, "utf8") : undefined;
@@ -671,6 +685,8 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
           ? `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
           : `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: token accepted; its identity is unknown (no User: Read on the token)`,
       );
+      // With no GitHub identity, commits carry the GitLab user's.
+      identity ??= gitlabCommitIdentity(instance, gitlabIdentity);
       if (
         gitlabOn &&
         identityKnown(gitlabIdentity) &&
@@ -698,8 +714,10 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     await offerSave(llmR, secretDeps);
     log(
       identity
-        ? `GitHub: commits as ${identity.gitName} <${identity.gitEmail}>; LLM endpoint answered`
-        : "GitHub: app token, no user identity (the harness image's default commit identity applies); LLM endpoint answered",
+        ? `${usesGithub ? "GitHub" : "GitLab"}: commits as ${identity.gitName} <${identity.gitEmail}>; LLM endpoint answered`
+        : usesGithub
+          ? "GitHub: app token, no user identity (the harness image's default commit identity applies); LLM endpoint answered"
+          : "No commit identity from the code host (the harness image's default applies); LLM endpoint answered",
     );
     if (linear && linearR) {
       // Only the client secret can be checked here; the webhook secret is
@@ -718,7 +736,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     }
   }
   const llm = llmR.value;
-  if (!github) {
+  if (!github && usesGithub) {
     log("warning: no GitHub token: cloning anonymously; GitHub calls from devbox will fail");
   }
 

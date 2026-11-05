@@ -15,11 +15,15 @@ mentioning note is one round) and approvals as a signal. Tracked in
 
 ## What you need
 
-- **A GitHub token as well.** GitLab is added beside GitHub, not instead of
-  it: the egress proxy and the snapshot builder read the GitHub token Secret
-  unconditionally, so a deployment with only GitLab repos still needs a GitHub
-  token (any account's, with no repos to reach) or the GitHub App. Making it
-  optional is tracked in [rudderlabs/devbox#8](https://github.com/rudderlabs/devbox/issues/8).
+- **No GitHub token, unless you also use GitHub.** With only GitLab repos and
+  no GitHub App, `bun run up` and `k8s:install` neither ask for nor check a
+  GitHub token, and commits carry the GitLab user's identity
+  (`<id>-<username>@users.noreply.<host>`). The chart still mounts the token
+  Secret, so on Kubernetes it has to exist: the installer creates
+  `devbox-github` empty; with GitOps create it yourself
+  (`kubectl -n devbox create secret generic devbox-github --from-literal=token=`).
+  Sandboxes then have no GitHub credential: anonymous reads of public repos
+  through the proxy's read-only rules are all that is left.
 - **A group or project access token** for the group that holds the repos,
   with the `api`, `read_repository` and `write_repository` scopes and at least
   the Developer role. Merge requests, commits and replies are attributed to the

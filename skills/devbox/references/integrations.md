@@ -79,7 +79,7 @@ token `gitlab:setup` generates (`GITLAB_WEBHOOK_SIGNING_TOKEN`, or
 `GITLAB_WEBHOOK_SECRET` below GitLab 19.1). A private CA goes in
 `gitlab.caFile`; on Compose the trust lists are `gitlab.trustedGroups` and
 `gitlab.trustedUsers` in devbox.config.json. One GitLab instance per
-deployment, and a GitHub token is still required. Everything:
+deployment. No GitHub token is needed with GitLab repos only. Everything:
 [docs/gitlab.md](../../../docs/gitlab.md).
 
 ## Slack

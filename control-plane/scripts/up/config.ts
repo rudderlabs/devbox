@@ -62,6 +62,11 @@ export const githubRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
   repos.filter((r) => r.host === "github");
 export const gitlabRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
   repos.filter((r) => r.host === "gitlab");
+// Whether the deployment talks to GitHub at all: a repo there, or the GitHub
+// App. Without either no GitHub token is asked for, checked or needed (the
+// token Secret then exists empty on Kubernetes, a placeholder on Compose).
+export const needsGithub = (repos: readonly RepoConfig[], githubApp: unknown): boolean =>
+  githubApp !== undefined || githubRepos(repos).length > 0;
 
 export type SandboxConfig = { maxConcurrent: number; cpu: string; memory: string };
 
