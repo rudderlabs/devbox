@@ -8,7 +8,7 @@
 // are decoded in memory only. It never saves, removes or prompts.
 import { createPrivateKey } from "node:crypto";
 import { GithubAppError } from "../../src/githubToken/mint";
-import { botMismatch, checkGitlab } from "../gitlab/check";
+import { botMismatch, checkGitlab, identityKnown } from "../gitlab/check";
 import { GithubAppSetupError, mintAppToken } from "../lib/githubApp";
 import { isPem, PrivateKeyError } from "../lib/githubAppKey";
 import {
@@ -300,15 +300,22 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
           const id = await checkGitlab(instance, gitlabToken, gitlabRepos(cfg.repos), deps.fetch, {
             requirePush: !opts.skipPushCheck,
             ...(ca ? { ca } : {}),
-            ...(gitlab ? { webhooks: { trustedGroups } } : {}),
+            ...(gitlab
+              ? {
+                  webhooks: { trustedGroups },
+                  identity: { id: gitlab.botUserId, username: gitlab.botUsername },
+                }
+              : {}),
           });
-          const mismatch = gitlab && botMismatch(gitlab, id);
+          const mismatch = gitlab && identityKnown(id) && botMismatch(gitlab, id);
           if (mismatch) {
             throw new PreflightError(
               `${mismatch} Run bun run gitlab:setup --target ${deps.targetPath}.`,
             );
           }
-          return `(devbox acts as ${id.username}, id ${id.id}, on GitLab ${id.version})`;
+          return identityKnown(id)
+            ? `(devbox acts as ${id.username}, id ${id.id}, on GitLab ${id.version || "?"})`
+            : "(identity unknown: the token may not read /api/v4/user)";
         });
       }
     }

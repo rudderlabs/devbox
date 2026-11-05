@@ -182,6 +182,27 @@ describe("checkGitlab", () => {
     expect(id.username).toBe(bot.username);
   });
 
+  it("a 403 on /user with the bot configured uses that identity (no User: Read)", async () => {
+    const denied: [number, unknown] = [
+      403,
+      {
+        error: "forbidden",
+        error_description:
+          "Access denied: This operation requires a fine-grained personal access token with the following user permissions: [User: Read].",
+      },
+    ];
+    const f = fakeFetch({ ...writable, [USER]: denied });
+    const id = await checkGitlab(instance, "t", [REPO], f.fetch, {
+      identity: { id: 42, username: "devbox" },
+    });
+    expect(id).toMatchObject({ id: 42, username: "devbox", bot: false });
+    // Without a configured bot the identity stays unknown; the repo checks still ran.
+    const g = fakeFetch({ ...writable, [USER]: denied });
+    const unknown = await checkGitlab(instance, "t", [REPO], g.fetch);
+    expect(unknown).toMatchObject({ id: 0, username: "" });
+    expect(g.requests.map((r) => r.url)).toContain(api("platform/backend/api"));
+  });
+
   it("requirePush false stops after the project lookup", async () => {
     const f = fakeFetch({
       [VERSION]: [200, { version: "19.5.3" }],
