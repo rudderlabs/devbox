@@ -546,8 +546,10 @@ export async function install(
   // The GitLab Secrets the installer wrote for an instance that is gone
   // (the installed release knew one), or whose token the user now brings,
   // or whose CA is no longer configured.
+  // Never one the effective values still name: a user who adopted the
+  // installer's copy as their existingSecret / caBundle keeps it, label and all.
   const hadGitlab = cfg.gitlab !== undefined || previous?.gitlab !== undefined;
-  if (hadGitlab && !gitlabR) {
+  if (hadGitlab && !gitlabR && existingSecret(values0, "gitlab") !== GITLAB_SECRET) {
     await deleteOwned(
       GITLAB_SECRET,
       cfg.gitlab
@@ -555,7 +557,11 @@ export async function install(
         : "no GitLab instance is configured",
     );
   }
-  if (hadGitlab && gitlabCa === undefined) {
+  if (
+    hadGitlab &&
+    gitlabCa === undefined &&
+    userValue(deps.target, ["ironProxy", "caBundle"]) !== GITLAB_CA_SECRET
+  ) {
     await deleteOwned(GITLAB_CA_SECRET, "gitlab.caFile is not set");
   }
   // External tokens live in the user's Secret; a token the installer wrote
