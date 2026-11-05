@@ -5,7 +5,7 @@ import { NO_WEBHOOK } from "./fakeIntegrations";
 
 // A token file that does not exist: the GitHub client has no token to send.
 mock.module("../../config", () => ({
-  config: { podId: "pod-test", github: { tokenSettings: { file: "/nonexistent/devbox/token" } } },
+  config: { podId: "pod-test", codeHost: { tokenSettings: { file: "/nonexistent/devbox/token" } } },
 }));
 
 const { HttpError, parseRetryAfter, retryable, withTimeout } = await import("../http");

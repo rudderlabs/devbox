@@ -59,8 +59,8 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     pvcStorageClass: config.opensandbox.pvcStorageClass,
     pvcStorageSize: config.opensandbox.pvcStorageSize,
     forwardedEnv: config.opensandbox.forwardedEnv,
-    trustedOrgs: joinIfAny(config.github.trustedOrgs),
-    trustedUsers: joinIfAny(config.github.trustedUsers),
+    trustedOrgs: joinIfAny(config.codeHost.trustedOrgs),
+    trustedUsers: joinIfAny(config.codeHost.trustedUsers),
   });
 
   // Work that outlives its caller (hooks, Slack posts, a restart's sandbox

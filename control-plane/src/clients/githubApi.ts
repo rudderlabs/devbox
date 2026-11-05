@@ -31,8 +31,8 @@ let githubToken: GithubTokenProvider | undefined;
 function tokenProvider(): GithubTokenProvider {
   if (!githubToken) {
     // Some test suites module-mock config; keep this client resilient by
-    // tolerating a missing github section in the mocked shape.
-    const settings = (config as { github?: { tokenSettings?: GithubTokenSettings } }).github
+    // tolerating a missing codeHost section in the mocked shape.
+    const settings = (config as { codeHost?: { tokenSettings?: GithubTokenSettings } }).codeHost
       ?.tokenSettings ?? { token: process.env.GITHUB_TOKEN ?? "proxy-github-dummy-token" };
     githubToken = githubTokenProvider(settings, {
       readFile: (path) => readFileSync(path, "utf8"),

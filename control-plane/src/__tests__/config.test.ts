@@ -13,7 +13,7 @@ const { config } = await import("../config").finally(() => {
 });
 
 it("reads the trust lists forwarded to the sandbox with GitHub's webhooks off", () => {
-  expect(config.github).toMatchObject({
+  expect(config.codeHost).toMatchObject({
     trustedOrgs: ["acme", "widgets"],
     trustedUsers: ["alice", "bob"],
   });
