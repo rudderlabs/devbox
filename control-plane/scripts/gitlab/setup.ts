@@ -221,7 +221,10 @@ export async function setup(
 
   // 5. The webhook token: signing (19.1+) unless --secret-token or an older
   // instance; reused from the keychain when saved, generated otherwise.
-  const signingOk = identity ? versionAtLeast(identity.version, SIGNING_TOKEN_MIN_VERSION) : true;
+  // An unknown version (the token may not read it) is taken as current.
+  const signingOk = identity?.version
+    ? versionAtLeast(identity.version, SIGNING_TOKEN_MIN_VERSION)
+    : true;
   const auth: "signing" | "secret" = opts.secretToken || !signingOk ? "secret" : "signing";
   if (!opts.secretToken && !signingOk) {
     log(
