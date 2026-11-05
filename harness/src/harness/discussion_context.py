@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.codehost import (
-    FollowUpHost,
+    CodeHost,
     GitLabClient,
     client_for_change_request_url,
     parse_change_request_url,
@@ -101,7 +101,7 @@ def fetch_and_store_discussion(
     own_items: list[Comment] | None = None,
     trusted_orgs: Sequence[str] | None = None,
     trusted_users: Sequence[str] | None = None,
-    client: FollowUpHost | None = None,
+    client: CodeHost | None = None,
     cache_path: Path = DISCUSSION_CONTEXT_JSON,
     members_cache_path: Path | None = None,
 ) -> str:
@@ -410,7 +410,7 @@ def _trusted_principal_ids(
     orgs: Sequence[str],
     users: Sequence[str],
     *,
-    client: FollowUpHost,
+    client: CodeHost,
     members_cache_path: Path,
 ) -> set[int] | None:
     """Numeric ids of every member of ``orgs`` plus every resolvable ``users`` login.
@@ -454,7 +454,7 @@ def _org_cache_path(base: Path, org: str) -> Path:
 def _trusted_user_id(
     login: str,
     *,
-    client: FollowUpHost,
+    client: CodeHost,
     cache_path: Path,
     now: datetime | None = None,
 ) -> int | None:
@@ -510,7 +510,7 @@ def _trusted_user_id(
 def _trusted_member_ids(
     org: str,
     *,
-    client: FollowUpHost,
+    client: CodeHost,
     cache_path: Path,
     now: datetime | None = None,
 ) -> set[int] | None:

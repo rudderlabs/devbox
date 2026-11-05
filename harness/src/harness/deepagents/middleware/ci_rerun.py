@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from pydantic import BaseModel
 
-from harness.codehost import CodeHostApiError, FollowUpHost, client_for_kind
+from harness.codehost import CodeHost, CodeHostApiError, client_for_kind
 from harness.deepagents.middleware.arguments import format_validation_error
 from harness.deepagents.middleware.system_prompt import SystemPromptMiddleware
 
@@ -33,7 +33,7 @@ class CiRerunMiddleware(SystemPromptMiddleware):
     def __init__(
         self,
         *,
-        github: FollowUpHost,
+        github: CodeHost,
         run: WorkflowRunRef,
         system_prompt: str | None = None,
     ) -> None:

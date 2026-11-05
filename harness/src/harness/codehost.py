@@ -1,12 +1,12 @@
 """The code-host port and its GitLab adapter.
 
-The assignment round talks to the code host through four calls: the default
-branch, a branch's sha, "is there already an open change request for this
-head", and "open a draft change request". `CodeHost` names that contract;
+`CodeHost` is what the harness needs from the service that hosts a repo:
+the assignment round's four calls (the default branch, a branch's sha, "is
+there already an open change request for this head", "open a draft change
+request") and the follow-up rounds' reads and writes (the change request and
+its discussion, trust lookups, CI job logs, re-running failed jobs).
 `git.GitHubClient` (the original client, unchanged) and `GitLabClient` (here)
-implement it. The follow-up rounds need more (`FollowUpHost`: read and update
-the change request, list its discussion, resolve trust, fetch CI job logs,
-re-run failed jobs); both clients implement that too. Everything upstream keeps
+implement it. Everything upstream keeps
 the GitHub-shaped vocabulary (`pr_url`, `create_pr`, `owner`/`repo`, GitHub's
 comment and job dict shapes): the adapters translate at this edge instead of
 renaming what the dispatcher, the handlers and the stored rows already use.
@@ -58,9 +58,18 @@ class CodeHostApiError(RuntimeError):
 
 
 class CodeHost(Protocol):
-    """What the commit stage needs from a code host (see git.commit_one_repo
-    and handlers._common._commit_and_open_pr). `ref` keeps GitHub's
-    `heads/<branch>` spelling; adapters translate it."""
+    """The code-host contract, one per service (GitHub, a GitLab instance).
+
+    The commit stage (git.commit_one_repo, handlers._common._commit_and_open_pr)
+    uses the first four methods; `ref` keeps GitHub's `heads/<branch>` spelling
+    and adapters translate it. The follow-up rounds (followup.py,
+    discussion_context.py, ci_logs.py, the pull_request and ci_rerun
+    middlewares) use the rest. The dict shapes are GitHub's: a comment carries
+    `id`, `user: {id, login}`, `body`, `created_at` (an inline one also `path`,
+    `line`); a job carries `id`, `name`, `conclusion`; a user `id`, `login`.
+    The GitLab adapter translates notes, jobs and users into them."""
+
+    # ── assignment: commit and open the change request ───────────────────
 
     def get_default_branch(self, owner: str, repo: str) -> str: ...
 
@@ -82,14 +91,7 @@ class CodeHost(Protocol):
         self, owner: str, repo: str, branch: str
     ) -> str | None: ...
 
-
-class FollowUpHost(CodeHost, Protocol):
-    """What the follow-up rounds need (see followup.py, discussion_context.py,
-    ci_logs.py and the pull_request / ci_rerun middlewares). The dict shapes
-    are GitHub's: a comment carries `id`, `user: {id, login}`, `body`,
-    `created_at` (an inline one also `path`, `line`); a job carries `id`,
-    `name`, `conclusion`; a user `id`, `login`. The GitLab adapter translates
-    notes, jobs and users into them."""
+    # ── follow-up rounds ─────────────────────────────────────────────────
 
     def get_pull_request(
         self, owner: str, repo: str, pr_number: int
@@ -262,7 +264,7 @@ def parse_run_url(
     return ("gitlab", *found) if found else None
 
 
-def client_for_kind(kind: str) -> FollowUpHost:
+def client_for_kind(kind: str) -> CodeHost:
     if kind == "gitlab":
         return GitLabClient()
     # Imported here: git.py imports this module at load time.
@@ -271,7 +273,7 @@ def client_for_kind(kind: str) -> FollowUpHost:
     return GitHubClient()
 
 
-def client_for_change_request_url(url: str) -> FollowUpHost:
+def client_for_change_request_url(url: str) -> CodeHost:
     """The adapter for a pull request or merge request URL."""
     parsed = parse_change_request_url(url)
     if parsed is None:
@@ -279,7 +281,7 @@ def client_for_change_request_url(url: str) -> FollowUpHost:
     return client_for_kind(parsed[0])
 
 
-def client_for_run_url(url: str) -> FollowUpHost:
+def client_for_run_url(url: str) -> CodeHost:
     """The adapter for a CI run URL."""
     parsed = parse_run_url(url)
     if parsed is None:
@@ -297,14 +299,14 @@ def remote_origin_url(repo_path: Path) -> str:
     return r.stdout.strip()
 
 
-def client_for_remote_url(url: str) -> FollowUpHost:
+def client_for_remote_url(url: str) -> CodeHost:
     """The adapter for a remote: GitLab for the configured instance, else
     GitHub. Chosen per repo, so a workspace may mix hosts."""
     kind, _owner, _repo = parse_remote_url(url)
     return client_for_kind(kind)
 
 
-def client_for_repo(repo_path: Path) -> FollowUpHost:
+def client_for_repo(repo_path: Path) -> CodeHost:
     return client_for_remote_url(remote_origin_url(repo_path))
 
 
@@ -318,7 +320,7 @@ class GitLabApiError(CodeHostApiError):
 
 
 class GitLabClient:
-    """The GitLab REST v4 adapter behind `CodeHost` and `FollowUpHost`.
+    """The GitLab REST v4 adapter behind `CodeHost`.
 
     Numbers: the merge request `iid` (per project) is what URLs and every
     `/merge_requests/<n>` path use; the global `id` never leaves this class.
@@ -421,7 +423,7 @@ class GitLabClient:
                 return items
             page += 1
 
-    # ── CodeHost ─────────────────────────────────────────────────────────
+    # ── assignment ───────────────────────────────────────────────────────
     def get_default_branch(self, owner: str, repo: str) -> str:
         r = self._request("GET", f"/projects/{self._project(owner, repo)}")
         return str(r["default_branch"])
@@ -479,7 +481,7 @@ class GitLabClient:
             return str(url) if url else None
         return None
 
-    # ── FollowUpHost ─────────────────────────────────────────────────────
+    # ── follow-up rounds ─────────────────────────────────────────────────
     def get_pull_request(self, owner: str, repo: str, pr_number: int) -> dict[str, Any]:
         """The merge request, with `body` mirroring GitLab's `description`."""
         r = self._request("GET", f"{self._mr(owner, repo, pr_number)}")
