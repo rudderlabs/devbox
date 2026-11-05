@@ -839,9 +839,9 @@ export function prUrlHostsFor(gitlabBaseUrl: string | undefined): ReadonlySet<st
 }
 
 // A `pr_url` is rendered into a Linear comment and persisted to tasks.pr_urls
-// (which the GitHub webhook lookup keys off). Only accept a well-formed https
-// URL on a known code host — anything else is dropped. http is accepted only
-// for a GitLab instance configured as http (never for github.com).
+// (which the webhook lookups key off). Only a well-formed https URL on a known
+// code host is accepted; anything else is dropped. https only: gitlab.baseUrl
+// is https only, and the harness's merge request parser recognises nothing else.
 function isCodeHostPrUrl(v: unknown, hosts: ReadonlySet<string>): v is string {
   if (typeof v !== "string") return false;
   let url: URL;
@@ -850,9 +850,7 @@ function isCodeHostPrUrl(v: unknown, hosts: ReadonlySet<string>): v is string {
   } catch {
     return false;
   }
-  if (!hosts.has(url.hostname)) return false;
-  if (url.protocol === "https:") return true;
-  return url.protocol === "http:" && url.hostname !== "github.com";
+  return url.protocol === "https:" && hosts.has(url.hostname);
 }
 
 // Runtime discriminated-union shape check for one parsed events.jsonl line.

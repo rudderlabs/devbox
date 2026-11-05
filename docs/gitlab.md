@@ -39,7 +39,8 @@ Kubernetes only: the local Compose stack takes GitHub repos.
    it and the installer does not ask for it.
 
    ```bash
-   kubectl -n devbox create secret generic devbox-gitlab --from-literal=token="$GITLAB_TOKEN"
+   # From stdin, so the token is in no process's arguments; printf keeps the trailing newline out.
+   printf '%s' "$GITLAB_TOKEN" | kubectl -n devbox create secret generic devbox-gitlab --from-file=token=/dev/stdin
    # With a private CA:
    kubectl -n devbox create secret generic gitlab-ca --from-file=ca.crt=./gitlab-ca.pem
    ```

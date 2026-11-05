@@ -12,7 +12,7 @@ import { enabledLinear, type GithubAppIntegration } from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
 import { composeApi, k8sApi } from "../linear/deployment";
-import { loadConfig, type RepoConfig } from "../up/config";
+import { githubRepos, loadConfig, type RepoConfig } from "../up/config";
 
 export type TrustLists = { trustedOrgs: string[]; trustedUsers: string[] };
 
@@ -65,7 +65,7 @@ export function loadDeployment(opts: {
       configPath,
       githubApp: cfg.integrations.githubApp,
       linear: enabledLinear(cfg.integrations) !== undefined,
-      repos: cfg.repos,
+      repos: githubRepos(cfg.repos),
       trust: { trustedOrgs: cfg.github.trustedOrgs, trustedUsers: cfg.github.trustedUsers },
       ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
       applyCommand: "bun run up",
@@ -88,7 +88,7 @@ export function loadDeployment(opts: {
     configPath: path,
     githubApp: target.integrations?.githubApp,
     linear: enabledLinear(target.integrations ?? {}) !== undefined,
-    repos: cfg.repos,
+    repos: githubRepos(cfg.repos),
     trust: { trustedOrgs: strings(github.trustedOrgs), trustedUsers: strings(github.trustedUsers) },
     ...(target.publicUrl !== undefined ? { publicUrl: target.publicUrl } : {}),
     ...(ingressUrl !== undefined ? { ingressUrl } : {}),
