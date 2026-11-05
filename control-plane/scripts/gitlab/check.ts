@@ -213,21 +213,24 @@ export async function checkGitlab(
   }
   const api = apiFor(base, token, fetch, opts.ca);
 
-  // 1. The instance, and the token with it.
+  // 1. The instance, and the token with it. A 403 is not a rejection: on
+  // gitlab.com a fine-grained token without the instance permission
+  // "Metadata: Read" may not read the version yet does everything else; the
+  // version then stays unknown ("") and the user lookup decides the token.
   const v = await api("GET", "/api/v4/version");
-  if (v.res.status === 401 || v.res.status === 403) {
+  if (v.res.status === 401) {
     throw new CredentialRejected(
       `GitLab rejected ${tokenName} (GET /api/v4/version returned ${withReason(v.res.status, v.why)}): check the token and its expiry on ${base}`,
     );
   }
-  if (!v.res.ok) {
+  if (!v.res.ok && v.res.status !== 403) {
     throw new GitlabCheckError(
       `GitLab check failed: GET ${base}/api/v4/version returned ${withReason(v.res.status, v.why)}: is gitlab.baseUrl right?`,
     );
   }
-  const version = String(
-    ((await v.res.json().catch(() => ({}))) as { version?: unknown }).version ?? "",
-  );
+  const version = v.res.ok
+    ? String(((await v.res.json().catch(() => ({}))) as { version?: unknown }).version ?? "")
+    : "";
 
   // 2. Who the token is.
   const u = await api("GET", "/api/v4/user");

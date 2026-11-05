@@ -165,6 +165,23 @@ describe("checkGitlab", () => {
     expect(f.requests.at(-1)?.body).toEqual({ state_event: "close" });
   });
 
+  it("a 403 on /version leaves the version unknown and goes on (fine-grained token without Metadata: Read)", async () => {
+    const f = fakeFetch({
+      ...writable,
+      [VERSION]: [
+        403,
+        {
+          error: "forbidden",
+          error_description:
+            "Access denied: This operation requires a fine-grained personal access token with the following instance permissions: [Metadata: Read].",
+        },
+      ],
+    });
+    const id = await checkGitlab(instance, "t", [REPO], f.fetch);
+    expect(id.version).toBe("");
+    expect(id.username).toBe(bot.username);
+  });
+
   it("requirePush false stops after the project lookup", async () => {
     const f = fakeFetch({
       [VERSION]: [200, { version: "19.5.3" }],
