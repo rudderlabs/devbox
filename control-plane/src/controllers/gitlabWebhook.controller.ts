@@ -254,8 +254,22 @@ export class GitlabWebhookController {
           }
           for (const member of members) trusted.add(member);
         }
+        // A username that does not resolve, or that the token may not look up
+        // (gitlab.com: /users needs the instance permission "User: Read"),
+        // only leaves that user untrusted, as in the harness; the groups
+        // still gate. The set is still refused when nothing resolved at all.
         for (const username of this.settings.trustedUsers) {
-          const userId = await getUserIdByUsername(username);
+          let userId: number | null;
+          try {
+            userId = await getUserIdByUsername(username);
+          } catch (err) {
+            const e = err instanceof Error ? err : new Error(String(err));
+            logger.warn("trusted username lookup failed; ignoring it", {
+              username,
+              message: e.message,
+            });
+            continue;
+          }
           if (userId === null) {
             logger.warn("trusted username did not resolve; ignoring it", { username });
             continue;

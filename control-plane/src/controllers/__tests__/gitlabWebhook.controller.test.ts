@@ -400,6 +400,19 @@ describe("GitlabWebhookController.handleWebhook", () => {
     );
   });
 
+  it("a failing username lookup leaves that user untrusted; the groups still gate", async () => {
+    // The token may not read /users (no "User: Read" on gitlab.com): group members pass,
+    // the named user does not, and with no groups the empty set is refused.
+    app = build({ ...SETTINGS, trustedUsers: ["carol"] }).a;
+    getUserIdByUsername.mockRejectedValue(new Error("HTTP 403 insufficient_granular_scope"));
+    expect((await postSigned(notePayload())).status).toBe(200);
+    expect((await postSigned(notePayload({ user: { id: 42, username: "carol" } }))).status).toBe(
+      403,
+    );
+    app = build({ ...SETTINGS, trustedGroups: [], trustedUsers: ["carol"] }).a;
+    expect((await postSigned(notePayload())).status).toBe(503);
+  });
+
   it("returns 503 when the trusted set cannot be fetched, and retries on the next delivery", async () => {
     fetchGroupMembers.mockRejectedValueOnce(new Error("boom"));
     expect((await postSigned(notePayload())).status).toBe(503);
