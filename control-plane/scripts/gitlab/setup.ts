@@ -23,6 +23,7 @@ import {
   type GitlabIdentity,
   SIGNING_TOKEN_MIN_VERSION,
   versionAtLeast,
+  identityKnown,
 } from "./check";
 import type { GitlabDeployment } from "./deployment";
 
@@ -190,20 +191,30 @@ export async function setup(
       `GitLab token: in your Secret "${d.byoGitlabSecret}" (not read): skipping the token checks`,
     );
   } else {
+    // Stands in for /api/v4/user when the token may not read it.
+    const knownUsername = opts.botUsername ?? d.gitlab?.botUsername;
+    const knownId = opts.botUserId ?? d.gitlab?.botUserId;
+    const knownBot =
+      knownUsername !== undefined && knownId !== undefined
+        ? { username: knownUsername, id: knownId }
+        : undefined;
     let r = await resolveSecret("GITLAB_TOKEN", resolver);
     ({ resolved: r, result: identity } = await checkWithRetry(r, resolver, (value) =>
       checkGitlab(d.instance as { baseUrl: string }, value, d.repos, deps.fetch, {
         requirePush: !opts.skipPushCheck,
         webhooks: { trustedGroups: trust.trustedGroups },
         ...(ca !== undefined ? { ca } : {}),
+        ...(knownBot ? { identity: knownBot } : {}),
       }),
     ));
     await offerSave(r, resolver);
     token = r.value;
     log(
-      `GitLab ${identity.version || "(version unknown)"} at ${d.instance.baseUrl}: devbox acts as ${identity.username} (id ${identity.id}${identity.bot ? ", a bot user" : ""})`,
+      identityKnown(identity)
+        ? `GitLab ${identity.version || "(version unknown)"} at ${d.instance.baseUrl}: devbox acts as ${identity.username} (id ${identity.id}${identity.bot ? ", a bot user" : ""})`
+        : `GitLab ${identity.version || "(version unknown)"} at ${d.instance.baseUrl}: the token may not read /api/v4/user (no User: Read), so the bot must be named with --bot-username and --bot-user-id`,
     );
-    if (!identity.bot) {
+    if (identityKnown(identity) && !identity.bot) {
       log(
         `Note: ${identity.username} is a person, not a bot user, so their own comments are ignored as the bot's: prefer a group or project access token (docs/gitlab.md#what-you-need)`,
       );
@@ -211,8 +222,9 @@ export async function setup(
   }
 
   // 4. The bot: from the token, else the flags, else what is saved.
-  const botUsername = identity?.username ?? opts.botUsername ?? d.gitlab?.botUsername;
-  const botUserId = identity?.id ?? opts.botUserId ?? d.gitlab?.botUserId;
+  const known = identity && identityKnown(identity) ? identity : undefined;
+  const botUsername = known?.username ?? opts.botUsername ?? d.gitlab?.botUsername;
+  const botUserId = known?.id ?? opts.botUserId ?? d.gitlab?.botUserId;
   if (botUsername === undefined || botUserId === undefined) {
     throw new SetupError(
       "the bot's identity is unknown: pass --bot-username and --bot-user-id (GET <baseUrl>/api/v4/user with the token prints them)",

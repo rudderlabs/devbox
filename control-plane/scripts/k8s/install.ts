@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import { botMismatch, checkGitlab, type GitlabIdentity } from "../gitlab/check";
+import { botMismatch, checkGitlab, type GitlabIdentity, identityKnown } from "../gitlab/check";
 import {
   appIdentity,
   GithubAppSetupError,
@@ -397,14 +397,21 @@ export async function install(
         checkGitlab(instance, token, gitlabRepos(cfg.repos), deps.fetch, {
           requirePush: !opts.skipPushCheck,
           ...(gitlabCa !== undefined ? { ca: gitlabCa } : {}),
-          ...(gitlab ? { webhooks: { trustedGroups } } : {}),
+          ...(gitlab
+            ? {
+                webhooks: { trustedGroups },
+                identity: { id: gitlab.botUserId, username: gitlab.botUsername },
+              }
+            : {}),
         }),
     ));
     await offerSave(gitlabR, secretDeps);
     log(
-      `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`,
+      identityKnown(gitlabIdentity)
+        ? `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
+        : `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: the token may not read /api/v4/user (no User: Read); its identity is unknown`,
     );
-    const mismatch = gitlab && botMismatch(gitlab, gitlabIdentity);
+    const mismatch = gitlab && identityKnown(gitlabIdentity) && botMismatch(gitlab, gitlabIdentity);
     if (mismatch)
       throw new KubeError(
         `${mismatch} Run bun run gitlab:setup --target ${deps.targetPath} to re-register the webhooks for this token.`,

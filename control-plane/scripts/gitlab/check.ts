@@ -12,14 +12,18 @@ import type { GitlabConfig, RepoConfig } from "../up/config";
 import { CredentialRejected, type Fetch, PreflightError } from "../up/preflight";
 
 export type GitlabIdentity = {
+  // 0 and "" when the token may not read /api/v4/user and no identity was
+  // configured: a gitlab.com fine-grained token without "User: Read".
   id: number;
   username: string;
   name: string;
   // A bot user (a group or project access token's), as opposed to a person.
   bot: boolean;
-  // The instance's version, "19.5.3".
+  // The instance's version, "19.5.3"; "" when the token may not read it.
   version: string;
 };
+
+export const identityKnown = (i: Pick<GitlabIdentity, "id">): boolean => i.id > 0;
 
 export class GitlabCheckError extends PreflightError {}
 
@@ -33,6 +37,10 @@ export type CheckGitlabOptions = {
   webhooks?: { trustedGroups: string[] };
   // How messages name the token.
   tokenName?: string;
+  // The bot as configured (integrations.gitlab, or --bot-username/--bot-user-id):
+  // used when the token may not read /api/v4/user (a gitlab.com fine-grained
+  // token without "User: Read"), which is a permission gap, not a bad token.
+  identity?: { id: number; username: string };
 };
 
 // The signing token (webhook-signature) became generally available in 19.1.
@@ -232,21 +240,24 @@ export async function checkGitlab(
     ? String(((await v.res.json().catch(() => ({}))) as { version?: unknown }).version ?? "")
     : "";
 
-  // 2. Who the token is.
+  // 2. Who the token is. A 403 is a permission gap, not a bad token: a
+  // gitlab.com fine-grained token without "User: Read" still pushes and opens
+  // merge requests. The configured identity stands in when there is one;
+  // otherwise the identity stays unknown and the repo checks below decide.
   const u = await api("GET", "/api/v4/user");
-  if (!u.res.ok) {
-    const Err =
-      u.res.status === 401 || u.res.status === 403 ? CredentialRejected : GitlabCheckError;
+  let user: { id?: unknown; username?: unknown; name?: unknown; bot?: unknown };
+  if (u.res.status === 403) {
+    user = opts.identity
+      ? { id: opts.identity.id, username: opts.identity.username }
+      : { id: 0, username: "" };
+  } else if (!u.res.ok) {
+    const Err = u.res.status === 401 ? CredentialRejected : GitlabCheckError;
     throw new Err(
       `GitLab rejected ${tokenName} (GET /api/v4/user returned ${withReason(u.res.status, u.why)})${permissionHint(u.why)}; the token needs the api scope (or User: Read)`,
     );
+  } else {
+    user = (await u.res.json()) as typeof user;
   }
-  const user = (await u.res.json()) as {
-    id?: unknown;
-    username?: unknown;
-    name?: unknown;
-    bot?: unknown;
-  };
   const id = Number(user.id);
   if (!Number.isFinite(id) || typeof user.username !== "string") {
     throw new GitlabCheckError(
