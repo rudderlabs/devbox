@@ -213,15 +213,22 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
     const gitlabSecret = cfg.gitlab
       ? await secretItem(secretOf("gitlab", GITLAB_SECRET), { name: "token", verbatim: true })
       : undefined;
-    // A CA Secret the user names in ironProxy.caBundle wins over the installer's.
+    // The CA the chart mounts: any Secret ironProxy.caBundle names (whatever its
+    // name; the installer's own only when gitlab.caFile wrote it), else the
+    // installer's devbox-gitlab-ca from gitlab.caFile.
     const userCa = userValue(target, ["ironProxy", "caBundle"]);
-    const gitlabCa =
-      cfg.gitlab && typeof userCa === "string" && userCa && userCa !== GITLAB_CA_SECRET
+    const gitlabCa = !cfg.gitlab
+      ? undefined
+      : typeof userCa === "string" && userCa
         ? await secretItem(
-            { name: userCa, path: "ironProxy.caBundle", owned: false },
+            {
+              name: userCa,
+              path: "ironProxy.caBundle",
+              owned: userCa === GITLAB_CA_SECRET && cfg.gitlab.caFile !== undefined,
+            },
             { name: "ca.crt", verbatim: false },
           )
-        : cfg.gitlab?.caFile
+        : cfg.gitlab.caFile
           ? await secretItem(
               { name: GITLAB_CA_SECRET, path: "gitlab.caFile", owned: true },
               { name: "ca.crt", verbatim: false },
