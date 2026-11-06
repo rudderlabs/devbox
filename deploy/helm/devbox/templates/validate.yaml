@@ -80,9 +80,6 @@ selectors all assume the release namespace devbox. */ -}}
 {{- fail (printf "integrations.jira.enabled is true: integrations.jira.%s is required" $key) }}
 {{- end }}
 {{- end }}
-{{- if not (or $jira.trustedGroups $jira.trustedUsers) }}
-{{- fail "integrations.jira.enabled is true: integrations.jira.trustedGroups or integrations.jira.trustedUsers is required" }}
-{{- end }}
 {{- end }}
 {{- if $app.enabled }}
 {{- range $key := list "appId" "installationId" "botLogin" "botUserId" "tokens" }}

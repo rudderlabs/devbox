@@ -220,6 +220,59 @@ describe("Jira webhook: assignment", () => {
   });
 });
 
+describe("Jira webhook: no trust list, so every person on the site", () => {
+  const site = { cfg: { trustedGroups: [], trustedUsers: [] } };
+  // No group is ever looked up.
+  const lookups = (calls: string[]) => calls.filter((c) => c.startsWith("userGroups"));
+
+  it("starts a task for a person's assignment of a person's issue, groups aside", async () => {
+    const { signed, taskCalls, jiraCalls } = setup(site);
+    const res = await signed(assignmentEvent({ actor: user(STRANGER), reporter: user(STRANGER) }));
+    expect(await res.json()).toEqual({ status: "ok" });
+    expect(taskCalls.map((c) => c.method)).toEqual(["assign"]);
+    expect(lookups(jiraCalls)).toEqual([]);
+  });
+
+  it.each([
+    ["an app assigner", { actor: user(HUMAN, "app") }, "non_human", {}],
+    ["a customer assigner", { actor: user(HUMAN, "customer") }, "non_human", {}],
+    ["an app reporter", { reporter: user(REPORTER, "app") }, "untrusted", { side: "reporter" }],
+    [
+      "a customer reporter",
+      { reporter: user(REPORTER, "customer") },
+      "untrusted",
+      { side: "reporter" },
+    ],
+    [
+      "an app creator with no reporter",
+      { reporter: null, creator: user(REPORTER, "app") },
+      "untrusted",
+      { side: "reporter" },
+    ],
+  ] as const)("ignores %s", async (_, opts, reason, extra) => {
+    const { signed, taskCalls, jiraCalls } = setup(site);
+    const res = await signed(assignmentEvent(opts));
+    expect(await res.json()).toEqual({ status: "ignored", reason });
+    expect(ignoredLog()).toMatchObject({ reason, ...extra });
+    expect(taskCalls).toEqual([]);
+    expect(lookups(jiraCalls)).toEqual([]);
+  });
+
+  it("takes a person's mention as a follow-up", async () => {
+    const { signed, taskCalls, jiraCalls } = setup(site);
+    await signed(commentEvent("@devbox do it", { author: user(STRANGER) }));
+    expect(taskCalls.map((c) => c.method)).toEqual(["findTask", "enqueueRound"]);
+    expect(lookups(jiraCalls)).toEqual([]);
+  });
+
+  it.each(["app", "customer"])("ignores a mention by an %s account", async (type) => {
+    const { signed, taskCalls } = setup(site);
+    const res = await signed(commentEvent("@devbox do it", { author: user(STRANGER, type) }));
+    expect(await res.json()).toEqual({ status: "ignored", reason: "non_human" });
+    expect(taskCalls).toEqual([]);
+  });
+});
+
 describe("Jira webhook: trust lookup failures", () => {
   it("answers 503, retries at most once a minute, then serves the last good answer", async () => {
     let up = false;

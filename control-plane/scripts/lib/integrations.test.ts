@@ -438,15 +438,11 @@ describe("integrations.jira", () => {
     }
   });
 
-  it("needs a trusted group or user when enabled", () => {
+  it("needs no trust list: without one, every person on the site is trusted", () => {
     const { trustedGroups: _, trustedUsers: __, ...rest } = JIRA;
-    const msg = "integrations.jira: trustedGroups or trustedUsers is required when enabled is true";
-    expect(failure({ jira: rest })).toBe(msg);
-    expect(failure({ jira: { ...rest, trustedGroups: [], trustedUsers: [] } })).toBe(msg);
-    expect(parseIntegrations({ jira: { ...rest, enabled: false } }, fail, K8S).jira).toEqual({
-      ...rest,
-      enabled: false,
-    });
+    expect(parseIntegrations({ jira: rest }, fail, K8S).jira).toEqual(rest);
+    const empty = { ...rest, trustedGroups: [], trustedUsers: [] };
+    expect(parseIntegrations({ jira: empty }, fail, COMPOSE).jira).toEqual(empty);
   });
 
   it("checks each value, also with Jira off", () => {

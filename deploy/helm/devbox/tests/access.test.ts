@@ -344,6 +344,12 @@ describe("Jira env", () => {
     });
   });
 
+  it("no trust list: neither trust variable renders", async () => {
+    const env = await jiraEnv([], ["integrations.jira.trustedGroups=[]"]);
+    expect(env.JIRA_ENABLED).toBe("true");
+    expect(Object.keys(env).filter((k) => k.startsWith("JIRA_TRUSTED_"))).toEqual([]);
+  });
+
   it("off: none of the block renders, settings included", async () => {
     expect(await jiraEnv(["integrations.jira.enabled=false"])).toEqual({});
     expect(await jiraEnv([], ["integrations.jira=null"])).toEqual({});

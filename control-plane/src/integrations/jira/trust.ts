@@ -16,16 +16,20 @@ const LOOKUP_TIMEOUT_MS = 3_000;
 export type TrustAnswer = boolean | "unresolved";
 
 export type TrustStatus = {
-  source: "groups" | "users" | "groups+users";
+  // "site": no lists, so every person on the site.
+  source: "site" | "groups" | "users" | "groups+users";
   cachedAccounts: number;
   lastError?: string; // the last lookup's failure class, cleared by a success
 };
 
-// Whether a Jira account may drive devbox: it is one of `trustedUsers`, or a
-// member of one of `trustedGroups` (names compared in any case). App and
-// customer accounts never are. Membership is read per account, because
-// listing a group's members needs admin rights while reading one account's
-// groups doesn't. Answers are cached per account:
+// Whether a Jira account may drive devbox. With no lists, as in a Linear
+// workspace, every person the site lets in may: only accounts with access to
+// the site act there, and the webhook is signed. Only an account Jira marks
+// as a person's ("atlassian") counts then, and nothing is looked up. With lists, only the accounts in `trustedUsers` and the members
+// of `trustedGroups` (names compared in any case) may. App and customer
+// accounts never may. Membership is read per account, because listing a
+// group's members needs admin rights while reading one account's groups
+// doesn't. Answers are cached per account:
 // - served for TRUST_TTL_MS, then looked up again on next use, inline;
 // - a failed lookup isn't cached: the account's next try waits TRUST_RETRY_MS,
 //   and meanwhile, and when that fails too, the last answer is served for one
@@ -52,6 +56,9 @@ export class JiraTrust {
 
   check(actor: JiraActor): Promise<TrustAnswer> {
     if (isNonHuman(actor)) return Promise.resolve(false);
+    if (this.users.size === 0 && this.groups.size === 0) {
+      return Promise.resolve(actor.accountType === "atlassian");
+    }
     const id = actor.accountId;
     if (this.users.has(id)) return Promise.resolve(true);
     if (this.groups.size === 0) return Promise.resolve(false);
@@ -71,8 +78,9 @@ export class JiraTrust {
   }
 
   status(): TrustStatus {
-    const source =
-      this.groups.size === 0 ? "users" : this.users.size === 0 ? "groups" : "groups+users";
+    const groups = this.groups.size > 0;
+    const users = this.users.size > 0;
+    const source = groups && users ? "groups+users" : groups ? "groups" : users ? "users" : "site";
     return {
       source,
       cachedAccounts: this.answers.size,

@@ -12,6 +12,8 @@ import { GRANT_GROUPS_PERMISSION, permissionList, TOKEN_WARN_DAYS } from "./chec
 import type { JiraDeployment } from "./deployment";
 
 export const STATUS_PATH = "/api/integrations/jira";
+// Trust without trustedGroups or trustedUsers.
+const EVERYONE = "everyone with access to the site";
 
 type ProjectHealth = { missingPermissions?: string[]; missingStatuses?: string[]; error?: string };
 
@@ -80,7 +82,10 @@ function controlPlaneLines(d: JiraDeployment, s: JiraStatusBody): string[] {
         : `API token: expires in ${days} days${days < TOKEN_WARN_DAYS ? `: rotate it soon (create a new one, then run ${setup})` : ""}`,
     );
   }
-  if (s.trust) {
+  if (s.trust?.source === "site") {
+    // Nothing is looked up, so there is no cache or lookup failure to show.
+    lines.push(`Trust: ${EVERYONE}`);
+  } else if (s.trust) {
     const cached = `${s.trust.cachedAccounts ?? 0} accounts cached`;
     const failed = s.trust.lastError ? `, last lookup failed: ${s.trust.lastError}` : "";
     const missing = s.trust.missingPermissions?.length
@@ -122,6 +127,11 @@ export async function status(d: JiraDeployment, deps: StatusDeps): Promise<void>
   log(`  site            ${j.siteUrl}`);
   log(`  bot             ${j.botName} (${j.botEmail})`);
   log(`  projectKeys     ${j.projectKeys?.join(", ")}`);
+  const trust = [
+    ...(j.trustedGroups?.length ? [`groups ${j.trustedGroups.join(", ")}`] : []),
+    ...(j.trustedUsers?.length ? [`users ${j.trustedUsers.join(", ")}`] : []),
+  ];
+  log(`  trust           ${trust.join("; ") || EVERYONE}`);
   log(`  tokenExpiresAt  ${j.tokenExpiresAt}`);
   log(`  publicUrl       ${d.publicUrl ?? "not set"}`);
   for (const name of ["JIRA_API_TOKEN", "JIRA_WEBHOOK_SECRET"] as const) {

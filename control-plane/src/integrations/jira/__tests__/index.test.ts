@@ -235,7 +235,7 @@ describe("JiraIntegration status", () => {
     }
   });
 
-  it("with trusted groups, shows Browse users and groups as missing when the bot lacks it", async () => {
+  it("only with trusted groups, shows Browse users and groups as missing when the bot lacks it", async () => {
     const asked: Array<string | undefined> = [];
     const client = {
       myPermissions: async (key: string | undefined, perms: string[]) => {
@@ -253,6 +253,11 @@ describe("JiraIntegration status", () => {
     const users = setup({ client, cfg: { trustedGroups: [], trustedUsers: [HUMAN] } });
     const status = await users.jira.status();
     expect(status.trust).toEqual({ source: "users", cachedAccounts: 0 });
+    expect(asked).toEqual(["DEMO"]);
+
+    asked.length = 0;
+    const site = setup({ client, cfg: { trustedGroups: [], trustedUsers: [] } });
+    expect((await site.jira.status()).trust).toEqual({ source: "site", cachedAccounts: 0 });
     expect(asked).toEqual(["DEMO"]);
   });
 

@@ -212,40 +212,41 @@ async function chooseStatuses(ctx: Ctx, checks: ProjectCheck[]): Promise<JiraSta
   return out;
 }
 
-// Who may assign issues to devbox and ask it to follow up: at least one
-// group or account id.
+// Who may assign issues to devbox and ask it to follow up: the groups and
+// account ids from the flags, else the configured ones. With none, every
+// person with access to the site. A first run in a terminal asks, and Enter
+// keeps that default.
 async function chooseTrust(ctx: Ctx): Promise<{ groups: string[]; users: string[] }> {
   const { opts, d, deps } = ctx;
   let groups =
     opts.trustedGroups !== undefined ? list(opts.trustedGroups) : (d.jira?.trustedGroups ?? []);
   let users =
     opts.trustedUsers !== undefined ? list(opts.trustedUsers) : (d.jira?.trustedUsers ?? []);
-  if (groups.length === 0 && users.length === 0) {
-    if (!deps.resolver.isTTY) {
-      throw new SetupError(
-        `no trusted Jira groups or users: pass --trusted-groups or --trusted-users, or run \`${ctx.again}\` in a terminal`,
-      );
-    }
+  const flagged = opts.trustedGroups !== undefined || opts.trustedUsers !== undefined;
+  if (!flagged && d.jira === undefined && deps.resolver.isTTY) {
+    const everyone = "Enter for everyone with access to the site";
     groups = list(
       await deps.promptLine(
-        "Jira groups whose members may assign issues to devbox, comma-separated (Enter for none): ",
+        `Jira groups whose members may assign issues to devbox, comma-separated (${everyone}): `,
       ),
     );
     users = list(
       await deps.promptLine(
-        "Account ids of other people who may, comma-separated (Enter for none): ",
+        groups.length > 0
+          ? "Account ids of other people who may, comma-separated (Enter for none): "
+          : `Account ids of the only people who may, comma-separated (${everyone}): `,
       ),
     );
-    if (groups.length === 0 && users.length === 0) {
-      throw new SetupError(
-        `No trusted group or user entered: nothing was written. Run \`${ctx.again}\` again when you have them.`,
-      );
-    }
   }
   const bad = users.find((u) => !JIRA_ACCOUNT_ID.test(u));
   if (bad !== undefined) {
     throw new SetupError(
       `"${bad}" is not a Jira account id: use the id at the end of the person's profile URL in Jira`,
+    );
+  }
+  if (groups.length === 0 && users.length === 0) {
+    deps.log(
+      "Trust: everyone with access to the site (narrow it with --trusted-groups or --trusted-users)",
     );
   }
   return { groups, users };

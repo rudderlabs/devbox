@@ -55,7 +55,8 @@ in Jira yourself.
   --site <url>             the Jira site, e.g. https://example.atlassian.net
   --email <address>        the service account's email
   --projects <KEY,…>       the project keys devbox works in, e.g. ENG
-  --trusted-groups <names> Jira groups whose members may assign issues to devbox
+  --trusted-groups <names> only these Jira groups' members may assign issues to
+                           devbox (default: everyone with access to the site)
   --trusted-users <ids>    account ids of other people who may
   --token-expires <date>   when the API token expires, e.g. 2027-01-31
   --no-keychain            never read or write the system keychain

@@ -15,7 +15,8 @@ export type JiraConfig = {
   // Upper-case project keys whose issues devbox acts on.
   projectKeys: string[];
   // Who may assign the bot or ask it to follow up: members of these groups
-  // (by name, any case) and these account ids.
+  // (by name, any case) and these account ids. With both empty, every person
+  // on the site (never an app or customer account).
   trustedGroups: string[];
   trustedUsers: string[];
   // Status names devbox moves an issue to; an absent one means no transition.
@@ -36,8 +37,9 @@ const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\S*)?$/;
 
 // Jira is on only with JIRA_ENABLED=true; then every setting read with need()
-// and at least one of JIRA_TRUSTED_GROUPS and JIRA_TRUSTED_USERS are required,
-// and each value is checked. JIRA_STATUS_STARTED, JIRA_STATUS_DONE and
+// is required, and each value is checked. JIRA_TRUSTED_GROUPS and
+// JIRA_TRUSTED_USERS are optional: they narrow trust, which is otherwise every
+// person on the site. JIRA_STATUS_STARTED, JIRA_STATUS_DONE and
 // JIRA_STATUS_FAILED are optional. With the switch off the settings are
 // ignored. Errors never echo a secret, an email or an account id. No JIRA_*
 // name is forwarded to sandboxes.
@@ -66,9 +68,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
     .map((g) => g.trim())
     .filter(Boolean);
   const trustedUsers = parseTrustList(env.JIRA_TRUSTED_USERS);
-  if (trustedGroups.length === 0 && trustedUsers.length === 0) {
-    missing.push("JIRA_TRUSTED_GROUPS or JIRA_TRUSTED_USERS");
-  }
   if (missing.length > 0) throw missingError("JIRA_ENABLED", missing);
 
   if (!UUID.test(cloudId)) throw new Error("JIRA_CLOUD_ID must be a UUID");

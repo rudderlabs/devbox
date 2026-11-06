@@ -334,6 +334,15 @@ describe("checkJiraBot and jiraPreflight", () => {
     expect(r.keychain.entries()).toEqual(saved);
   });
 
+  it("without trust lists, checks only the token: no Browse users and groups", async () => {
+    const { trustedGroups: _, ...site } = JIRA;
+    const r = resolver({ isTTY: false });
+    const f = jiraFetch();
+    await jiraPreflight(site, secrets("env"), r.deps, { skip: false, fetch: f.fetch, now: NOW });
+    expect(f.requests.map((q) => q.url)).toEqual([`${API}/myself`]);
+    expect(r.log).toEqual([`Jira: devbox acts as devbox on ${SITE}`]);
+  });
+
   it("skipped: no call to Jira, the expiry still warned about", async () => {
     const r = resolver({ isTTY: false });
     const f = jiraFetch();

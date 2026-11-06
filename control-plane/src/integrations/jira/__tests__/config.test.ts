@@ -75,10 +75,10 @@ describe("parseJiraConfig", () => {
     });
   });
 
-  it("JIRA: on with settings missing, including both trust lists and the secrets", () => {
+  it("JIRA: on with settings missing, the secrets included", () => {
     expect(() => parseJiraConfig({ JIRA_ENABLED: "true" })).toThrow(
       new Error(
-        "JIRA_ENABLED is true but these are missing: JIRA_SITE_URL, JIRA_CLOUD_ID, JIRA_BOT_EMAIL, JIRA_BOT_ACCOUNT_ID, JIRA_BOT_NAME, JIRA_PROJECT_KEYS, JIRA_TOKEN_EXPIRES_AT, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET, JIRA_TRUSTED_GROUPS or JIRA_TRUSTED_USERS",
+        "JIRA_ENABLED is true but these are missing: JIRA_SITE_URL, JIRA_CLOUD_ID, JIRA_BOT_EMAIL, JIRA_BOT_ACCOUNT_ID, JIRA_BOT_NAME, JIRA_PROJECT_KEYS, JIRA_TOKEN_EXPIRES_AT, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET",
       ),
     );
     const { JIRA_API_TOKEN: _t, JIRA_WEBHOOK_SECRET: _s, ...noSecrets } = JIRA_ENV;
@@ -95,13 +95,17 @@ describe("parseJiraConfig", () => {
     }
   });
 
-  it("JIRA: accepts trusted users alone", () => {
+  it("JIRA: no trust list trusts the site; trusted users alone narrow it", () => {
     const { JIRA_TRUSTED_GROUPS: _g, ...noGroups } = JIRA_ENV;
-    expect(() => parseJiraConfig(noGroups)).toThrow(
-      new Error(
-        "JIRA_ENABLED is true but these are missing: JIRA_TRUSTED_GROUPS or JIRA_TRUSTED_USERS",
-      ),
-    );
+    for (const env of [
+      noGroups,
+      { ...noGroups, JIRA_TRUSTED_GROUPS: " , ", JIRA_TRUSTED_USERS: "" },
+    ]) {
+      expect(parseJiraConfig(env)).toMatchObject({ trustedGroups: [], trustedUsers: [] });
+    }
+    expect(() =>
+      parseJiraConfig({ ...noGroups, JIRA_TRUSTED_USERS: "someone@example.com" }),
+    ).toThrow(new Error("JIRA_TRUSTED_USERS must list Jira account ids"));
     expect(
       parseJiraConfig({
         ...noGroups,

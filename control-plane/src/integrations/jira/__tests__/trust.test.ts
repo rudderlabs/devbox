@@ -59,6 +59,19 @@ describe("JiraTrust", () => {
     expect(lookups).toEqual([]);
   });
 
+  it("with no lists, trusts every person on the site without a lookup", async () => {
+    const { trust, lookups } = setup(undefined, { trustedUsers: [], trustedGroups: [] });
+    expect(await trust.check({ accountId: OUTSIDER, accountType: "atlassian" })).toBe(true);
+    // Apps (Automation for Jira among them), customers, and an account Jira
+    // doesn't mark as a person's.
+    for (const accountType of ["app", "customer", "unknown", undefined]) {
+      const actor = accountType ? { accountId: MEMBER, accountType } : { accountId: MEMBER };
+      expect(await trust.check(actor)).toBe(false);
+    }
+    expect(lookups).toEqual([]);
+    expect(trust.status()).toEqual({ source: "site", cachedAccounts: 0 });
+  });
+
   it("serves an answer for the TTL, then looks it up again", async () => {
     const { trust, clock, lookups } = setup();
     await trust.check({ accountId: MEMBER });

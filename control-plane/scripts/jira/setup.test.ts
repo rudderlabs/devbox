@@ -44,8 +44,12 @@ const STARTED_Q =
   "Status devbox moves an issue to when it starts work [In Progress] (- for none): ";
 const DONE_Q = "Status devbox moves an issue to when it finishes [Done] (- for none): ";
 const GROUPS_Q =
-  "Jira groups whose members may assign issues to devbox, comma-separated (Enter for none): ";
+  "Jira groups whose members may assign issues to devbox, comma-separated (Enter for everyone with access to the site): ";
 const USERS_Q = "Account ids of other people who may, comma-separated (Enter for none): ";
+const ONLY_USERS_Q =
+  "Account ids of the only people who may, comma-separated (Enter for everyone with access to the site): ";
+const SITE_TRUST =
+  "Trust: everyone with access to the site (narrow it with --trusted-groups or --trusted-users)";
 const EXPIRY_Q =
   "When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): ";
 const WEBHOOK_Q =
@@ -551,6 +555,40 @@ describe("jira setup", () => {
     expect(users.w.log.some((l) => l.includes("USER_PICKER"))).toBe(false);
   });
 
+  it("no trust answer: everyone with access to the site, without the Browse users and groups check", async () => {
+    const { trustedGroups: _, ...noTrust } = JIRA;
+    const typed = harness({
+      // URL, site, email, projects, started, done, groups, users, expiry, show.
+      lines: [PUBLIC, SITE, EMAIL, "eng", "", "", "", "", "2027-06-30", ""],
+      hidden: ["jira-token", ""],
+      globalHeld: [],
+    });
+    await setup(typed.d, {}, typed.deps);
+    expect(typed.w.asked.slice(7, 9)).toEqual([GROUPS_Q, ONLY_USERS_Q]);
+
+    const env = { JIRA_API_TOKEN: "jira-token", JIRA_WEBHOOK_SECRET: "whsec" };
+    const headless = harness({ isTTY: false, env, globalHeld: [] });
+    const { trustedGroups: __, ...noFlag } = FLAGS;
+    await setup(headless.d, noFlag, headless.deps);
+    expect(headless.w.asked).toEqual([]);
+
+    for (const { d, w } of [typed, headless]) {
+      expect(w.log).toContain(SITE_TRUST);
+      expect(w.fetched).not.toContain(GLOBAL_PERMISSIONS);
+      expect(w.log.some((l) => l.includes("USER_PICKER"))).toBe(false);
+      expect((readJson(d.configPath).integrations as { jira: unknown }).jira).toEqual(noTrust);
+    }
+
+    // A re-run keeps it without asking; flags narrow it.
+    const again = harness({ jira: noTrust, isTTY: true, env });
+    await setup(again.d, {}, again.deps);
+    expect(again.w.asked).toEqual([]);
+    expect(again.w.log).toContain(SITE_TRUST);
+    const narrowed = harness({ jira: noTrust, isTTY: false, env });
+    await setup(narrowed.d, { trustedGroups: "jira-software-users" }, narrowed.deps);
+    expect((readJson(narrowed.d.configPath).integrations as { jira: unknown }).jira).toEqual(JIRA);
+  });
+
   it("no webhook secret without a terminal: refuses", async () => {
     const { d, deps } = harness({ isTTY: false, env: { JIRA_API_TOKEN: "jira-token" } });
     await expect(setup(d, FLAGS, deps)).rejects.toThrow(
@@ -572,10 +610,6 @@ describe("jira setup", () => {
       [
         "projects",
         "no Jira project keys: pass --projects <KEY,…>, or run `bun run jira:setup` in a terminal",
-      ],
-      [
-        "trustedGroups",
-        "no trusted Jira groups or users: pass --trusted-groups or --trusted-users, or run `bun run jira:setup` in a terminal",
       ],
       [
         "tokenExpires",

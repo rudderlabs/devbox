@@ -188,20 +188,19 @@ describe("chart validation", () => {
       },
     );
 
-    it("requires trustedGroups or trustedUsers when enabled", async () => {
-      expect(await jiraFailure([], ["integrations.jira.trustedGroups=[]"])).toContain(
-        "integrations.jira.enabled is true: integrations.jira.trustedGroups or integrations.jira.trustedUsers is required",
-      );
-      const r = await helmTemplate([
-        ...BASE,
-        "-f",
-        JIRA,
-        "--set-json",
-        "integrations.jira.trustedGroups=[]",
-        "--set-json",
-        'integrations.jira.trustedUsers=["712020:1"]',
-      ]);
-      expect(r.code).toBe(0);
+    it("needs no trust list when enabled: without one, the site is trusted", async () => {
+      for (const users of ["[]", '["712020:1"]']) {
+        const r = await helmTemplate([
+          ...BASE,
+          "-f",
+          JIRA,
+          "--set-json",
+          "integrations.jira.trustedGroups=[]",
+          "--set-json",
+          `integrations.jira.trustedUsers=${users}`,
+        ]);
+        expect(r.code).toBe(0);
+      }
     });
 
     it("a disabled block needs none of them", async () => {

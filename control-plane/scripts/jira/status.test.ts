@@ -82,6 +82,7 @@ const HEAD = [
   "  site            https://example.atlassian.net",
   "  bot             devbox (devbox@example.com)",
   "  projectKeys     ENG, OPS",
+  "  trust           groups jira-software-users",
   "  tokenExpiresAt  2027-06-30",
   "  publicUrl       https://hooks.example.com",
   "  JIRA_API_TOKEN       keychain",
@@ -160,6 +161,27 @@ describe("jira status", () => {
     );
   });
 
+  it("trust: everyone with access to the site without lists, else the groups and users", async () => {
+    const { trustedGroups: _, ...noTrust } = JIRA;
+    const site = await run({
+      jira: noTrust,
+      api: async () => Response.json({ ...BODY, trust: { source: "site", cachedAccounts: 0 } }),
+    });
+    expect(site.log).toEqual([
+      ...HEAD.map((l) =>
+        l.startsWith("  trust ") ? "  trust           everyone with access to the site" : l,
+      ),
+      ...CP.map((l) => (l.startsWith("Trust:") ? "Trust: everyone with access to the site" : l)),
+      OK_LINE,
+    ]);
+    expect(site.log.some((l) => l.includes("USER_PICKER"))).toBe(false);
+
+    const both = await run({
+      jira: { ...JIRA, trustedGroups: ["a", "Site admins"], trustedUsers: [BOT_ID] },
+    });
+    expect(both.log).toContain(`  trust           groups a, Site admins; users ${BOT_ID}`);
+  });
+
   it("an expired token and a reply with no answer", async () => {
     const r = await run({
       jira: JIRA,
@@ -177,7 +199,7 @@ describe("jira status", () => {
 
   it("the user's Secret, an unreachable control plane, Jira not on there yet", async () => {
     const byo = await run({ jira: JIRA, byo: "my-integrations" });
-    expect(byo.log.slice(6, 8)).toEqual([
+    expect(byo.log.slice(7, 9)).toEqual([
       '  JIRA_API_TOKEN       from Secret "my-integrations" (not read)',
       '  JIRA_WEBHOOK_SECRET  from Secret "my-integrations" (not read)',
     ]);

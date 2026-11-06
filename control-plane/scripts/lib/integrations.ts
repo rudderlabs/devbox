@@ -36,8 +36,9 @@ export type GithubAppIntegration = {
 export type PendingGithubApp = { appId: number; slug: string; org?: string; publicUrl?: string };
 // Jira Cloud through a service account. botAccountId and botName are what
 // GET /myself answered at setup; statuses are the names devbox moves an issue
-// to (an absent one means no move); trustedGroups or trustedUsers (account
-// ids) is required when enabled.
+// to (an absent one means no move); trustedGroups and trustedUsers (account
+// ids) narrow who may drive devbox, which without them is every person on
+// the site.
 export type JiraIntegration = {
   enabled: boolean;
   siteUrl?: string;
@@ -389,9 +390,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     "trustedUsers",
     strings((s) => JIRA_ACCOUNT_ID.test(s), "Jira account ids", false),
   );
-  if (b.enabled && !trustedGroups?.length && !trustedUsers?.length) {
-    return fail(`${f}: trustedGroups or trustedUsers is required when enabled is true`);
-  }
   const statuses = optional("statuses", (v, field) => {
     if (!isObject(v)) return fail(`${field}: must be an object`);
     onlyKeys(v, ["started", "done", "failed"], field, fail);
