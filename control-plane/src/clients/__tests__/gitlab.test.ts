@@ -91,6 +91,15 @@ describe("requests", () => {
     expect(calls[0]?.init?.body).toBe(JSON.stringify({ body: "hello" }));
   });
 
+  it("addresses a project by its path too, URL-encoded, as the code host does", async () => {
+    const { fn, calls } = fetchReturning([{ status: 201, body: { id: 79 } }]);
+    globalThis.fetch = fn;
+    await postMrNote("platform/backend/api", 3, "hello");
+    expect(calls[0]?.url).toBe(
+      "https://gitlab.example.com/api/v4/projects/platform%2Fbackend%2Fapi/merge_requests/3/notes",
+    );
+  });
+
   it("replies inside a discussion, URL-encoding its id", async () => {
     const { fn, calls } = fetchReturning([{ status: 201, body: { id: 78 } }]);
     globalThis.fetch = fn;

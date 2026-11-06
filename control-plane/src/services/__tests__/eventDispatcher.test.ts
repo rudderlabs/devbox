@@ -81,7 +81,6 @@ mock.module("../../clients/github", () => ({
 }));
 
 const { EventDispatcher } = await import("../eventDispatcher");
-const { CodeHost } = await import("../codeHost.service");
 const { LinearIntegration } = await import("../../integrations/linear");
 const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
@@ -210,7 +209,7 @@ describe("EventDispatcher", () => {
           )
         : null,
     });
-  // A dispatcher over this registry, its code host over the same one.
+  // A dispatcher over this registry.
   const dispatcherOver = (
     registry: InstanceType<typeof IntegrationRegistry>,
     replyHolds: InstanceType<typeof ReplyHolds> = holds,
@@ -221,7 +220,6 @@ describe("EventDispatcher", () => {
       sandboxManager,
       slackNotifier,
       registry,
-      new CodeHost(registry, background),
       replyHolds,
       background,
     );
@@ -833,7 +831,7 @@ describe("EventDispatcher", () => {
       expect(postIssueComment).toHaveBeenCalledTimes(1);
     });
 
-    it("runs the code host, then appendPrUrl, then onPrOpened", async () => {
+    it("runs the PR's host integration, then appendPrUrl, then the task's own onPrOpened", async () => {
       const order: string[] = [];
       postIssueComment.mockImplementation(async () => {
         order.push("comment");
@@ -914,7 +912,7 @@ describe("EventDispatcher", () => {
       expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
     });
 
-    it("posts no onboarding comment while no integration sets prMentionLogin, but still mirrors the assignee", async () => {
+    it("while GitHub's integration is off (a personal token, no webhooks): no onboarding comment and no assignee", async () => {
       getIssueHumanAssignee.mockResolvedValue({
         id: "usr-1",
         name: "Ada Lovelace",
@@ -923,15 +921,19 @@ describe("EventDispatcher", () => {
         gitHubUserId: "octocat",
       });
       addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
-      // GitHub, the integration that takes @-mentions, is off.
+      // GitHub, which does both on its pull requests, is off: nothing has an
+      // instance to do them, and nobody is looked up.
       const result = await withGithubOff().handle(prEvent(), makeTask());
       await flushMicrotasks();
       expect(result).toBe("ok");
       expect(postIssueComment).not.toHaveBeenCalled();
-      expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
+      expect(getIssueHumanAssignee).not.toHaveBeenCalled();
+      expect(addPrAssignees).not.toHaveBeenCalled();
+      // The task's own integration still links the PR on the issue.
+      expect(attachUrlToIssue).toHaveBeenCalledTimes(1);
     });
 
-    // Resolving an account id to a login: codeHost.service.test.ts.
+    // Resolving an account id to a login: integrations/github/__tests__/prOpened.test.ts.
     describe("PR assignee mirror", () => {
       const human = (gitHubUserId: string | null): LinearHumanUser => ({
         id: "usr-1",

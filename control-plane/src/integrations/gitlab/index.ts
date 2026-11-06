@@ -3,12 +3,21 @@ import {
   awardNoteEmoji,
   findDiscussionIdForNote,
   gitlabTokenState,
+  parseMrUrl,
   postDiscussionNote,
   postMrNote,
 } from "../../clients/gitlab";
+import type { Task } from "../../db/schema";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
-import type { Integration, IntegrationDefinition, ReplyTarget, Round } from "../types";
+import type {
+  Integration,
+  IntegrationDefinition,
+  PrOpenedCtx,
+  PrRef,
+  ReplyTarget,
+  Round,
+} from "../types";
 import { type GitlabConfig, parseGitlabConfig } from "./config";
 import { type GitlabSpec, isGitlabSpec } from "./rounds";
 import { type GitlabStatus, GitlabStatusService } from "./status";
@@ -42,6 +51,7 @@ export const gitlab: IntegrationDefinition<GitlabConfig> = {
 // request shows no live progress and may be public: a failure's raw detail
 // never goes there.
 export class GitlabIntegration implements Integration {
+  // Its webhooks turn @-mentions of the bot into rounds.
   private readonly botUsername: string;
 
   constructor(
@@ -60,6 +70,32 @@ export class GitlabIntegration implements Integration {
 
   async status(): Promise<GitlabStatus> {
     return this.statusService.status();
+  }
+
+  // Merge requests on the configured instance are GitLab's: core hands it
+  // each new one.
+  hostsPr(url: string): boolean {
+    return parseMrUrl(url) !== null;
+  }
+
+  // The agent opened a merge request on the instance (core calls this as the
+  // merge request's code host's integration, once per merge request): the
+  // onboarding note. This runs only while GitLab is on, which is while its
+  // webhooks take @-mentions. The project goes by its path, all a merge
+  // request URL carries. A failure is the registry's to log.
+  //
+  // No assignee: nothing links the task's person to a GitLab account (Linear
+  // links GitHub accounts only), so ctx.person() is not asked.
+  async onPrOpened(ctx: PrOpenedCtx, task: Task, pr: PrRef): Promise<void> {
+    if (!ctx.firstTime) return;
+    const mr = parseMrUrl(pr.url);
+    if (!mr) return;
+    await postMrNote(
+      mr.project,
+      mr.mrIid,
+      onboardingNoteBody(this.botUsername, task.key),
+      ctx.signal,
+    );
   }
 
   async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
@@ -82,6 +118,17 @@ export class GitlabIntegration implements Integration {
       }
     }
   }
+}
+
+// GitLab delivers each note on its own (there is no review summary), so the
+// text asks for one note that says everything.
+function onboardingNoteBody(botUsername: string, taskKey: string): string {
+  return [
+    `👋 I'm **${botUsername}**. I opened this merge request from task \`${taskKey}\`.`,
+    "",
+    `Mention \`@${botUsername}\` in a comment here or on a line of the diff and I'll act on it.`,
+    "Each comment is handled on its own, so put everything into one. Without a mention I won't see it.",
+  ].join("\n");
 }
 
 async function deliverFailure(

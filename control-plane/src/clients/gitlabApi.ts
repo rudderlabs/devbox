@@ -2,7 +2,8 @@
 // its webhook controller need, and nothing the sandboxes do (those go through
 // iron-proxy with the harness's own client). One instance is configured:
 // config.gitlab.baseUrl. Projects are addressed by their numeric id, which
-// every webhook payload carries, so no path needs URL-encoding.
+// every webhook payload carries; the integration's onPrOpened, which has only
+// a merge request's URL, passes the project's path instead.
 //
 // Numbers: a merge request's `iid` (per project) is what URLs and every
 // `/merge_requests/<n>` path use; the global `id` never leaves the payload.
@@ -129,12 +130,14 @@ async function paginated(path: string, signal?: AbortSignal): Promise<unknown[]>
   }
 }
 
-const mr = (projectId: number, mrIid: number): string =>
-  `/projects/${projectId}/merge_requests/${mrIid}`;
+// A project is addressed by its numeric id (what webhooks carry) or by its
+// path_with_namespace (what a merge request URL carries), URL-encoded.
+const mr = (project: number | string, mrIid: number): string =>
+  `/projects/${encodeURIComponent(String(project))}/merge_requests/${mrIid}`;
 
 // POST .../merge_requests/{iid}/notes — a new top-level note on the merge request.
 export async function postMrNote(
-  projectId: number,
+  projectId: number | string,
   mrIid: number,
   body: string,
   signal?: AbortSignal,

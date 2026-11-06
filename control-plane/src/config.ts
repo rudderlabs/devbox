@@ -90,11 +90,12 @@ export const config = {
   // task-completion updates) and SLACK_CHANNEL_ID (C…) are required. The token
   // matches the /token/i log-redaction pattern. Parsed by integrationsConfig.ts.
   slack: parseSlackConfig(process.env),
-  // The code host's settings (GitHub is the only one). They belong to core,
-  // not to the GitHub integration, whose own settings are parsed in
-  // integrations/github/config.ts: core posts the onboarding comment, assigns
-  // PRs and gives sandboxes their trust lists whether or not GitHub webhooks
-  // are on.
+  // GitHub's settings that belong to core, not to the GitHub integration,
+  // whose own settings are parsed in integrations/github/config.ts: core
+  // gives sandboxes their trust lists whether or not GitHub webhooks are on.
+  // The token is read here too, though only the integration calls GitHub now
+  // (replies, the onboarding comment, the assignee): with it off, the control
+  // plane makes no GitHub call.
   codeHost: {
     // The control plane's own GitHub token (it runs outside the sandbox
     // egress path, so it needs a real one): GITHUB_TOKEN_FILE (a mounted
@@ -106,7 +107,7 @@ export const config = {
     trustedOrgs: parseTrustList(process.env.GITHUB_TRUSTED_ORGS),
     trustedUsers: parseTrustList(process.env.GITHUB_TRUSTED_USERS),
   },
-  // The GitLab instance's settings that belong to core, like the code host's
+  // The GitLab instance's settings that belong to core, like GitHub's
   // above: sandboxes get the instance and the trust lists, and the control
   // plane has its own token, whether or not GitLab webhooks are on. The GitLab
   // integration's own settings are parsed in integrations/gitlab/config.ts.
