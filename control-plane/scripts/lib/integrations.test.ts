@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { homedir } from "node:os";
-import { enabledGithubApp, enabledLinear, parseIntegrations } from "./integrations";
+import { enabledGithubApp, enabledJira, enabledLinear, parseIntegrations } from "./integrations";
 
 class Failed extends Error {}
 const fail = (msg: string): never => {
@@ -120,11 +120,11 @@ describe("parseIntegrations", () => {
   });
 
   it("refuses an unknown key in integrations", () => {
-    expect(failure({ jira: {} })).toBe(
-      'integrations: unknown key "jira" (allowed: linear, slack, githubApp)',
+    expect(failure({ clickup: {} })).toBe(
+      'integrations: unknown key "clickup" (allowed: linear, slack, githubApp, jira)',
     );
-    expect(failure({ jira: {} }, COMPOSE)).toBe(
-      'integrations: unknown key "jira" (allowed: linear, githubApp)',
+    expect(failure({ clickup: {} }, COMPOSE)).toBe(
+      'integrations: unknown key "clickup" (allowed: linear, githubApp, jira)',
     );
   });
 
@@ -388,5 +388,87 @@ describe("enabledGithubApp", () => {
     expect(enabledGithubApp({ githubApp: on })).toEqual(on);
     expect(enabledGithubApp({ githubApp: { ...on, enabled: false } })).toBeUndefined();
     expect(enabledGithubApp({})).toBeUndefined();
+  });
+});
+
+describe("integrations.jira", () => {
+  const JIRA = {
+    enabled: true as const,
+    siteUrl: "https://example.atlassian.net",
+    cloudId: "00000000-0000-0000-0000-000000000000",
+    botEmail: "devbox@example.com",
+    botAccountId: "712020:00000000-0000-0000-0000-000000000000",
+    botName: "devbox",
+    statuses: { started: "In Progress", done: "Done", failed: "Blocked" },
+    allowRestrictedIssues: false,
+  };
+
+  it("parses every key, on both platforms", () => {
+    for (const opts of [COMPOSE, K8S]) {
+      expect(parseIntegrations({ jira: JIRA }, fail, opts)).toEqual({ jira: JIRA });
+    }
+    expect(
+      parseIntegrations({ jira: { ...JIRA, siteUrl: "https://example.atlassian.net/" } }, fail, K8S)
+        .jira?.siteUrl,
+    ).toBe("https://example.atlassian.net");
+  });
+
+  it("each required key is required when enabled", () => {
+    for (const key of ["siteUrl", "cloudId", "botEmail", "botAccountId", "botName"]) {
+      const { [key as keyof typeof JIRA]: _, ...rest } = JIRA;
+      expect(failure({ jira: rest })).toBe(
+        `integrations.jira.${key}: required when enabled is true`,
+      );
+      // A disabled block may leave it out.
+      expect(
+        parseIntegrations({ jira: { ...rest, enabled: false } }, fail, K8S).jira?.enabled,
+      ).toBe(false);
+    }
+  });
+
+  it("checks each value, also with Jira off", () => {
+    const cases: Array<[string, unknown, string]> = [
+      [
+        "siteUrl",
+        "http://example.atlassian.net",
+        "must be an https origin such as https://example.atlassian.net",
+      ],
+      [
+        "siteUrl",
+        "https://example.atlassian.net/jira",
+        "must be an https origin such as https://example.atlassian.net",
+      ],
+      ["cloudId", "abc", "must be a UUID"],
+      ["botEmail", "devbox", "must be an email address"],
+      ["botAccountId", "bad id!", "must be a Jira account id"],
+      ["botName", " ", "must be a non-empty string"],
+      ["statuses", "Done", "must be an object"],
+      ["allowRestrictedIssues", "yes", "must be true or false"],
+    ];
+    for (const [key, value, why] of cases) {
+      for (const enabled of [true, false]) {
+        expect(failure({ jira: { ...JIRA, enabled, [key]: value } })).toBe(
+          `integrations.jira.${key}: ${why}`,
+        );
+      }
+    }
+    expect(failure({ jira: { ...JIRA, statuses: { started: "" } } })).toBe(
+      "integrations.jira.statuses.started: must be a non-empty string",
+    );
+  });
+
+  it("refuses unknown keys, a secret above all", () => {
+    expect(failure({ jira: { ...JIRA, apiToken: "t" } })).toBe(
+      'integrations.jira: unknown key "apiToken" (allowed: enabled, siteUrl, cloudId, botEmail, botAccountId, botName, statuses, allowRestrictedIssues)',
+    );
+    expect(failure({ jira: { ...JIRA, statuses: { review: "In Review" } } })).toBe(
+      'integrations.jira.statuses: unknown key "review" (allowed: started, done, failed)',
+    );
+  });
+
+  it("enabledJira is the block only when enabled", () => {
+    expect(enabledJira({ jira: JIRA })).toEqual(JIRA);
+    expect(enabledJira({ jira: { ...JIRA, enabled: false } })).toBeUndefined();
+    expect(enabledJira({})).toBeUndefined();
   });
 });

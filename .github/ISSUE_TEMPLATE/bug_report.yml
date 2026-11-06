@@ -47,6 +47,7 @@ body:
       options:
         - CLI
         - Linear
+        - Jira
         - GitHub
         - Not a task problem
   - type: input

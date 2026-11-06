@@ -153,6 +153,21 @@ services:
       LINEAR_CLIENT_ID: ${LINEAR_CLIENT_ID:-}
       LINEAR_CLIENT_SECRET: ${LINEAR_CLIENT_SECRET:-}
       LINEAR_WEBHOOK_SECRET: ${LINEAR_WEBHOOK_SECRET:-}
+      # Jira, on only when devbox.config.json has `integrations.jira` with
+      # `enabled: true`: `bun run up` then sets these from it and from the two
+      # secrets, and otherwise passes them all empty.
+      JIRA_ENABLED: ${JIRA_ENABLED:-}
+      JIRA_SITE_URL: ${JIRA_SITE_URL:-}
+      JIRA_CLOUD_ID: ${JIRA_CLOUD_ID:-}
+      JIRA_BOT_EMAIL: ${JIRA_BOT_EMAIL:-}
+      JIRA_BOT_ACCOUNT_ID: ${JIRA_BOT_ACCOUNT_ID:-}
+      JIRA_BOT_NAME: ${JIRA_BOT_NAME:-}
+      JIRA_STATUS_STARTED: ${JIRA_STATUS_STARTED:-}
+      JIRA_STATUS_DONE: ${JIRA_STATUS_DONE:-}
+      JIRA_STATUS_FAILED: ${JIRA_STATUS_FAILED:-}
+      JIRA_ALLOW_RESTRICTED_ISSUES: ${JIRA_ALLOW_RESTRICTED_ISSUES:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_WEBHOOK_SECRET: ${JIRA_WEBHOOK_SECRET:-}
       # GitHub webhooks, on only with `integrations.githubApp` enabled:
       # `bun run up` then sets them from the App, and otherwise passes them
       # empty. The trust lists come from devbox.config.json's `github` block

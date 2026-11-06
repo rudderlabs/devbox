@@ -63,6 +63,8 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET   missing",
         "  GITHUB_APP_PRIVATE_KEY  missing",
         "  GITHUB_WEBHOOK_SECRET   missing",
+        "  JIRA_API_TOKEN          missing",
+        "  JIRA_WEBHOOK_SECRET     missing",
       ].join("\n"),
     );
     expect(s.ran).toEqual([]);
@@ -80,6 +82,8 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET   missing",
         "  GITHUB_APP_PRIVATE_KEY  missing",
         "  GITHUB_WEBHOOK_SECRET   missing",
+        "  JIRA_API_TOKEN          missing",
+        "  JIRA_WEBHOOK_SECRET     missing",
       ].join("\n"),
     );
     expect(s.ran).toEqual([["gh", "auth", "token"]]);
@@ -98,13 +102,15 @@ describe("bun run secrets", () => {
           "  LINEAR_WEBHOOK_SECRET   missing",
           "  GITHUB_APP_PRIVATE_KEY  missing",
           "  GITHUB_WEBHOOK_SECRET   missing",
+          "  JIRA_API_TOKEN          missing",
+          "  JIRA_WEBHOOK_SECRET     missing",
         ].join("\n"),
       );
       expect(s.ran).toEqual([["gh", "auth", "token"]]);
     }
   });
 
-  it("secrets ls on k8s lists seven names; on Compose six", async () => {
+  it("secrets ls on k8s lists nine names; on Compose eight", async () => {
     const s = setup({ entries: { "k8s:ctx/devbox/LLM_API_KEY": "sk-x" } });
     expect(await secretsCommand(["ls", "--target", "t.json"], s.deps)).toBe(0);
     expect(s.out.join("\n")).toBe(
@@ -116,6 +122,8 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET   missing",
         "  GITHUB_APP_PRIVATE_KEY  missing",
         "  GITHUB_WEBHOOK_SECRET   missing",
+        "  JIRA_API_TOKEN          missing",
+        "  JIRA_WEBHOOK_SECRET     missing",
         "  SLACK_BOT_TOKEN         missing",
       ].join("\n"),
     );
@@ -157,6 +165,8 @@ describe("bun run secrets", () => {
           "  LINEAR_WEBHOOK_SECRET   missing",
           `  GITHUB_APP_PRIVATE_KEY  ${key}`,
           "  GITHUB_WEBHOOK_SECRET   missing",
+          "  JIRA_API_TOKEN          missing",
+          "  JIRA_WEBHOOK_SECRET     missing",
         ].join("\n"),
       );
     };
@@ -190,6 +200,8 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET           missing",
         "  GITHUB_APP_PRIVATE_KEY          missing",
         "  GITHUB_WEBHOOK_SECRET           missing",
+        "  JIRA_API_TOKEN                  missing",
+        "  JIRA_WEBHOOK_SECRET             missing",
         "  GITHUB_APP_PRIVATE_KEY_PENDING  keychain (GitHub App private key of the new App, not installed yet)",
       ].join("\n"),
     );
@@ -204,6 +216,8 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET           missing",
         "  GITHUB_APP_PRIVATE_KEY          missing",
         "  GITHUB_WEBHOOK_SECRET           missing",
+        "  JIRA_API_TOKEN                  missing",
+        "  JIRA_WEBHOOK_SECRET             missing",
         "  GITHUB_APP_PRIVATE_KEY_PENDING  keychain (GitHub App private key of the new App, not installed yet)",
         "  GITHUB_WEBHOOK_SECRET_PENDING   keychain (GitHub webhook secret of the new App, not installed yet)",
       ].join("\n"),
@@ -233,7 +247,7 @@ describe("bun run secrets", () => {
     const s = setup({ entries: ALL });
     expect(await secretsCommand(["rm", "NOPE"], s.deps)).toBe(2);
     expect(s.out).toEqual([
-      'unknown secret "NOPE": use one of GITHUB_TOKEN, LLM_API_KEY, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY_PENDING, GITHUB_WEBHOOK_SECRET_PENDING',
+      'unknown secret "NOPE": use one of GITHUB_TOKEN, LLM_API_KEY, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY_PENDING, GITHUB_WEBHOOK_SECRET_PENDING',
     ]);
     expect(Object.keys(s.keychain.entries())).toHaveLength(4);
   });

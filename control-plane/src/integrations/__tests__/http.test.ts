@@ -8,7 +8,7 @@ mock.module("../../config", () => ({
   config: { podId: "pod-test", codeHost: { tokenSettings: { file: "/nonexistent/devbox/token" } } },
 }));
 
-const { HttpError, parseRetryAfter, retryable, withTimeout } = await import("../http");
+const { errorClass, HttpError, parseRetryAfter, retryable, withTimeout } = await import("../http");
 const { RetryableError } = await import("../outbound");
 const { LinearIntegration } = await import("../linear");
 const { LinearTokenError, requestClientCredentialsToken } = await import("../linear/oauth");
@@ -161,6 +161,18 @@ describe("withTimeout", () => {
     }).catch((e: unknown) => e);
     expect((err as Error).message).toBe("timed out after 20 ms");
     expect(seen?.aborted).toBe(true);
+  });
+});
+
+describe("errorClass", () => {
+  it("names the failure without its text", () => {
+    expect(errorClass(new HttpError("HTTP 401 body", 401))).toBe("http_401");
+    expect(errorClass(new Error("timed out after 3000 ms"))).toBe("timeout");
+    expect(errorClass(Object.assign(new TypeError("x"), { code: "ECONNREFUSED" }))).toBe(
+      "ECONNREFUSED",
+    );
+    expect(errorClass(new RangeError("whatever"))).toBe("RangeError");
+    expect(errorClass("a string")).toBe("unknown");
   });
 });
 

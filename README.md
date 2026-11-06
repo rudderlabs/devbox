@@ -3,7 +3,7 @@
   <img alt="DevBox: open-source autonomous engineering harness in your cloud. It plans the change, writes the code, runs the tests and reviews its own work, then opens a draft pull request." src="docs/images/banner-light.png" width="100%">
 </picture>
 
-> DevBox runs on your infrastructure, with your model keys. It is built for a whole engineering org: one shared harness that picks up Linear tickets, answers on GitHub pull requests, works across your repos, and remembers what it learned in them. Join the community on [rudderstack.com/devbox](https://www.rudderstack.com/devbox).
+> DevBox runs on your infrastructure, with your model keys. It is built for a whole engineering org: one shared harness that picks up Linear and Jira tickets, answers on GitHub pull requests, works across your repos, and remembers what it learned in them. Join the community on [rudderstack.com/devbox](https://www.rudderstack.com/devbox).
 
 <p align="center">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
@@ -196,6 +196,21 @@ bun run linear:status                                        # checks the URL re
 [docs/linear.md](docs/linear.md) covers Kubernetes, private teams and
 rotating secrets.
 
+### Run tasks from Jira
+
+Assign a Jira Cloud issue to DevBox's service account and it moves the issue
+to started, links the draft pull request and replies in comments. Comments
+that @mention it reach the task. It uses the same public URL as Linear.
+
+```bash
+bun run jira:setup --public-url https://<your-tunnel-host>   # checks the service account, prints the webhook
+bun run up                                                   # applies it, once a Jira admin created the webhook
+bun run jira:status
+```
+
+[docs/jira.md](docs/jira.md) covers the service account, the webhook, who is
+trusted, and rotating the token.
+
 ### Let your team @mention DevBox on pull requests (GitHub App)
 
 Your token alone is enough for DevBox to open pull requests. A GitHub App adds:
@@ -257,11 +272,11 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 - Two LLM APIs: OpenAI's Responses API and Anthropic's Messages API. A
   self-hosted model needs a server that speaks the Responses API with
   reasoning, on port 80 or 443 under a DNS name.
-- New tasks come from the CLI and Linear. On GitHub, DevBox only picks up
-  follow-ups on its own pull requests; it doesn't start work from GitHub
-  issues. Slack gets only completion updates for Linear tasks. No Jira and no
-  web UI.
-- Stopping a task from Linear isn't supported yet.
+- New tasks come from the CLI, Linear and Jira. On GitHub, DevBox only picks
+  up follow-ups on its own pull requests; it doesn't start work from GitHub
+  issues. Slack gets only completion updates for Linear tasks. Jira Cloud
+  only, and no web UI.
+- Stopping a task from Linear or Jira isn't supported yet.
 - No stable extension interface. [docs/extending.md](docs/extending.md) shows where hooks would go.
 
 ## FAQ
@@ -302,9 +317,9 @@ With a personal token, DevBox acts as you. Set up the [GitHub App](#let-your-tea
 </details>
 
 <details>
-<summary><strong>Do I need Linear?</strong></summary>
+<summary><strong>Do I need Linear or Jira?</strong></summary>
 
-No. The CLI does everything. Linear makes it a team tool: anyone can delegate an issue and follow along without the CLI.
+No. The CLI does everything. Linear or Jira makes it a team tool: anyone can hand DevBox an issue without the CLI.
 
 </details>
 
@@ -321,7 +336,9 @@ DevBox is the org's shared harness that picks up tickets in the background.
 - [docs/configuration.md](docs/configuration.md): `devbox.config.json`, secrets and the keychain, environment variables, trust settings, per-stage models.
 - [docs/architecture.md](docs/architecture.md): the components, how the control plane and the harness talk, and the task states.
 - [docs/linear.md](docs/linear.md): connecting DevBox to Linear.
+- [docs/jira.md](docs/jira.md): connecting DevBox to Jira.
 - [docs/github.md](docs/github.md): connecting DevBox to GitHub as an App.
+- [docs/public-url.md](docs/public-url.md): the public URL every integration's webhooks reach.
 - [docs/kubernetes/README.md](docs/kubernetes/README.md): running DevBox on Kubernetes.
 - [docs/database.md](docs/database.md): database migrations, upgrades and rollbacks.
 - [docs/extending.md](docs/extending.md): where DevBox could be extended. Not a stable interface.

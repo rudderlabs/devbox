@@ -1,6 +1,6 @@
 // The `integrations` block of a deployment's config: each
-// integration's `enabled` switch and its non-secret settings. Linear on both
-// platforms; the GitHub App on both; Slack on Kubernetes only. Secrets
+// integration's `enabled` switch and its non-secret settings. Linear, Jira
+// and the GitHub App on both platforms; Slack on Kubernetes only. Secrets
 // never live here, and a secret never turns an integration on: only
 // `enabled: true` does. Unknown keys are refused so a typo (or a pasted
 // secret) fails loudly.
@@ -34,10 +34,25 @@ export type GithubAppIntegration = {
 // publicUrl: the public URL the new App was set up with, when it differs
 // from the saved one; it becomes the deployment's once the App is installed.
 export type PendingGithubApp = { appId: number; slug: string; org?: string; publicUrl?: string };
+// Jira Cloud through a service account. botAccountId and botName are what
+// GET /myself answered at setup; statuses are the names devbox moves an issue
+// to (an absent one means no move).
+export type JiraIntegration = {
+  enabled: boolean;
+  siteUrl?: string;
+  cloudId?: string;
+  botEmail?: string;
+  botAccountId?: string;
+  botName?: string;
+  statuses?: JiraStatuses;
+  allowRestrictedIssues?: boolean;
+};
+export type JiraStatuses = { started?: string; done?: string; failed?: string };
 export type Integrations = {
   linear?: LinearIntegration;
   slack?: SlackIntegration;
   githubApp?: GithubAppIntegration;
+  jira?: JiraIntegration;
 };
 
 export type EnabledLinear = LinearIntegration & { enabled: true; clientId: string };
@@ -61,6 +76,21 @@ export type EnabledGithubApp = GithubAppIntegration & {
 export function enabledGithubApp(i: Integrations): EnabledGithubApp | undefined {
   const g = i.githubApp;
   return g?.enabled ? (g as EnabledGithubApp) : undefined;
+}
+
+export type EnabledJira = JiraIntegration & {
+  enabled: true;
+  siteUrl: string;
+  cloudId: string;
+  botEmail: string;
+  botAccountId: string;
+  botName: string;
+};
+
+// The Jira block when Jira is on; parseIntegrations guarantees its keys.
+export function enabledJira(i: Integrations): EnabledJira | undefined {
+  const j = i.jira;
+  return j?.enabled ? (j as EnabledJira) : undefined;
 }
 
 type Fail = (msg: string) => never;
@@ -237,6 +267,103 @@ function parsePending(raw: unknown, fail: Fail): PendingGithubApp {
   };
 }
 
+// The shapes the control plane accepts (src/integrations/jira/config.ts).
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
+
+// The site as a bare https origin, as the control plane wants it; undefined
+// for anything else.
+export function jiraSiteOrigin(raw: string): string | undefined {
+  const url = URL.parse(raw.trim());
+  return url?.protocol === "https:" &&
+    !url.username &&
+    !url.password &&
+    url.pathname === "/" &&
+    !url.search &&
+    !url.hash
+    ? url.origin
+    : undefined;
+}
+
+function parseJira(raw: unknown, fail: Fail): JiraIntegration {
+  const f = "integrations.jira";
+  const b = block(
+    raw,
+    "jira",
+    [
+      "siteUrl",
+      "cloudId",
+      "botEmail",
+      "botAccountId",
+      "botName",
+      "statuses",
+      "allowRestrictedIssues",
+    ],
+    fail,
+  );
+  const shaped =
+    (test: (v: string) => boolean, what: string) =>
+    (v: unknown, field: string): string => {
+      const s = nonEmpty(fail)(v, field);
+      return test(s) ? s : fail(`${field}: must be ${what}`);
+    };
+  const siteUrl = setting(
+    b,
+    f,
+    "siteUrl",
+    (v, field) =>
+      (typeof v === "string" ? jiraSiteOrigin(v) : undefined) ??
+      fail(`${field}: must be an https origin such as https://example.atlassian.net`),
+    fail,
+  );
+  const cloudId = setting(
+    b,
+    f,
+    "cloudId",
+    shaped((s) => UUID.test(s), "a UUID"),
+    fail,
+  );
+  const botEmail = setting(
+    b,
+    f,
+    "botEmail",
+    shaped((s) => /^[^\s@]+@[^\s@]+$/.test(s), "an email address"),
+    fail,
+  );
+  const botAccountId = setting(
+    b,
+    f,
+    "botAccountId",
+    shaped((s) => JIRA_ACCOUNT_ID.test(s), "a Jira account id"),
+    fail,
+  );
+  const botName = setting(b, f, "botName", nonEmpty(fail), fail);
+  const optional = <T>(key: string, parse: (v: unknown, field: string) => T): T | undefined =>
+    b.obj[key] === undefined ? undefined : parse(b.obj[key], `${f}.${key}`);
+  const statuses = optional("statuses", (v, field) => {
+    if (!isObject(v)) return fail(`${field}: must be an object`);
+    onlyKeys(v, ["started", "done", "failed"], field, fail);
+    const out: JiraStatuses = {};
+    for (const key of ["started", "done", "failed"] as const) {
+      if (v[key] !== undefined) out[key] = nonEmpty(fail)(v[key], `${field}.${key}`);
+    }
+    return out;
+  });
+  const allowRestricted = optional("allowRestrictedIssues", (v, field) =>
+    typeof v === "boolean" ? v : fail(`${field}: must be true or false`),
+  );
+  return {
+    enabled: b.enabled,
+    ...(siteUrl !== undefined ? { siteUrl } : {}),
+    ...(cloudId !== undefined ? { cloudId } : {}),
+    ...(botEmail !== undefined ? { botEmail } : {}),
+    ...(botAccountId !== undefined ? { botAccountId } : {}),
+    ...(botName !== undefined ? { botName } : {}),
+    ...(statuses !== undefined ? { statuses } : {}),
+    ...(allowRestricted !== undefined ? { allowRestrictedIssues: allowRestricted } : {}),
+  };
+}
+
 const K8S_ONLY = ["slack"] as const;
 
 export function parseIntegrations(
@@ -255,9 +382,9 @@ export function parseIntegrations(
     const k8sOnly = K8S_ONLY.find((name) => name in raw);
     if (k8sOnly)
       return fail(`integrations.${k8sOnly}: supported on Kubernetes only (the target file)`);
-    onlyKeys(raw, ["linear", "githubApp"], "integrations", fail);
+    onlyKeys(raw, ["linear", "githubApp", "jira"], "integrations", fail);
   } else {
-    onlyKeys(raw, ["linear", ...K8S_ONLY, "githubApp"], "integrations", fail);
+    onlyKeys(raw, ["linear", ...K8S_ONLY, "githubApp", "jira"], "integrations", fail);
   }
   const out: Integrations = {};
   if (raw.linear !== undefined) out.linear = parseLinear(raw.linear, fail);
@@ -265,5 +392,6 @@ export function parseIntegrations(
   if (raw.githubApp !== undefined) {
     out.githubApp = parseGithubApp(raw.githubApp, fail, opts.platform);
   }
+  if (raw.jira !== undefined) out.jira = parseJira(raw.jira, fail);
   return out;
 }

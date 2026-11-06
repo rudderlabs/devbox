@@ -129,7 +129,7 @@ describe("ApiController", () => {
   it("GET /api/integrations/api returns the status body; an unknown name is 404", async () => {
     const { req } = setup({ authEnabled: true });
     expect(await (await req("/api/integrations/api")).json()).toEqual({ enabled: true });
-    for (const name of ["jira", "constructor"]) {
+    for (const name of ["clickup", "constructor"]) {
       expect((await req(`/api/integrations/${name}`)).status).toBe(404);
     }
   });

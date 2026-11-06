@@ -6,7 +6,7 @@
 // A GITHUB_TOKEN or LLM_API_KEY that is set, even to the empty string, wins:
 // an empty GITHUB_TOKEN means "no token" (anonymous clones; the checks before
 // startup then refuse it), an empty LLM_API_KEY an endpoint that needs no key.
-// An empty Linear, Slack or webhook secret counts as missing.
+// An empty Linear, Slack, Jira or webhook secret counts as missing.
 import { installCommand } from "../k8s/kind";
 import { CredentialRejected } from "../up/preflight";
 import { type Deployment, deploymentScope, entryName, type Keychain } from "./keychain";
@@ -18,7 +18,9 @@ export type SecretName =
   | "LINEAR_WEBHOOK_SECRET"
   | "SLACK_BOT_TOKEN"
   | "GITHUB_WEBHOOK_SECRET"
-  | "GITHUB_APP_PRIVATE_KEY";
+  | "GITHUB_APP_PRIVATE_KEY"
+  | "JIRA_API_TOKEN"
+  | "JIRA_WEBHOOK_SECRET";
 
 const COMPOSE_SECRET_NAMES: readonly SecretName[] = [
   "GITHUB_TOKEN",
@@ -27,6 +29,8 @@ const COMPOSE_SECRET_NAMES: readonly SecretName[] = [
   "LINEAR_WEBHOOK_SECRET",
   "GITHUB_APP_PRIVATE_KEY",
   "GITHUB_WEBHOOK_SECRET",
+  "JIRA_API_TOKEN",
+  "JIRA_WEBHOOK_SECRET",
 ];
 
 // Slack is only wired up on Kubernetes.
@@ -64,6 +68,8 @@ const LABELS: Record<SecretName, string> = {
   SLACK_BOT_TOKEN: "Slack bot token",
   GITHUB_WEBHOOK_SECRET: "GitHub webhook secret",
   GITHUB_APP_PRIVATE_KEY: "GitHub App private key",
+  JIRA_API_TOKEN: "Jira API token",
+  JIRA_WEBHOOK_SECRET: "Jira webhook secret",
 };
 
 const EMPTY_IS_SET: ReadonlySet<SecretName> = new Set(["GITHUB_TOKEN", "LLM_API_KEY"]);
@@ -111,8 +117,12 @@ async function ghToken(deps: Pick<ResolverDeps, "run">): Promise<string> {
   }
 }
 
-async function promptFor(name: SecretName, deps: ResolverDeps): Promise<Resolved> {
-  const value = (await deps.prompt(`${LABELS[name]} (input hidden): `)).trim();
+async function promptFor(
+  name: SecretName,
+  deps: ResolverDeps,
+  label = LABELS[name],
+): Promise<Resolved> {
+  const value = (await deps.prompt(`${label} (input hidden): `)).trim();
   if (!value) throw missing(name, deps, true);
   return { name, value, source: "prompt" };
 }
@@ -171,13 +181,19 @@ export async function offerSave(r: Resolved, deps: ResolverDeps): Promise<void> 
 }
 
 // Runs `check` on the value. A saved value the service rejects is
-// removed. A rejected saved or typed value, with a terminal, is asked for again
-// until one is accepted; an empty answer exits. A rejected value from env or
-// `gh`, or any rejection without a terminal, stops the run.
+// removed, unless `forgetRejected` is false: a rejection that may have
+// another cause (Jira's 401 also answers an email that doesn't match the
+// token) must not delete a value the service shows only once. A rejected
+// saved or typed value, with a terminal, is asked for again until one is
+// accepted; an empty answer exits. A rejected value from env or `gh`, or any
+// rejection without a terminal, stops the run.
 export async function checkWithRetry<T>(
   r: Resolved,
   deps: ResolverDeps,
   check: (value: string) => Promise<T>,
+  // label: what the re-ask calls the secret, when it needs more than its name
+  // (say, the scopes a token must have).
+  opts: { forgetRejected?: boolean; label?: string } = {},
 ): Promise<{ resolved: Resolved; result: T }> {
   let current = r;
   for (;;) {
@@ -187,13 +203,17 @@ export async function checkWithRetry<T>(
       if (!(err instanceof CredentialRejected)) throw err;
       if (current.source === "keychain" && deps.keychain) {
         const scope = deploymentScope(deps.deployment);
-        deps.log(`The saved ${current.name} for ${scope} was rejected; removing it`);
-        await deps.keychain.delete(entryName(deps.deployment, current.name));
+        if (opts.forgetRejected === false) {
+          deps.log(`The saved ${current.name} for ${scope} was rejected; keeping it`);
+        } else {
+          deps.log(`The saved ${current.name} for ${scope} was rejected; removing it`);
+          await deps.keychain.delete(entryName(deps.deployment, current.name));
+        }
       }
       if (!deps.isTTY || (current.source !== "keychain" && current.source !== "prompt")) throw err;
       deps.log(err.message);
       deps.log(`Enter ${current.name} again, or press Enter on an empty value to exit.`);
-      current = await promptFor(current.name, deps);
+      current = await promptFor(current.name, deps, opts.label);
     }
   }
 }

@@ -60,37 +60,26 @@ The personal-token mode is the quickstart, unchanged. To go back to it, run
 
 ## The public URL
 
-GitHub delivers webhooks only to a public HTTPS URL, and the App stores that
-URL. It is the same setting as for Linear: the top-level `publicUrl` of the
-config file (`devbox.config.json`, or the target file on Kubernetes). One
-tunnel or Ingress serves `/webhook/github` and `/webhook/linear`. How the URL
-is chosen and which URLs are refused is described in
-[Linear: The public URL](linear.md#the-public-url).
-
-In short:
-
-- **Compose and kind: bring your own.** Run a tunnel or a reverse proxy that
-  forwards HTTPS to port 3000 on your machine and pass its URL with
-  `--public-url`. kind's Ingress host is `localhost`, so it needs the tunnel
-  too.
-- **Kubernetes with an Ingress:** the `ingress.webhooks` host, else the
-  `ingress.api` host, as for Linear.
-
-The control plane accepts webhook request bodies up to 1 MiB. Larger GitHub
-deliveries receive HTTP 413 and are not processed; because GitHub does not
-truncate deliveries to fit, a legitimate delivery above this limit is lost.
-Keep any tunnel, reverse-proxy, or Ingress body limit at or below 1 MiB so it
-rejects oversized requests before they reach the control plane.
+GitHub delivers webhooks to `<publicUrl>/webhook/github`; see
+[The public URL](public-url.md) for what the URL must be and how to get one.
+The App stores that URL: `github:setup` registers the App with it, and with
+devbox-minted tokens it holds the App's private key and updates the URL
+itself.
 
 **When the URL changes**, run `github:setup --public-url <new>` again. With
 devbox-minted tokens it updates the App's webhook URL itself and prints
 `Updated the GitHub App's webhook URL to <new>/webhook/github`. With external
 tokens, or when no private key is available to it, it prints
 `Update the webhook URL in the GitHub App to <new>/webhook/github: <settings link>`
-and you change it on the App's settings page. If Linear is on, it prints
-Linear's line too. `linear:setup` run with a new URL prints
+and you change it on the App's settings page. It also prints what each other
+integration that is on needs
+([When it changes](public-url.md#when-it-changes)).
+
+Another integration's setup run with a new URL prints
 `Run bun run github:setup to update the GitHub App's webhook URL` (with
-`--target <file>` on Kubernetes): it does not hold the key.
+`--target <file>` on Kubernetes) while the App is on with devbox-minted
+tokens: only `github:setup` holds the key. With external tokens it prints the
+by-hand line above.
 
 ## Set up
 
@@ -387,7 +376,7 @@ secrets are saved as `GITHUB_APP_PRIVATE_KEY_PENDING` and
 `GITHUB_WEBHOOK_SECRET_PENDING`. The working App, and the saved `publicUrl`,
 keep running until the new one is installed. Once it is, setup replaces the old
 settings and secrets with the new App's, saves the new public URL (printing
-what else needs it, such as Linear's webhook URL), and prints
+what the other integrations need for it), and prints
 `The App <old> is no longer used: delete it on GitHub: <link>`.
 
 `github:status` shows a waiting App in a `pending` row. If you run setup again

@@ -57,7 +57,7 @@ async function run(o: {
     deployment: COMPOSE,
     configPath: path,
     githubApp: o.app,
-    linear: false,
+    integrations: o.app ? { githubApp: o.app } : {},
     repos: [],
     trust: { trustedOrgs: [], trustedUsers: [] },
     applyCommand: "bun run up",

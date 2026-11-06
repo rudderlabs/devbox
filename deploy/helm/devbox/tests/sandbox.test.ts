@@ -120,3 +120,17 @@ describe("NetworkPolicies", () => {
     ]);
   });
 });
+
+describe("Jira stays in the control plane", () => {
+  it("no JIRA_* and no integrations Secret reach sandboxes or any other workload", async () => {
+    const r = await renderWith(["base.yaml", "jira.yaml"]);
+    const tpl = JSON.stringify(template(r));
+    expect(tpl).not.toContain("JIRA_");
+    expect(tpl).not.toContain("devbox-integrations");
+    // Only the control plane's Deployment names a Jira setting or the Secret holding its token.
+    const holders = Object.entries(r)
+      .filter(([, doc]) => /JIRA_|devbox-integrations/.test(JSON.stringify(doc)))
+      .map(([key]) => key);
+    expect(holders).toEqual(["Deployment/devbox/devbox-control-plane"]);
+  });
+});

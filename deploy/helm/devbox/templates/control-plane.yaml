@@ -131,6 +131,7 @@ spec:
             {{- $linear := .Values.integrations.linear | default dict }}
             {{- $slack := .Values.integrations.slack | default dict }}
             {{- $app := .Values.integrations.githubApp | default dict }}
+            {{- $jira := .Values.integrations.jira | default dict }}
             {{- $github := .Values.github | default dict }}
             {{- if $linear.enabled }}
             - { name: LINEAR_ENABLED, value: "true" }
@@ -151,6 +152,29 @@ spec:
             - { name: GITHUB_BOT_USER_ID, value: {{ $app.botUserId | int64 | toString | quote }} }
             {{- if $app.ciResults }}
             - { name: GITHUB_CI_RESULT_ENABLED, value: "true" }
+            {{- end }}
+            {{- end }}
+            {{- /* Jira's settings, only when it is on; its two secrets come from the
+            integrations Secret below. */}}
+            {{- if $jira.enabled }}
+            {{- $statuses := $jira.statuses | default dict }}
+            - { name: JIRA_ENABLED, value: "true" }
+            - { name: JIRA_SITE_URL, value: {{ $jira.siteUrl | quote }} }
+            - { name: JIRA_CLOUD_ID, value: {{ $jira.cloudId | quote }} }
+            - { name: JIRA_BOT_EMAIL, value: {{ $jira.botEmail | quote }} }
+            - { name: JIRA_BOT_ACCOUNT_ID, value: {{ $jira.botAccountId | quote }} }
+            - { name: JIRA_BOT_NAME, value: {{ $jira.botName | quote }} }
+            {{- with $statuses.started }}
+            - { name: JIRA_STATUS_STARTED, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $statuses.done }}
+            - { name: JIRA_STATUS_DONE, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $statuses.failed }}
+            - { name: JIRA_STATUS_FAILED, value: {{ . | quote }} }
+            {{- end }}
+            {{- if $jira.allowRestrictedIssues }}
+            - { name: JIRA_ALLOW_RESTRICTED_ISSUES, value: "true" }
             {{- end }}
             {{- end }}
             {{- with $github.trustedOrgs }}

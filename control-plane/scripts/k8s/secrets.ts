@@ -19,7 +19,9 @@ export type IntegrationSecretName =
   | "LINEAR_CLIENT_SECRET"
   | "LINEAR_WEBHOOK_SECRET"
   | "SLACK_BOT_TOKEN"
-  | "GITHUB_WEBHOOK_SECRET";
+  | "GITHUB_WEBHOOK_SECRET"
+  | "JIRA_API_TOKEN"
+  | "JIRA_WEBHOOK_SECRET";
 
 // The name of the user's own Secret for `key`, or undefined when the installer owns it.
 export const existingSecret = (values: Values, key: string): string | undefined => {

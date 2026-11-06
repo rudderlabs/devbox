@@ -95,3 +95,13 @@ export async function withTimeout<T>(
     clearTimeout(timer);
   }
 }
+
+// What failed, without any upstream text: the HTTP status, "timeout" (from
+// withTimeout), the network error code, or the error's name.
+export function errorClass(err: unknown): string {
+  if (err instanceof HttpError) return `http_${err.status}`;
+  if (!(err instanceof Error)) return "unknown";
+  if (err.message.startsWith("timed out after")) return "timeout";
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : err.name;
+}

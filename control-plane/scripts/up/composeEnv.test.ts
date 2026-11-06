@@ -9,6 +9,7 @@ import {
   composeStartSteps,
   githubComposeEnv,
   ironProxyTokenOptions,
+  jiraComposeEnv,
   linearComposeEnv,
   llmSummary,
 } from "../up";
@@ -25,6 +26,23 @@ const raw = {
   repos: [{ url: "https://github.com/example-org/example-repo.git" }],
   llm: { baseUrl: "https://llm.example.com/v1", model: "m1" },
 };
+// Every JIRA_* empty: Jira off, whatever the shell holds.
+const JIRA_OFF = Object.fromEntries(
+  [
+    "ENABLED",
+    "SITE_URL",
+    "CLOUD_ID",
+    "BOT_EMAIL",
+    "BOT_ACCOUNT_ID",
+    "BOT_NAME",
+    "STATUS_STARTED",
+    "STATUS_DONE",
+    "STATUS_FAILED",
+    "ALLOW_RESTRICTED_ISSUES",
+    "API_TOKEN",
+    "WEBHOOK_SECRET",
+  ].map((name) => [`JIRA_${name}`, ""]),
+);
 const MODEL_ENV_EMPTY = {
   HARNESS_REASONING_EFFORT: "",
   HARNESS_ORIENTATION_MODEL: "",
@@ -55,6 +73,7 @@ const common = {
   HARNESS_MODEL: "m1",
   HARNESS_LLM_PROVIDER: "openai",
   ...MODEL_ENV_EMPTY,
+  ...JIRA_OFF,
 };
 
 const OFF = {
@@ -119,6 +138,64 @@ describe("linearComposeEnv", () => {
     expect(() => linearComposeEnv({ enabled: true, clientId: "client-1" })).toThrow(
       "integrations.linear is enabled but the Linear secrets were not resolved",
     );
+  });
+});
+
+describe("jiraComposeEnv", () => {
+  const JIRA = {
+    enabled: true,
+    siteUrl: "https://example.atlassian.net",
+    cloudId: "00000000-0000-0000-0000-000000000000",
+    botEmail: "devbox@example.com",
+    botAccountId: "712020:00000000-0000-0000-0000-000000000000",
+    botName: "devbox",
+    statuses: { started: "In Progress", done: "Done" },
+  };
+  const SECRETS = { apiToken: "jira-token", webhookSecret: "jira-whs" };
+
+  it("all empty when not configured or disabled, secrets or not", () => {
+    expect(jiraComposeEnv(undefined, SECRETS)).toEqual(JIRA_OFF);
+    expect(jiraComposeEnv({ ...JIRA, enabled: false }, SECRETS)).toEqual(JIRA_OFF);
+  });
+
+  it("every setting and both secrets when enabled", () => {
+    expect(jiraComposeEnv(JIRA, SECRETS)).toEqual({
+      ...JIRA_OFF,
+      JIRA_ENABLED: "true",
+      JIRA_SITE_URL: "https://example.atlassian.net",
+      JIRA_CLOUD_ID: "00000000-0000-0000-0000-000000000000",
+      JIRA_BOT_EMAIL: "devbox@example.com",
+      JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-0000-0000-000000000000",
+      JIRA_BOT_NAME: "devbox",
+      JIRA_STATUS_STARTED: "In Progress",
+      JIRA_STATUS_DONE: "Done",
+      JIRA_API_TOKEN: "jira-token",
+      JIRA_WEBHOOK_SECRET: "jira-whs",
+    });
+    expect(jiraComposeEnv({ ...JIRA, allowRestrictedIssues: true }, SECRETS)).toMatchObject({
+      JIRA_ALLOW_RESTRICTED_ISSUES: "true",
+    });
+  });
+
+  it("refuses an enabled Jira without its secrets", () => {
+    expect(() => jiraComposeEnv(JIRA)).toThrow(
+      "integrations.jira is enabled but the Jira secrets were not resolved",
+    );
+  });
+
+  it("composeEnvFor: a JIRA_* left in the shell never turns Jira on, the config's win", () => {
+    const shell = { ...base, JIRA_ENABLED: "true", JIRA_API_TOKEN: "from-shell" };
+    const opts = { github: "gh", llm: "llm", opensandboxKey: "osk" };
+    expect(composeEnvFor(shell, parseConfig(raw), opts)).toEqual({
+      ...common,
+      ...OFF,
+      ...GITHUB_OFF,
+    });
+    const env = composeEnvFor(shell, parseConfig({ ...raw, integrations: { jira: JIRA } }), {
+      ...opts,
+      jira: SECRETS,
+    });
+    expect(env).toMatchObject({ JIRA_ENABLED: "true", JIRA_API_TOKEN: "jira-token" });
   });
 });
 
@@ -245,6 +322,7 @@ describe("composeEnvFor", () => {
       HARNESS_MODEL: "m1",
       HARNESS_LLM_PROVIDER: "openai",
       ...MODEL_ENV_EMPTY,
+      ...JIRA_OFF,
       GITHUB_TOKEN: "no-github-token",
       LLM_API_KEY: "",
       ...OFF,
@@ -551,6 +629,15 @@ describe("docker-compose.yml", () => {
   it("lists all model overrides with empty defaults", () => {
     const env = service("control-plane").environment;
     for (const name of Object.keys(MODEL_ENV_EMPTY)) expect(env[name]).toBe(empty(name));
+  });
+
+  it("lists every JIRA_* setting with an empty default", () => {
+    const env = service("control-plane").environment;
+    for (const name of Object.keys(JIRA_OFF)) expect(env[name]).toBe(empty(name));
+    // Only the control plane: no other service gets a Jira value.
+    for (const [svc, s] of Object.entries(doc.services)) {
+      if (svc !== "control-plane") expect(JSON.stringify(s)).not.toContain("JIRA_");
+    }
   });
 
   it("lists the control plane's GitHub settings with empty defaults", () => {
