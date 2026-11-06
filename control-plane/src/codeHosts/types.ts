@@ -9,7 +9,7 @@ import type { Person } from "../integrations/types";
 //
 // Anything written on the pull request (the onboarding comment, replies) is
 // the host's integration's, in integrations/<name>/: the service hands a new
-// pull request to its onHostedPrOpened.
+// pull request to its onPrOpened.
 export interface CodeHostAdapter {
   // Also the name of the host's integration.
   readonly name: string;

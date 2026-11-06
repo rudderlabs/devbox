@@ -26,15 +26,16 @@ const { GithubIntegration } = await import("..");
 const { logger } = await import("../../../logger");
 
 // The onboarding comment is the GitHub integration's own: the code host hands
-// it each new pull request on github.com (services/codeHost.service.ts).
-describe("GithubIntegration.onHostedPrOpened", () => {
+// it each new pull request on github.com (services/codeHost.service.ts), through
+// onPrOpened.
+describe("GithubIntegration.onPrOpened", () => {
   const integration = new GithubIntegration(
     { botLogin: "acme-bot" },
     { status: () => ({}) as never },
     { handleWebhook: async () => new Response() },
   );
   const signal = new AbortController().signal;
-  const ctx = { signal, log: logger, isCurrent: async () => false };
+  const ctx = { signal, log: logger, isCurrent: async () => false, firstTime: true };
   const task = { id: "task-1", key: "XYZ-1" } as Task;
   const opened = (url: string) => ({ url, repo: "r", branch: "b", host: "github" });
 
@@ -44,7 +45,7 @@ describe("GithubIntegration.onHostedPrOpened", () => {
   });
 
   it("posts the onboarding comment on the pull request, naming its bot and the task", async () => {
-    await integration.onHostedPrOpened(ctx, task, opened("https://github.com/o/r/pull/7"));
+    await integration.onPrOpened(ctx, task, opened("https://github.com/o/r/pull/7"));
     expect(postIssueComment).toHaveBeenCalledTimes(1);
     const [owner, repo, prNumber, body, sent] = postIssueComment.mock.calls[0] as unknown as [
       string,
@@ -60,8 +61,17 @@ describe("GithubIntegration.onHostedPrOpened", () => {
     expect(sent).toBe(signal);
   });
 
+  it("posts nothing on a replay of a pull request the task already has", async () => {
+    await integration.onPrOpened(
+      { ...ctx, firstTime: false },
+      task,
+      opened("https://github.com/o/r/pull/7"),
+    );
+    expect(postIssueComment).not.toHaveBeenCalled();
+  });
+
   it("posts nothing for a URL that is not a github.com pull request", async () => {
-    await integration.onHostedPrOpened(
+    await integration.onPrOpened(
       ctx,
       task,
       opened("https://gitlab.example.com/platform/api/-/merge_requests/3"),
@@ -72,7 +82,7 @@ describe("GithubIntegration.onHostedPrOpened", () => {
   it("lets a failed post reach the registry, which logs it", async () => {
     postIssueComment.mockRejectedValue(new Error("github down"));
     await expect(
-      integration.onHostedPrOpened(ctx, task, opened("https://github.com/o/r/pull/7")),
+      integration.onPrOpened(ctx, task, opened("https://github.com/o/r/pull/7")),
     ).rejects.toThrow("github down");
   });
 });

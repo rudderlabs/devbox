@@ -50,6 +50,15 @@ export interface Integration {
   // Before each fresh-provision attempt: a deferred provision calls it again,
   // so it must be safe to repeat.
   onTaskStarted?(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void>;
+  // The agent opened a pull request. Two integrations hear of it, each in its
+  // own role:
+  // - the task's own, after the PR is recorded on the task and on every
+  //   dispatch of the event (firstTime is false on a replay): Linear links the
+  //   PR on its issue. Its RetryableError holds the event.
+  // - the one of the PR's code host (named like the host), once, before the PR
+  //   is recorded, with firstTime true: GitHub and GitLab introduce themselves
+  //   on the PR. Best-effort: a failure is logged and nothing is held. A crash
+  //   before the record repeats it.
   onPrOpened?(ctx: HookCtx & { firstTime: boolean }, task: Task, pr: PrRef): Promise<void>;
   onRoundFinished?(
     ctx: HookCtx & { firstTransition: boolean; archive(): Promise<Uint8Array | null> },
@@ -58,12 +67,6 @@ export interface Integration {
     outcome: Outcome | null,
   ): Promise<void>;
   assignee?(ctx: HookCtx, task: Task): Promise<Person | null>; // throws when the lookup itself fails
-  // For a code host's own integration (the one named like the host): the
-  // agent opened a pull request there. Where the integration introduces
-  // itself on the PR and says how to reach it. Called once per new PR, before
-  // the PR is recorded on the task, so a crash before the record repeats it.
-  // Best-effort: nothing waits on its result.
-  onHostedPrOpened?(ctx: HookCtx, task: Task, pr: PrRef): Promise<void>;
 
   // Health. Core serves GET /api/integrations/<name> (behind API auth, only
   // when the API is enabled) with this body plus the integration's held sends.

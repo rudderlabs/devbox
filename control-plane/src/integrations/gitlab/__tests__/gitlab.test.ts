@@ -233,13 +233,13 @@ describe("GitLab status", () => {
   });
 });
 
-describe("GitlabIntegration.onHostedPrOpened", () => {
+describe("GitlabIntegration.onPrOpened", () => {
   const integration = new GitlabIntegration(
     { botUsername: "devbox-bot" },
     { status: () => ({}) as never },
     { handleWebhook: async () => new Response() },
   );
-  const hookCtx = { ...ctx, isCurrent: async () => false };
+  const hookCtx = { ...ctx, isCurrent: async () => false, firstTime: true };
   const task = { id: "task-1", key: "XYZ-1" } as never;
   const opened = (url: string) => ({ url, repo: "api", branch: "b", host: "gitlab" });
   const MR_URL = "https://gitlab.example.com/platform/backend/api/-/merge_requests/3";
@@ -250,7 +250,7 @@ describe("GitlabIntegration.onHostedPrOpened", () => {
   });
 
   it("posts the onboarding note on the merge request, naming its bot and the task", async () => {
-    await integration.onHostedPrOpened(hookCtx, task, opened(MR_URL));
+    await integration.onPrOpened(hookCtx, task, opened(MR_URL));
     expect(postMrNote).toHaveBeenCalledTimes(1);
     const [project, mrIid, body, signal] = postMrNote.mock.calls[0] as unknown as [
       string,
@@ -266,14 +266,19 @@ describe("GitlabIntegration.onHostedPrOpened", () => {
     expect(signal).toBe(ctx.signal);
   });
 
+  it("posts nothing on a replay of a merge request the task already has", async () => {
+    await integration.onPrOpened({ ...hookCtx, firstTime: false }, task, opened(MR_URL));
+    expect(postMrNote).not.toHaveBeenCalled();
+  });
+
   it("posts nothing for a URL that is not a merge request on the instance", async () => {
-    await integration.onHostedPrOpened(hookCtx, task, opened("https://github.com/o/r/pull/1"));
+    await integration.onPrOpened(hookCtx, task, opened("https://github.com/o/r/pull/1"));
     expect(postMrNote).not.toHaveBeenCalled();
   });
 
   it("lets a failed post reach the registry, which logs it", async () => {
     postMrNote.mockRejectedValue(new Error("gitlab down"));
-    await expect(integration.onHostedPrOpened(hookCtx, task, opened(MR_URL))).rejects.toThrow(
+    await expect(integration.onPrOpened(hookCtx, task, opened(MR_URL))).rejects.toThrow(
       "gitlab down",
     );
   });

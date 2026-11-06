@@ -24,8 +24,6 @@ export const TIMEOUT_MS = {
   deliver: SEND_TIMEOUT_MS,
   onTaskStarted: 20_000,
   onPrOpened: 30_000,
-  // Awaited inside the tick, like a send.
-  onHostedPrOpened: SEND_TIMEOUT_MS,
   onRoundFinished: 120_000,
   assignee: 15_000,
 };
@@ -65,11 +63,10 @@ export type WrappedIntegration = {
   // A fresh provision, on every attempt, before the sandbox is created.
   // runId is the assignment's id and target its first reply target.
   onTaskStarted(task: Task, runId: string, target: ReplyTarget): Promise<void>;
-  // pr_opened, after appendPrUrl; the dispatcher holds a RetryableError.
+  // pr_opened. For the task's own integration, after appendPrUrl: the
+  // dispatcher holds a RetryableError. For the PR's code host's integration,
+  // before it: the code host drops one.
   onPrOpened(task: Task, runId: string | null, pr: PrRef, firstTime: boolean): Promise<void>;
-  // A new pull request on this integration's own code host, before
-  // appendPrUrl. A failure is logged; the caller goes on.
-  onHostedPrOpened(task: Task, pr: PrRef): Promise<void>;
   // In BackgroundWork, so it never blocks the caller.
   onRoundFinished(
     task: Task,
@@ -153,11 +150,6 @@ export class IntegrationRegistry {
       onPrOpened: async (task, runId, pr, firstTime) => {
         await this.hook(name, "onPrOpened", task, runId, (ctx, i) =>
           i.onPrOpened?.({ ...ctx, firstTime }, task, pr),
-        );
-      },
-      onHostedPrOpened: async (task, pr) => {
-        await this.hook(name, "onHostedPrOpened", task, null, (ctx, i) =>
-          i.onHostedPrOpened?.(ctx, task, pr),
         );
       },
       onRoundFinished: (task, round, runId, outcome, firstTransition, archive = async () => null) =>

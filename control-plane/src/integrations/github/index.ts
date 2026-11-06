@@ -93,11 +93,13 @@ export class GithubIntegration implements Integration {
     }
   }
 
-  // The agent opened a pull request on github.com: the onboarding comment.
+  // The agent opened a pull request on github.com (core calls this as the
+  // PR's code host's integration): the onboarding comment, once per PR.
   // Comment interactivity is invisible unless users know it exists. This runs
   // only while GitHub is on, which is while its webhooks take @-mentions. A
   // failure is the registry's to log.
-  async onHostedPrOpened(ctx: HookCtx, task: Task, pr: PrRef): Promise<void> {
+  async onPrOpened(ctx: HookCtx & { firstTime: boolean }, task: Task, pr: PrRef): Promise<void> {
+    if (!ctx.firstTime) return;
     const gh = parsePrUrl(pr.url);
     if (!gh) return;
     await postIssueComment(

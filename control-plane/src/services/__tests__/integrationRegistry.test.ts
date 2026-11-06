@@ -86,12 +86,11 @@ describe("IntegrationRegistry", () => {
     expect(b.created).toHaveLength(1);
   });
 
-  it("bounds each call by default: deliver 20 s, onTaskStarted 20 s, onPrOpened 30 s, onHostedPrOpened 20 s, onRoundFinished 120 s, assignee 15 s", () => {
+  it("bounds each call by default: deliver 20 s, onTaskStarted 20 s, onPrOpened 30 s, onRoundFinished 120 s, assignee 15 s", () => {
     expect(TIMEOUT_MS).toEqual({
       deliver: 20_000,
       onTaskStarted: 20_000,
       onPrOpened: 30_000,
-      onHostedPrOpened: 20_000,
       onRoundFinished: 120_000,
       assignee: 15_000,
     });
@@ -135,48 +134,6 @@ describe("IntegrationRegistry", () => {
     const hooks = r.webhooks();
     expect(hooks.map((w) => w.name)).toEqual(["a"]);
     expect(await (await (hooks[0] as (typeof hooks)[0]).webhook({} as never)).text()).toBe("a");
-  });
-
-  it("onHostedPrOpened reaches only the named integration, with an abort signal; a failure is logged, never thrown", async () => {
-    const task = { id: "task-1" } as never;
-    const pr = { url: "https://b.example/pr/1", repo: "r", branch: "x", host: "b" };
-    const seen: string[] = [];
-    const host = (name: string, fail = false) =>
-      definition(name, {
-        create: () => ({
-          ...integration(),
-          async onHostedPrOpened(ctx, _task, opened) {
-            expect(ctx.signal).toBeInstanceOf(AbortSignal);
-            seen.push(`${name}:${opened.url}`);
-            if (fail) throw new Error("host down");
-          },
-        }),
-      });
-    const r = registry([host("a"), host("b")], { a: "on", b: "on" });
-    await r.for("b").onHostedPrOpened(task, pr);
-    expect(seen).toEqual(["b:https://b.example/pr/1"]);
-    // Off, unknown, or without the hook: skipped.
-    await registry([host("a"), host("b")], { a: "on" })
-      .for("b")
-      .onHostedPrOpened(task, pr);
-    await r.for("c").onHostedPrOpened(task, pr);
-    await registry([definition("d")], { d: "on" })
-      .for("d")
-      .onHostedPrOpened(task, pr);
-    expect(seen).toHaveLength(1);
-
-    const error = spyOn(logger, "error").mockImplementation(() => logger);
-    try {
-      await registry([host("b", true)], { b: "on" })
-        .for("b")
-        .onHostedPrOpened(task, pr);
-      expect(error).toHaveBeenCalledWith(
-        "onHostedPrOpened hook failed",
-        expect.objectContaining({ taskId: "task-1", integration: "b", message: "host down" }),
-      );
-    } finally {
-      error.mockRestore();
-    }
   });
 
   it("status adds held sends; disabled ones answer disabledStatus(); unknown names have none", async () => {

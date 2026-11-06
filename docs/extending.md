@@ -104,11 +104,14 @@ and `gitlab` rounds (`harness/src/harness/followup.py`).
   (`control-plane/src/services/codeHost.service.ts`), picked by the pull
   request's URL; a URL no code host owns gets neither.
   - It hands the pull request to the host's own integration, the one named
-    like the host, through `onHostedPrOpened`. Whatever is written on a pull
-    request is that integration's: the GitHub and GitLab integrations post a
-    comment that names their bot and explains @-mentions. An integration that
-    is off has no instance, so no comment is posted while its webhooks, which
-    are what take the mentions, are off.
+    like the host, through `onPrOpened`, with `firstTime` true. Whatever is
+    written on a pull request is that integration's: the GitHub and GitLab
+    integrations post a comment that names their bot and explains @-mentions.
+    An integration that is off has no instance, so no comment is posted while
+    its webhooks, which are what take the mentions, are off. This is the same
+    hook the task's own integration gets after the pull request is recorded
+    (Linear links it on the issue); there a failure can hold the event, here
+    it is only logged.
   - It assigns the pull request to the person the task's integration returns
     from `assignee()`, through the host's adapter in
     `control-plane/src/codeHosts/`. The adapter is core's, so this works with

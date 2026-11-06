@@ -8,14 +8,14 @@ import type { IntegrationRegistry } from "./integrationRegistry";
 
 // The code hosts, as core sees them. The harness opens pull requests with the
 // sandbox's git token. On each new one, the host's own integration introduces
-// itself (its onHostedPrOpened: whatever is written on a pull request is the
+// itself (its onPrOpened: whatever is written on a pull request is the
 // integration's), and core assigns the pull request to the task's person
 // through the host's adapter (src/codeHosts/), which works with the
 // integration off too. This class picks both by the pull request's URL.
 export class CodeHost {
   constructor(
-    // for(host).onHostedPrOpened(): the host's integration, skipped while it
-    // is off. for(task.source).assignee(): the task's own integration's person.
+    // for(host).onPrOpened(): the host's integration, skipped while it is
+    // off. for(task.source).assignee(): the task's own integration's person.
     private registry: Pick<IntegrationRegistry, "for">,
     private background: Pick<BackgroundWork, "track">,
     // Bounds an adapter's lookups before it assigns. Assigning the PR has no
@@ -42,7 +42,14 @@ export class CodeHost {
   async prOpened(task: Task, pr: PrRef): Promise<void> {
     const host = this.hosts.find((h) => h.name === pr.host);
     if (!host) return; // a URL no code host knows — skip
-    await this.registry.for(host.name).onHostedPrOpened(task, pr);
+    // No run to compare with (runId null), and the PR is new to the task
+    // (firstTime). The registry logs a failure; only a RetryableError escapes
+    // it, and holding the event is the task's own integration's business, so
+    // it is dropped here.
+    await this.registry
+      .for(host.name)
+      .onPrOpened(task, null, pr, true)
+      .catch((err) => logErr("the code host integration's onPrOpened failed", err, task, pr));
     if (host.assign) {
       this.background.track(task.id, "assignee", this.mirrorAssignee(task, pr, host));
     }
@@ -69,4 +76,10 @@ export class CodeHost {
     }
     await host.assign?.(pr.url, person, { taskId: task.id, timeoutMs: this.sendTimeoutMs });
   }
+}
+
+// The untrusted pr_url goes in the metadata, never in the message.
+function logErr(msg: string, err: unknown, task: Task, pr: PrRef): void {
+  const e = err instanceof Error ? err : new Error(String(err));
+  logger.error(msg, { taskId: task.id, prUrl: pr.url, message: e.message, stack: e.stack });
 }

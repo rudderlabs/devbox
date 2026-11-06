@@ -72,11 +72,13 @@ export class GitlabIntegration implements Integration {
     return this.statusService.status();
   }
 
-  // The agent opened a merge request on the instance: the onboarding note.
-  // This runs only while GitLab is on, which is while its webhooks take
+  // The agent opened a merge request on the instance (core calls this as the
+  // merge request's code host's integration): the onboarding note, once per
+  // merge request. This runs only while GitLab is on, which is while its webhooks take
   // @-mentions. The project goes by its path, all a merge request URL
   // carries. A failure is the registry's to log.
-  async onHostedPrOpened(ctx: HookCtx, task: Task, pr: PrRef): Promise<void> {
+  async onPrOpened(ctx: HookCtx & { firstTime: boolean }, task: Task, pr: PrRef): Promise<void> {
+    if (!ctx.firstTime) return;
     const mr = parseMrUrl(pr.url);
     if (!mr) return;
     await postMrNote(

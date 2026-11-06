@@ -45,8 +45,11 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("CodeHost", () => {
   let assignee: ReturnType<typeof mock>;
-  // The host integrations' onHostedPrOpened, by integration name.
-  const hosted = mock((_name: string, _task: Task, _pr: PrRef) => Promise.resolve());
+  // The host integrations' onPrOpened, by integration name.
+  const hosted = mock(
+    (_name: string, _task: Task, _pr: PrRef, _runId?: string | null, _firstTime?: boolean) =>
+      Promise.resolve(),
+  );
   let background: InstanceType<typeof BackgroundWork>;
   let info: ReturnType<typeof spyOn>;
   let warn: ReturnType<typeof spyOn>;
@@ -60,7 +63,8 @@ describe("CodeHost", () => {
         for: (name: string) =>
           ({
             assignee,
-            onHostedPrOpened: (t: Task, pr: PrRef) => hosted(name, t, pr),
+            onPrOpened: (t: Task, runId: string | null, pr: PrRef, firstTime: boolean) =>
+              hosted(name, t, pr, runId, firstTime),
           }) as never,
       },
       background,
@@ -132,11 +136,28 @@ describe("CodeHost", () => {
   it("hands a new PR to its own host's integration, which writes on it", async () => {
     await prOpened();
     expect(hosted).toHaveBeenCalledTimes(1);
+    // As a PR new to the task, and for no run in particular.
     expect(hosted).toHaveBeenCalledWith(
       "github",
       task,
       expect.objectContaining({ url: PR_URL, host: "github" }),
+      null,
+      true,
     );
+  });
+
+  it("drops a RetryableError from the host's integration: only the task's own integration holds", async () => {
+    const { RetryableError } = await import("../../integrations/outbound");
+    hosted.mockRejectedValue(new RetryableError("rate limited"));
+    assignee.mockResolvedValue(person("octocat"));
+    addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
+    await prOpened();
+    expect(error).toHaveBeenCalledWith(
+      "the code host integration's onPrOpened failed",
+      expect.objectContaining({ taskId: "task-1", prUrl: PR_URL, message: "rate limited" }),
+    );
+    // The mirror still runs.
+    expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
   });
 
   it("the host's integration finishes before the assignee mirror starts", async () => {
@@ -166,6 +187,8 @@ describe("CodeHost", () => {
         "gitlab",
         task,
         expect.objectContaining({ url: MR_URL, host: "gitlab" }),
+        null,
+        true,
       );
     });
 
