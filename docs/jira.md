@@ -101,9 +101,8 @@ link, so setup also says what to do on the page.
    devbox never needs admin rights. Its name is the bot's name in Jira: the name
    people assign issues to and type as `@<bot name>`.
 2. Create an API token for it with exactly the scopes `read:jira-work`,
-   `write:jira-work` and `read:jira-user`. They are Jira's classic scopes:
-   pick them, not the granular ones. Copy the token: Atlassian shows it only
-   once.
+   `write:jira-work` and `read:jira-user`. They are Jira's classic scopes.
+   Copy the token: Atlassian shows it only once.
 3. **Note the token's expiry date.** Atlassian tokens last at most a year.
    devbox can't read the date from Atlassian: `jira:setup` asks for it, and
    devbox warns from 14 days before ([Rotating the API token](#rotating-the-api-token)).
@@ -169,7 +168,7 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    (`The service account's email (shown on its page in Atlassian Administration): `).
    First, in a terminal with no token in your environment or the keychain,
    it prints
-   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes (not the granular ones) read:jira-work, write:jira-work and read:jira-user:`
+   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes read:jira-work, write:jira-work and read:jira-user:`
    and the link `https://admin.atlassian.com/`, and opens it: the email and
    the new token both come from there.
 4. **The API token.** `JIRA_API_TOKEN` from your environment is used as it

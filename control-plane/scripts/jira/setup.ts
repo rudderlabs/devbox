@@ -374,7 +374,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   const found = await availableToken(resolver);
   if (!found && resolver.isTTY) {
     log(
-      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes (not the granular ones) ${SCOPES}:`,
+      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes ${SCOPES}:`,
     );
     page(ctx, "https://admin.atlassian.com/");
   }

@@ -63,7 +63,7 @@ const SHOW_Q = "Press Enter to show the webhook secret, to paste into the webhoo
 
 const ADMIN = "https://admin.atlassian.com/";
 const TOKEN_HINT = [
-  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes (not the granular ones) read:jira-work, write:jira-work and read:jira-user:",
+  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes read:jira-work, write:jira-work and read:jira-user:",
   `  ${ADMIN}`,
 ];
 const WEBHOOKS = `${SITE}/plugins/servlet/webhooks`;
