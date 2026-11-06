@@ -172,15 +172,20 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    permission as held when the service account has it in at least one
    project. It warns, and goes on, about any it holds in no project:
    `warning: the bot lacks <permissions> in every project: give the service account a role that has them in each project devbox works in`.
-6. **The webhook's secret.** `JIRA_WEBHOOK_SECRET` from your environment or
+6. **The webhook**, on every run, before its secret
+   ([below](#3-create-the-webhook-in-jira)): the webhooks page and the values
+   to paste there.
+7. **The webhook's secret.** `JIRA_WEBHOOK_SECRET` from your environment or
    the keychain is used as it is. Otherwise, in a terminal, it asks
-   `Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate a new one to set in Jira): `.
+   `Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate one to paste into its Secret field): `.
    Paste the secret the webhook in Jira already has, or press Enter to have it
-   generate a new one, which you then set in Jira. A typed secret must have at
+   generate a new one: setup shows it once, after
+   `Press Enter to show the webhook secret, to paste into the webhook's Secret field`.
+   A typed secret must have at
    least 20 characters (a secret from Jira's own Generate button qualifies): the signature it makes is the only proof that a
    delivery comes from Jira. A shorter one stops setup with
    `the webhook secret you entered has <n> characters; it needs at least 20 …`.
-7. **Save.** With a terminal and a working keychain, it offers to save what
+8. **Save.** With a terminal and a working keychain, it offers to save what
    you typed or it generated:
    `Save JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET to the system keychain for <scope>? [Y/n]`
    (naming only those), where `<scope>` is `compose` or
@@ -188,10 +193,9 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    When you decline to save a new token, it removes the token saved before,
    so that the next apply doesn't use the old one:
    `Removed the old JIRA_API_TOKEN saved in the system keychain for <scope>, so that <apply command> doesn't use it instead of the new one`.
-8. **Write.** It writes `integrations.jira` with `enabled: true` and
+9. **Write.** It writes `integrations.jira` with `enabled: true` and
    `publicUrl` to the deployment's config file, keeping the rest of the file,
    and prints `Wrote integrations.jira to <file>`.
-9. **The webhook**, on every run ([below](#3-create-the-webhook-in-jira)).
 10. **Next step.** For each secret that is neither saved in the keychain nor
     saved now, it says what the next apply does:
     `<apply command> will use <NAME> from your environment`, or
@@ -212,26 +216,25 @@ generates a new one, which you must then put in Jira
 
 ### 3. Create the webhook in Jira
 
-At the end, setup prints the webhook a Jira admin creates:
+Before it asks for the webhook's secret, setup prints the webhook a Jira admin creates:
 
 ```
 The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):
   <site>/plugins/servlet/webhooks
 Click Create there, or edit the webhook you have, and paste these values:
   URL     <public-url>/webhook/jira
-  Secret  the new secret shown below
   Events  Issue: created, updated; Comment: created
   JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")
 ```
 
-The `Secret` line says where the secret is: `the new secret shown below`
-(after `Press Enter to show the webhook secret, to paste into the webhook's Secret field`;
-it is shown once, on the terminal), `the secret you entered`,
-`JIRA_WEBHOOK_SECRET from your environment`, the one saved in the keychain
-(not shown), or `JIRA_WEBHOOK_SECRET from Secret "<name>"`.
+Setup prints this before it asks for the webhook's secret, so the page is
+open when you paste or generate it. When setup doesn't ask, a `Secret` line
+after `URL` says where the secret is: `JIRA_WEBHOOK_SECRET from your environment`,
+the one saved in the keychain (not shown), or
+`JIRA_WEBHOOK_SECRET from Secret "<name>"`.
 
 Setup opens the webhooks page when the webhook must be created or edited: on
-a first run, and when it generated a new webhook secret or the public URL
+a first run, when it asks for the webhook's secret, and when the public URL
 changed. Other runs only print the link.
 
 In Jira, as an admin, open Settings → System → WebHooks (the printed link) and
@@ -506,8 +509,8 @@ the secret before Jira signs with it.
 1. Remove the old one: `bun run secrets rm JIRA_WEBHOOK_SECRET [--target <file>]`,
    or unset it in your environment.
 2. Run `bun run jira:setup [--target <file>]`, press Enter at
-   `Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate a new one to set in Jira): `,
-   save it, and press Enter again to show it.
+   `Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate one to paste into its Secret field): `,
+   press Enter again to show it, and save it.
 3. Edit the webhook in Jira and paste the secret into its Secret field.
 4. Apply (`bun run up`, or `k8s:install` and the restart it prints).
 

@@ -38,7 +38,7 @@ const TOKEN_Q =
 const KEEP_TOKEN_Q =
   "Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden; press Enter to keep the saved one): ";
 const WEBHOOK_Q =
-  "Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate a new one to set in Jira): ";
+  "Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate one to paste into its Secret field): ";
 const SAVE_TOKEN_Q = "Save JIRA_API_TOKEN to the system keychain for compose? [Y/n] ";
 const SAVE_BOTH_Q =
   "Save JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET to the system keychain for compose? [Y/n] ";
@@ -55,12 +55,13 @@ const rejected = (email = EMAIL) =>
   `Jira rejected JIRA_API_TOKEN, or the email ${email} doesn't match it (401): use the service account's API token, with scopes read:jira-work, write:jira-work and read:jira-user, and the service account's email`;
 const LONG_SECRET = "my-webhook-secret-".repeat(2);
 const PERMISSIONS = `${API}/mypermissions?permissions=${ALL_PERMISSIONS.join("%2C")}`;
-const webhookBlock = (secret: string) => [
+// The Secret line names where the secret comes from; none when it is asked for.
+const webhookBlock = (secret?: string) => [
   "The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):",
   `  ${WEBHOOKS}`,
   "Click Create there, or edit the webhook you have, and paste these values:",
   `  URL     ${PUBLIC}/webhook/jira`,
-  `  Secret  ${secret}`,
+  ...(secret ? [`  Secret  ${secret}`] : []),
   "  Events  Issue: created, updated; Comment: created",
   '  JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")',
 ];
@@ -211,7 +212,7 @@ const FLAGS: SetupOptions = {
 };
 
 describe("jira setup", () => {
-  it("first run on Compose: every question in order, write, save, the webhook, next step", async () => {
+  it("first run on Compose: every question in order, the webhook before its secret, save, write, next step", async () => {
     const { d, deps, w } = harness({
       // URL, site, email, show.
       lines: [PUBLIC, SITE, EMAIL, ""],
@@ -227,13 +228,13 @@ describe("jira setup", () => {
     await setup(d, {}, deps);
     expect(w.log.slice(0, atEmail.log)).toEqual([`Public URL: ${PUBLIC}`, ...TOKEN_HINT]);
     expect(atEmail.opened).toBe(1);
-    expect(w.asked).toEqual([URL_Q, SITE_Q, EMAIL_Q, TOKEN_Q, WEBHOOK_Q, SAVE_BOTH_Q, SHOW_Q]);
+    expect(w.asked).toEqual([URL_Q, SITE_Q, EMAIL_Q, TOKEN_Q, WEBHOOK_Q, SHOW_Q, SAVE_BOTH_Q]);
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
       ...TOKEN_HINT,
       ACT_AS,
+      ...webhookBlock(),
       `Wrote integrations.jira to ${d.configPath}`,
-      ...webhookBlock("the new secret shown below"),
       ...NEXT_COMPOSE,
     ]);
     expect(w.shown).toEqual([GENERATED]);
@@ -266,8 +267,8 @@ describe("jira setup", () => {
       "JIRA_API_TOKEN: from your environment",
       ACT_AS,
       "JIRA_WEBHOOK_SECRET: from your environment",
-      `Wrote integrations.jira to ${d.configPath}`,
       ...webhookBlock("JIRA_WEBHOOK_SECRET from your environment"),
+      `Wrote integrations.jira to ${d.configPath}`,
       "bun run up will use JIRA_API_TOKEN from your environment",
       "bun run up will use JIRA_WEBHOOK_SECRET from your environment",
       ...NEXT_COMPOSE,
@@ -385,10 +386,10 @@ describe("jira setup", () => {
       "JIRA_API_TOKEN: from the system keychain (compose)",
       ACT_AS,
       "JIRA_WEBHOOK_SECRET: from the system keychain (compose)",
-      `Wrote integrations.jira to ${d.configPath}`,
       ...webhookBlock(
         "the JIRA_WEBHOOK_SECRET saved in the system keychain for compose (not shown; to replace it, run bun run secrets rm JIRA_WEBHOOK_SECRET, then bun run jira:setup)",
       ),
+      `Wrote integrations.jira to ${d.configPath}`,
       ...NEXT_COMPOSE,
     ]);
     expect((readJson(d.configPath).integrations as { jira: JiraIntegration }).jira).toEqual({
@@ -465,7 +466,7 @@ describe("jira setup", () => {
   it("a typed webhook secret is used as it is; declining the save names env", async () => {
     const { d, deps, w } = harness({ hidden: ["jira-token", LONG_SECRET], save: false });
     await setup(d, FLAGS, deps);
-    expect(w.log).toEqual(expect.arrayContaining(webhookBlock("the secret you entered")));
+    expect(w.log).toEqual(expect.arrayContaining(webhookBlock()));
     expect(w.log).toContain(
       "Set JIRA_API_TOKEN in your environment before bun run up; otherwise it asks for it in a terminal",
     );
@@ -490,7 +491,7 @@ describe("jira setup", () => {
     expect(w.keychain.entries()).toEqual({});
     const ok = harness({ hidden: ["jira-token", "a".repeat(20)], save: false });
     await setup(ok.d, FLAGS, ok.deps);
-    expect(ok.w.log).toEqual(expect.arrayContaining(webhookBlock("the secret you entered")));
+    expect(ok.w.log).toEqual(expect.arrayContaining(webhookBlock()));
   });
 
   it("a re-run with a new public URL opens the webhooks page", async () => {
@@ -569,8 +570,9 @@ describe("jira setup", () => {
     const flag = ` --target ${d.configPath}`;
     // No webhook secret asked for and no save offered: the Secret holds them.
     expect(w.asked).toEqual([KEEP_TOKEN_Q]);
-    expect(w.log.slice(-11)).toEqual([
+    expect(w.log.slice(-12)).toEqual([
       ...webhookBlock('JIRA_WEBHOOK_SECRET from Secret "my-integrations"'),
+      `Wrote integrations.jira to ${d.configPath}`,
       'Put JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET in Secret "my-integrations" in namespace devbox.',
       `Next: bun run k8s:install${flag} (setup applies nothing)`,
       `With GitOps, set the chart values integrations.jira.* to the integrations.jira block in ${d.configPath} instead, with enabled: true`,

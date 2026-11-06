@@ -121,10 +121,9 @@ async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolve
   );
 }
 
-// The webhook's secret: from the environment or the keychain as it is, else
-// typed (at least MIN_WEBHOOK_SECRET characters) or, on Enter, generated
-// (terminal only).
-async function webhookSecret(ctx: Ctx): Promise<WebhookSecret> {
+// The webhook's secret from the environment or the keychain, as it is.
+// Undefined when it must be asked for, which needs a terminal.
+async function savedWebhookSecret(ctx: Ctx): Promise<Resolved | undefined> {
   const { resolver } = ctx.deps;
   try {
     return await resolveSecret("JIRA_WEBHOOK_SECRET", resolver, { noPrompt: true });
@@ -136,9 +135,15 @@ async function webhookSecret(ctx: Ctx): Promise<WebhookSecret> {
       `no JIRA_WEBHOOK_SECRET: run \`${ctx.again}\` in a terminal to generate one, or set JIRA_WEBHOOK_SECRET to the secret of the webhook in Jira`,
     );
   }
+  return undefined;
+}
+
+// The webhook's secret, typed (at least MIN_WEBHOOK_SECRET characters) or,
+// on Enter, generated.
+async function askWebhookSecret(ctx: Ctx): Promise<WebhookSecret> {
   const typed = (
-    await resolver.prompt(
-      "Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate a new one to set in Jira): ",
+    await ctx.deps.resolver.prompt(
+      "Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate one to paste into its Secret field): ",
     )
   ).trim();
   if (typed && typed.length < MIN_WEBHOOK_SECRET) {
@@ -251,8 +256,42 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   // status is skipped, with a warning, when devbox moves an issue there.
   const statuses = ctx.d.jira?.statuses ?? { started: "In Progress" };
 
-  // 4. The webhook's secret.
-  const webhook = byo ? undefined : await webhookSecret(ctx);
+  // 4. The admin webhook, every run: Jira has no API for it that the bot may
+  // use. Shown before its secret is asked for, so that the page is open
+  // when the secret is pasted or generated.
+  const savedWebhook = byo ? undefined : await savedWebhookSecret(ctx);
+  const askSecret = !byo && savedWebhook === undefined;
+  log("The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):");
+  // Opened when the webhook must be created or edited: on a first run, when
+  // its secret is asked for, and when the public URL changed. Other runs only
+  // print the link.
+  page(
+    ctx,
+    `${siteUrl}/plugins/servlet/webhooks`,
+    cur === undefined || askSecret || d.publicUrl !== publicUrl,
+  );
+  log("Click Create there, or edit the webhook you have, and paste these values:");
+  log(`  URL     ${publicUrl}/webhook/jira`);
+  if (byo) log(`  Secret  JIRA_WEBHOOK_SECRET from Secret "${byo}"`);
+  else if (savedWebhook?.source === "env")
+    log("  Secret  JIRA_WEBHOOK_SECRET from your environment");
+  else if (savedWebhook) {
+    log(
+      `  Secret  the JIRA_WEBHOOK_SECRET saved in the system keychain for ${scope} (not shown; to replace it, run bun run secrets rm JIRA_WEBHOOK_SECRET${d.flag}, then ${ctx.again})`,
+    );
+  }
+  log("  Events  Issue: created, updated; Comment: created");
+  // Quoted: keys such as GO, IF or NEXT are JQL reserved words.
+  log(
+    '  JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")',
+  );
+  const webhook: WebhookSecret | undefined = askSecret ? await askWebhookSecret(ctx) : savedWebhook;
+  if (webhook?.generated) {
+    await deps.promptLine(
+      "Press Enter to show the webhook secret, to paste into the webhook's Secret field ",
+    );
+    deps.show(webhook.value);
+  }
 
   // 5. Save. The user's own integrations Secret holds the secrets; env is moot.
   const fresh = byo ? [] : [token, webhook].filter((r): r is Resolved => r?.source === "prompt");
@@ -299,41 +338,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
     log(line);
   }
 
-  // 7. The admin webhook, every run: Jira has no API for it that the bot may use.
-  const secretWhere = byo
-    ? `JIRA_WEBHOOK_SECRET from Secret "${byo}"`
-    : webhook?.source === "env"
-      ? "JIRA_WEBHOOK_SECRET from your environment"
-      : webhook?.source === "keychain"
-        ? `the JIRA_WEBHOOK_SECRET saved in the system keychain for ${scope} (not shown; to replace it, run bun run secrets rm JIRA_WEBHOOK_SECRET${d.flag}, then ${ctx.again})`
-        : webhook?.generated
-          ? "the new secret shown below"
-          : "the secret you entered";
-  log("The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):");
-  // Opened when the webhook must be created or edited: on a first run, and
-  // when this run generated a new secret or changed the public URL. Other
-  // runs only print the link.
-  page(
-    ctx,
-    `${siteUrl}/plugins/servlet/webhooks`,
-    cur === undefined || webhook?.generated === true || d.publicUrl !== publicUrl,
-  );
-  log("Click Create there, or edit the webhook you have, and paste these values:");
-  log(`  URL     ${publicUrl}/webhook/jira`);
-  log(`  Secret  ${secretWhere}`);
-  log("  Events  Issue: created, updated; Comment: created");
-  // Quoted: keys such as GO, IF or NEXT are JQL reserved words.
-  log(
-    '  JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")',
-  );
-  if (webhook?.generated) {
-    await deps.promptLine(
-      "Press Enter to show the webhook secret, to paste into the webhook's Secret field ",
-    );
-    deps.show(webhook.value);
-  }
-
-  // 8. What the next apply does with each secret.
+  // 7. What the next apply does with each secret.
   const apply = d.applyCommand;
   if (byo) {
     log(
@@ -350,7 +355,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
     }
   }
 
-  // 9. Next step.
+  // 8. Next step.
   log(`Next: ${apply} (setup applies nothing)`);
   if (d.deployment.kind === "k8s") {
     log(
