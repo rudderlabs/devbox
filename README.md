@@ -33,7 +33,7 @@ DevBox works alongside those tools.
 
 ## Features
 
-- **Staged pipeline.** Orientation, planning, plan review, implementation, self-review. A reviewer checks the plan. If it asks for changes, the planners revise once before any code is written.
+- **Staged pipeline.** Orientation, planning, plan review, implementation, self-review. A reviewer checks the plan. If it finds issues, the planners of the affected repos revise once, and the revision is not reviewed again, before any code is written.
 - **Closed feedback loop.** Review comments, @mentions and failed CI runs route back to the running task (with the GitHub App).
 - **Versioned memory.** Learnings are distilled into your repo and land as a commit on the pull request, reviewed like code.
 - **Credential isolation.** Sandboxes hold placeholder tokens. An egress proxy injects the real ones and scopes writes to your repos.
@@ -44,7 +44,7 @@ DevBox works alongside those tools.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.png">
-  <img alt="Tasks come in from the devbox CLI or Linear, and GitHub sends follow-ups on DevBox pull requests. The control plane (API, Postgres, no LLM calls) starts one sandbox per task through OpenSandbox. In the sandbox the harness plans, codes, tests, reviews and opens the PR, holding only dummy tokens. iron-proxy swaps in the real tokens and allows only your repos on GitHub and your LLM endpoint." src="docs/images/architecture-light.png" width="100%">
+  <img alt="Tasks come in from the devbox CLI or Linear, and GitHub sends follow-ups on DevBox pull requests. The control plane (API, Postgres, no LLM calls) starts one sandbox per task through OpenSandbox. In the sandbox the harness plans, codes, tests, reviews and opens the PR, holding only placeholder tokens. iron-proxy swaps in the real tokens, allows GitHub writes only to your repos and LLM calls only to your endpoint." src="docs/images/architecture-light.png" width="100%">
 </picture>
 
 - The **control plane** (`control-plane/`) stores tasks, starts a sandbox for
@@ -54,7 +54,7 @@ DevBox works alongside those tools.
   [DeepAgents](https://github.com/langchain-ai/deepagents), and takes the task
   from plan to pull request.
 - **iron-proxy** sits between the sandboxes and GitHub and the LLM. It swaps
-  dummy tokens for real ones and allows writes only to your repos.
+  placeholder tokens for real ones and allows writes only to your repos.
 
 [docs/architecture.md](docs/architecture.md) has the details.
 
@@ -69,7 +69,9 @@ with 8 GB of memory for Docker (Compose 2.13 or newer),
 
 > [!TIP]
 > **Prefer to let an agent do it?** Run `claude` in the cloned repo and ask it to
-> set up DevBox. Other coding agents can read `skills/devbox/`.
+> set up DevBox (other coding agents can read `skills/devbox/`). Run the
+> `bun run quickstart` command it gives you yourself, so your keys go to its hidden
+> prompts and never through the chat.
 
 1. **Get the code.**
 
@@ -155,7 +157,7 @@ with 8 GB of memory for Docker (Compose 2.13 or newer),
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/lifecycle-dark.png">
-  <img alt="Task lifecycle: task, orient, plan, plan review (one round of revision before code), implement, self-review, draft PR with a knowledge commit. You review; follow-ups from PR comments, @mentions, failed CI or devbox send go back to implement." src="docs/images/lifecycle-light.png" width="100%">
+  <img alt="Task lifecycle: task, orient, plan, plan review (issues get one revision, not a re-review), implement, self-review, draft PR with a knowledge commit. You review; follow-ups from PR comments, @mentions, failed CI or devbox send go back to implement." src="docs/images/lifecycle-light.png" width="100%">
 </picture>
 
 ## Next steps

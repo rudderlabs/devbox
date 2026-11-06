@@ -4,11 +4,11 @@ This page describes devbox as `bun run up` runs it: Docker Compose on one machin
 
 ## Overview
 
-A **control plane** stores tasks and starts one **sandbox** per task. The **harness** in the sandbox takes the task from plan to draft pull request. **iron-proxy** carries the sandbox's GitHub and LLM traffic and holds the real keys, so the sandbox only has dummy tokens.
+A **control plane** stores tasks and starts one **sandbox** per task. The **harness** in the sandbox takes the task from plan to draft pull request. **iron-proxy** carries the sandbox's GitHub and LLM traffic and holds the real keys, so the sandbox only has placeholder tokens.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/architecture-dark.png">
-  <img alt="Tasks come in from the devbox CLI or Linear. The control plane starts one sandbox per task through OpenSandbox. The harness in the sandbox holds only dummy tokens. iron-proxy swaps in the real tokens, allows GitHub writes only to your repos and LLM calls only to your endpoint." src="images/architecture-light.png" width="100%">
+  <img alt="Tasks come in from the devbox CLI or Linear. The control plane starts one sandbox per task through OpenSandbox. The harness in the sandbox holds only placeholder tokens. iron-proxy swaps in the real tokens, allows GitHub writes only to your repos and LLM calls only to your endpoint." src="images/architecture-light.png" width="100%">
 </picture>
 
 ## Components
@@ -19,7 +19,7 @@ A **control plane** stores tasks and starts one **sandbox** per task. The **harn
 | Control plane | `control-plane/` | Bun server. Stores tasks, starts and stops sandboxes, delivers work, reads progress. |
 | OpenSandbox server | image `opensandbox/server` | Creates sandbox containers and gives the control plane access to their files. |
 | Sandbox | `harness/` (the image `devbox-dev:local`) | One container per task. Runs the harness daemon. |
-| iron-proxy | image `ironsh/iron-proxy` | Sandboxes' route to GitHub and the LLM. Allowlist, swaps dummy tokens for real ones. |
+| iron-proxy | image `ironsh/iron-proxy` | Sandboxes' route to GitHub and the LLM. Allowlist, swaps placeholder tokens for real ones. |
 | Postgres | image `postgres:18` | The control plane's database. |
 
 `control-plane/docker-compose.yml` defines the services. OpenSandbox creates the sandboxes.
@@ -50,10 +50,11 @@ sequenceDiagram
     CP->>CP: task + inbox row + event (one transaction)
     loop every 5 s
         CP->>SB: start sandbox if none, write inbox file
-        SB-->>CP: events.jsonl (read via OpenSandbox)
+        CP->>SB: read events.jsonl (via OpenSandbox)
     end
-    SB->>SB: run round, open draft PR
-    CP-->>U: events, PR URL (logs -f)
+    Note over SB: runs the round and opens the draft PR, alongside the loop
+    U->>CP: logs -f (SSE stream)
+    CP-->>U: events, PR URL
     Note over CP,SB: 15 min idle, no open round: sandbox removed, volume stays
     U->>CP: send message
     CP->>CP: add comment row to inbox
@@ -63,13 +64,13 @@ sequenceDiagram
 - The loop runs at most the [sandbox concurrency limit](configuration.md#sandbox) of sandboxes.
 - A `completed` event ends a round. The control plane records pull request URLs from events.
 - `bun run devbox restart` removes the sandbox, fails open follow-up rounds, queues the assignment again and starts on a new volume.
-- If a sandbox dies, the control plane starts a new one on the same volume, up to `MAX_TASK_RETRIES` times (3 by default), then fails the task.
+- If a sandbox dies with unfinished work, the control plane starts a new one on the same volume, up to `MAX_TASK_RETRIES` times (3 by default), then fails the task. If nothing is unfinished, it just removes the sandbox.
 
 ## The inbox
 
 The inbox is how the control plane gives the harness work.
 
-- Each round of work is a row in the Postgres `inbox` table. Its status goes `pending`, `delivered` (written to the sandbox), `responded` (harness finished), or `failed` (could not be delivered).
+- Each round of work is a row in the Postgres `inbox` table. Its status goes `pending`, `delivered` (written to the sandbox), `responded` (harness finished), or `failed` (the control plane gave up on it: not delivered, or the task failed).
 - To deliver a row, the control plane writes `/workspace/.harness/inbox/<id>.json` in the sandbox and marks it `delivered`. If the write fails, the row stays `pending` and is retried.
 - The file is the `InboxMessage` type in `control-plane/src/types/inboxMessage.ts`:
 
@@ -84,7 +85,7 @@ The inbox is how the control plane gives the harness work.
   ```
 
 - `kind` selects the harness's handler. Through the API: `assignment` (new task) and `comment` (follow-up). Other kinds in the type come from task sources not documented here.
-- The daemon (`harness/src/harness/daemon.py`) polls `.harness/inbox/` every second and handles files in name order, which is creation order (UUIDv7). Done files move to `.processed/`, failed ones to `.error/`.
+- The daemon (`harness/src/harness/daemon.py`) polls `.harness/inbox/` every second and handles files in name order, which is creation order (UUIDv7). Done files move to `.processed/`. If a `comment` round fails, its file moves to `.error/`. If an assignment fails, the file stays, the daemon exits, and the control plane restarts the sandbox to retry.
 - A file lock, `.harness/inbox.lock`, keeps a second daemon from running.
 
 ## The event log
@@ -102,7 +103,7 @@ The event log is how the harness reports back.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/lifecycle-dark.png">
-  <img alt="Task lifecycle: task, orient, plan, plan review (one round of revision), implement, self-review, draft PR with a knowledge commit. You review; follow-ups go back to implement." src="images/lifecycle-light.png" width="100%">
+  <img alt="Task lifecycle: task, orient, plan, plan review (issues get one revision, not a re-review), implement, self-review, draft PR with a knowledge commit. You review; follow-ups go back to implement." src="images/lifecycle-light.png" width="100%">
 </picture>
 
 An `assignment` runs these stages (`harness/src/harness/handlers/assignment.py`):
@@ -112,7 +113,7 @@ An `assignment` runs these stages (`harness/src/harness/handlers/assignment.py`)
 | Setup | Prepares the workspace, fetches the latest commits of every repo (can be turned off). |
 | Orientation | One agent picks the repos and components the task touches. |
 | Planning | One agent per repo drafts that repo's part of the plan, in parallel. |
-| Plan review | An adversarial agent checks the plan. If it does not approve, planners revise once, and a repo it says is missing gets a planner. Final plan: `.harness/plan.json` and `.harness/plan.md`. No repo to change: round ends `no_action`. |
+| Plan review | An adversarial agent checks the plan. If it finds issues, the planners of the affected repos revise once (the revision is not reviewed again), and a repo it says is missing gets a planner. Final plan: `.harness/plan.json` and `.harness/plan.md`. No repo to change: round ends `no_action`. |
 | Implementation | One agent per planned repo makes the change (`.harness/implementation.json`). |
 | Review | Review agents check the diff and a fix agent fixes or declines each finding, up to `HARNESS_REVIEW_MAX_ITERATIONS` passes (`.harness/review.json`). Off with `HARNESS_REVIEW_ENABLED`. |
 | Distillation | Turns the agents' notes into knowledge files in the repo's knowledge directory (`.agents/knowledge/` by default). Off with `HARNESS_DISTILLATION_ENABLED`. |
@@ -158,7 +159,7 @@ What differs from the local stack:
 - **Sandboxes are pods.** The OpenSandbox server creates each one in `devbox-sandboxes` from a pod template in its config (the ConfigMap `devbox-sandbox-template`). The template sets the DNS server, mounts the iron-proxy CA and gives the pod no service account token.
 - **Workspaces are volumes restored from snapshots.** The snapshot builder, a CronJob, clones the configured repos into a scratch volume and takes a VolumeSnapshot `repos-<timestamp>`; it keeps the newest 3. For a task, the control plane creates a PersistentVolumeClaim from the newest ready snapshot and mounts it at `/workspace`. It replaces the `devbox-repos` volume.
 - **DNS replaces network aliases.** iron-proxy's Service has a fixed address, `ironProxy.clusterIP`, and sandboxes use it as their only DNS server. iron-proxy answers every name with its own address, so all sandbox traffic reaches it, and it refuses hosts that are not on the allowlist.
-- **Secrets are mounted files.** iron-proxy reads the GitHub token and the LLM key from Secrets mounted as files, and the control plane reads the GitHub token the same way (it gets only a dummy LLM key). Both re-read them, so a rotated Secret takes effect without a restart ([docs/kubernetes/secrets.md](kubernetes/secrets.md)).
+- **Secrets are mounted files.** iron-proxy reads the GitHub token and the LLM key from Secrets mounted as files, and the control plane reads the GitHub token the same way (it gets only a placeholder LLM key). Both re-read them, so a rotated Secret takes effect without a restart ([docs/kubernetes/secrets.md](kubernetes/secrets.md)).
 
 ### Traffic rules
 
