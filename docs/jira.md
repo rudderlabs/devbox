@@ -203,6 +203,11 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
 Running it again is safe: a configured setting is kept unless a flag changes
 it. To change the statuses, edit the config file.
 
+Don't use `--site` to move a deployment to another Jira site. devbox stores
+issue ids without the site, so the old site's tasks would reply on unrelated
+issues of the new one. For another site, use a new deployment with its own
+database.
+
 The secrets are the exception: setup reuses the token and the webhook secret
 only from your environment or the keychain. Otherwise it asks for them again.
 At the webhook secret, paste the one the webhook in Jira has: pressing Enter
