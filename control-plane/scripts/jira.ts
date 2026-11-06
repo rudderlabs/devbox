@@ -21,6 +21,7 @@ import { capture } from "./lib/capture";
 import { DestructiveRefused } from "./lib/destructive";
 import { keychainFor } from "./lib/keychain";
 import { errorMessage, isKnownError } from "./lib/knownError";
+import { openUrl } from "./lib/openUrl";
 import type { ResolverDeps } from "./lib/secrets";
 import { confirm, promptHidden, promptLine } from "./up/prompt";
 
@@ -134,6 +135,7 @@ async function main(command: string | undefined, argv: string[]): Promise<number
           random: (bytes) => randomBytes(bytes).toString("hex"),
           // The terminal, not the log: shown once, for the user to copy.
           show: (secret) => process.stderr.write(`${secret}\n`),
+          openUrl,
           now: () => new Date(),
           log,
         },

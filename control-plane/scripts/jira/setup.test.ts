@@ -59,8 +59,15 @@ const SAVE_BOTH_Q =
   "Save JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET to the system keychain for compose? [Y/n] ";
 const SHOW_Q = "Press Enter to show the webhook secret, to paste into the webhook's Secret field ";
 
-const TOKEN_HINT =
-  "devbox needs an API token of the service account, with scopes read:jira-work, write:jira-work and read:jira-user (Atlassian Administration → Directory → Service accounts).";
+const ADMIN = "https://admin.atlassian.com/";
+const TOKEN_HINT = [
+  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes read:jira-work, write:jira-work and read:jira-user:",
+  `  ${ADMIN}`,
+];
+const WEBHOOKS = `${SITE}/plugins/servlet/webhooks`;
+const GLOBAL_PAGE = `${SITE}/secure/admin/GlobalPermissions!default.jspa`;
+const permissionsPage = (key: string) =>
+  `${SITE}/plugins/servlet/project-config/${key}/permissions`;
 const ACT_AS = `devbox will act as devbox (account ${BOT_ID}) on ${SITE}`;
 const rejected = (email = EMAIL) =>
   `Jira rejected JIRA_API_TOKEN, or the email ${email} doesn't match it (401): use the service account's API token, with scopes read:jira-work, write:jira-work and read:jira-user, and the service account's email`;
@@ -68,6 +75,8 @@ const GLOBAL_PERMISSIONS = `${API}/mypermissions?permissions=USER_PICKER`;
 const LONG_SECRET = "my-webhook-secret-".repeat(2);
 const webhookBlock = (secret: string, keys = '"ENG"') => [
   "The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):",
+  `  ${WEBHOOKS}`,
+  "Click Create there, or edit the webhook you have, and paste these values:",
   `  URL     ${PUBLIC}/webhook/jira`,
   `  Secret  ${secret}`,
   "  Events  Issue: created, updated; Comment: created",
@@ -103,6 +112,8 @@ type World = {
   asked: string[];
   shown: string[];
   fetched: string[];
+  // Pages opened in the browser.
+  opened: string[];
   keychain: MemoryKeychain;
 };
 
@@ -130,6 +141,7 @@ function harness(o: {
     asked: [],
     shown: [],
     fetched: [],
+    opened: [],
     keychain: new MemoryKeychain(o.saved),
   };
   const lines = [...(o.lines ?? [])];
@@ -222,6 +234,7 @@ function harness(o: {
     fetch,
     random: () => GENERATED,
     show: (secret) => w.shown.push(secret),
+    openUrl: (url) => w.opened.push(url),
     now: () => NOW,
     log: (line) => w.log.push(line),
   };
@@ -263,7 +276,7 @@ describe("jira setup", () => {
     ]);
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
-      TOKEN_HINT,
+      ...TOKEN_HINT,
       ACT_AS,
       "Statuses every project has: To Do, In Progress, Done",
       `Wrote integrations.jira to ${d.configPath}`,
@@ -271,6 +284,8 @@ describe("jira setup", () => {
       ...NEXT_COMPOSE,
     ]);
     expect(w.shown).toEqual([GENERATED]);
+    // A new token and a new webhook: their pages open.
+    expect(w.opened).toEqual([ADMIN, WEBHOOKS]);
     expect(readJson(d.configPath)).toEqual({
       port: 1,
       integrations: { jira: JIRA },
@@ -306,6 +321,7 @@ describe("jira setup", () => {
     ]);
     expect((readJson(d.configPath).integrations as { jira: unknown }).jira).toEqual(JIRA);
     expect(w.keychain.entries()).toEqual({});
+    expect(w.opened).toEqual([]);
   });
 
   it("no token without a terminal: refuses, writes nothing", async () => {
@@ -449,6 +465,8 @@ describe("jira setup", () => {
     });
     expect(w.keychain.entries()).toEqual(saved);
     expect(w.shown).toEqual([]);
+    // Nothing new: the links are printed, no page opens.
+    expect(w.opened).toEqual([]);
   });
 
   it("rotation: a new token asks for its expiry, flags change settings", async () => {
@@ -589,6 +607,58 @@ describe("jira setup", () => {
     expect((readJson(narrowed.d.configPath).integrations as { jira: unknown }).jira).toEqual(JIRA);
   });
 
+  it("opens the permissions pages a failing check points to, the first project's only", async () => {
+    const opts = {
+      jira: JIRA,
+      saved: { "compose/JIRA_API_TOKEN": "jira-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
+      hidden: [""],
+      globalHeld: [],
+      projects: { ENG: { held: ["BROWSE_PROJECTS"] }, DEV: {} },
+    };
+    const projects = "ENG,OPS,DEV";
+    const tty = harness(opts);
+    await setup(tty.d, { projects }, tty.deps);
+    expect(tty.w.opened).toEqual([permissionsPage("ENG"), GLOBAL_PAGE]);
+    for (const line of [
+      `warning: project OPS: the bot can't see this project: check the key, and give the bot access to it`,
+      `  ${permissionsPage("ENG")}`,
+      `  ${permissionsPage("OPS")}`,
+      `  ${GLOBAL_PAGE}`,
+    ]) {
+      expect(tty.w.log).toContain(line);
+    }
+    expect(tty.w.log).not.toContain(`  ${permissionsPage("DEV")}`);
+    // The groups warning comes right before its page.
+    const at = tty.w.log.indexOf(`  ${GLOBAL_PAGE}`);
+    expect(tty.w.log[at - 1]).toStartWith("warning: the bot lacks USER_PICKER");
+
+    // Without a terminal: the same links, nothing opened.
+    const headless = harness({ ...opts, isTTY: false });
+    await setup(headless.d, { projects }, headless.deps);
+    expect(headless.w.opened).toEqual([]);
+    expect(headless.w.log.filter((l) => l.startsWith(`  ${SITE}/`))).toEqual(
+      tty.w.log.filter((l) => l.startsWith(`  ${SITE}/`)),
+    );
+
+    // Trusting no group: no global permissions page.
+    const site = harness({ ...opts, jira: { ...JIRA, trustedGroups: [] } });
+    await setup(site.d, { projects: "DEV" }, site.deps);
+    expect(site.w.opened).toEqual([]);
+    expect(site.w.log.some((l) => l.includes("GlobalPermissions"))).toBe(false);
+  });
+
+  it("a re-run that generates a new webhook secret opens the webhooks page", async () => {
+    const { d, deps, w } = harness({
+      jira: JIRA,
+      saved: { "compose/JIRA_API_TOKEN": "jira-token" },
+      hidden: ["", ""],
+      save: false,
+    });
+    await setup(d, {}, deps);
+    expect(w.opened).toEqual([WEBHOOKS]);
+    expect(w.shown).toEqual([GENERATED]);
+  });
+
   it("no webhook secret without a terminal: refuses", async () => {
     const { d, deps } = harness({ isTTY: false, env: { JIRA_API_TOKEN: "jira-token" } });
     await expect(setup(d, FLAGS, deps)).rejects.toThrow(
@@ -662,7 +732,7 @@ describe("jira setup", () => {
     const flag = ` --target ${d.configPath}`;
     // No webhook secret asked for and no save offered: the Secret holds them.
     expect(w.asked).toEqual([KEEP_TOKEN_Q, STARTED_Q, DONE_Q]);
-    expect(w.log.slice(-10)).toEqual([
+    expect(w.log.slice(-12)).toEqual([
       ...webhookBlock('JIRA_WEBHOOK_SECRET from Secret "my-integrations"'),
       'Put JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET in Secret "my-integrations" in namespace devbox.',
       `Next: bun run k8s:install${flag} (setup applies nothing)`,

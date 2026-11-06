@@ -89,6 +89,10 @@ does. After that, its only network calls go to your Jira site and to
 Jira now calls issues *work items* and projects *spaces*, and its permission
 screens use those words. This page keeps saying issue and project.
 
+You don't have to find these pages yourself: run in a terminal, `jira:setup`
+opens each one when a step needs it, and always prints its link. Jira takes
+nothing prefilled from a link, so setup also says what to do on the page.
+
 1. In Atlassian Administration, open Directory → Service accounts and create
    one. Give it access to Jira. Its name is the bot's name in Jira: the name
    people assign issues to and type as `@<bot name>`.
@@ -162,6 +166,10 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    is. Otherwise, in a terminal, it asks
    `Jira API token (input hidden): `, or, with a token saved in the keychain,
    `Jira API token (input hidden; press Enter to keep the saved one): `.
+   Before asking for a new token (none in your environment or the keychain),
+   it prints
+   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes read:jira-work, write:jira-work and read:jira-user:`
+   and the link `https://admin.atlassian.com/`, and opens it.
    Without a terminal it uses the saved one, or stops with
    `no JIRA_API_TOKEN: run bun run jira:setup in a terminal, or set JIRA_API_TOKEN`.
    It checks the token with Jira (`GET /myself`) and prints
@@ -175,7 +183,9 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    (`Jira project keys devbox works in, comma-separated (the key of each space, e.g. ENG): `).
    For each, it checks the five permissions and reads the statuses its
    workflows use. It warns, and goes on, about a project the bot can't see or
-   a permission it lacks.
+   a permission it lacks, and prints the link to that project's permissions,
+   `<site>/plugins/servlet/project-config/<KEY>/permissions`. It opens the
+   first such link only.
 6. **The statuses**, on the first run only ([Statuses](#statuses)).
 7. **Trust**, on the first run in a terminal, unless a trust flag is given:
    `Jira groups whose members may assign issues to devbox, comma-separated (Enter for everyone with access to the site): `,
@@ -186,7 +196,9 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    flag without a terminal), it prints
    `Trust: everyone with access to the site (narrow it with --trusted-groups or --trusted-users)`.
    With trusted groups, it checks that the service account has the global
-   permission Browse users and groups, and warns when it doesn't.
+   permission Browse users and groups. When it doesn't, setup warns and
+   prints and opens the global permissions page,
+   `<site>/secure/admin/GlobalPermissions!default.jspa`.
 8. **The token's expiry**
    (`When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): `),
    asked again whenever a new token was typed. A date in the past is refused.
@@ -238,6 +250,8 @@ At the end, setup prints the webhook a Jira admin creates:
 
 ```
 The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):
+  <site>/plugins/servlet/webhooks
+Click Create there, or edit the webhook you have, and paste these values:
   URL     <public-url>/webhook/jira
   Secret  the new secret shown below
   Events  Issue: created, updated; Comment: created
@@ -251,7 +265,11 @@ it is shown once, on the terminal), `the secret you entered`,
 `JIRA_WEBHOOK_SECRET from your environment`, the one saved in the keychain
 (not shown), or `JIRA_WEBHOOK_SECRET from Secret "<name>"`.
 
-In Jira, as an admin, open Settings → System → WebHooks and create a webhook:
+Setup opens the webhooks page on a first run, and whenever it generated a new
+webhook secret, which Jira must get. Other runs only print the link.
+
+In Jira, as an admin, open Settings → System → WebHooks (the printed link) and
+create a webhook:
 
 - **URL:** the `URL` line.
 - **Secret:** the webhook's secret. devbox refuses deliveries without a valid

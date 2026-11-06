@@ -68,7 +68,11 @@ works with one Linear workspace. Everything:
 
 Jira Cloud only. Assign an issue to the bot (a Jira service account) and it
 starts a task; comments that `@mention` the bot are follow-ups; replies are
-comments. A Jira admin creates the webhook that `jira:setup` prints.
+comments. A Jira admin creates the webhook that `jira:setup` prints. In a
+terminal, setup opens the page each step needs and always prints the link:
+Atlassian Administration for a new token, a failing project's permissions,
+the global permissions when trusted groups lack Browse users and groups, and
+the webhooks page on a first run or with a new webhook secret.
 
 ```bash
 bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>] [--projects <KEY,…>]

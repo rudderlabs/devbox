@@ -23,6 +23,9 @@ export const TOKEN_WARN_DAYS = 14;
 export const SCOPES = "read:jira-work, write:jira-work and read:jira-user";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GATEWAY_UNREACHABLE = "can't reach api.atlassian.com: check this machine's egress or proxy";
+// A project check's answer when the bot can't see the project.
+export const UNSEEN_PROJECT =
+  "the bot can't see this project: check the key, and give the bot access to it";
 
 // GET <site>/_edge/tenant_info: the site's cloud id, which the gateway needs.
 export async function cloudIdOf(siteUrl: string, fetch: Fetch): Promise<string> {
@@ -150,10 +153,7 @@ export async function checkProjects(
         };
       } catch (err) {
         if (err instanceof HttpError && err.status === 404) {
-          return {
-            key,
-            error: "the bot can't see this project: check the key, and give the bot access to it",
-          };
+          return { key, error: UNSEEN_PROJECT };
         }
         if (err instanceof HttpError) return { key, error: `HTTP ${err.status}` };
         return { key, error: GATEWAY_UNREACHABLE };
@@ -179,7 +179,7 @@ export async function checkGroupsPermission(
       AbortSignal.timeout(TIMEOUT_MS),
     );
     if (held[GROUPS_PERMISSION]) return undefined;
-    return `warning: the bot lacks ${permissionList([GROUPS_PERMISSION])}: ${GRANT_GROUPS_PERMISSION}`;
+    return GROUPS_PERMISSION_MISSING;
   } catch (err) {
     const why = err instanceof HttpError ? `HTTP ${err.status}` : GATEWAY_UNREACHABLE;
     return `warning: can't check the bot's global permission ${GROUPS_PERMISSION}: ${why}`;
@@ -202,6 +202,9 @@ export const permissionList = (missing: string[]): string =>
           : p,
     )
     .join(", ");
+
+// checkGroupsPermission's warning when Jira says the bot lacks the permission.
+export const GROUPS_PERMISSION_MISSING = `warning: the bot lacks ${permissionList([GROUPS_PERMISSION])}: ${GRANT_GROUPS_PERMISSION}`;
 
 // Whole days until the token expires (negative once it has), as the control
 // plane counts them.

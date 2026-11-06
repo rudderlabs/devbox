@@ -4,7 +4,10 @@
 // whose token it is and what the bot may do in each project, proposes the
 // statuses devbox moves issues to, records the settings in the deployment's
 // config, optionally saves the secrets in the system keychain, and prints the
-// admin webhook's settings. setup never applies and never touches the cluster.
+// admin webhook's settings. In a terminal it opens the Atlassian or Jira page
+// a step needs; Jira takes nothing prefilled from a link, so it prints what to
+// do there, and the link too. setup never applies and never touches the
+// cluster.
 // Re-running is safe: a configured setting is kept unless a flag changes it,
 // and a newly entered token asks for its expiry again. The secrets are kept
 // only from the environment or the keychain; otherwise they are asked for
@@ -34,11 +37,13 @@ import {
   checkJira,
   checkProjects,
   cloudIdOf,
+  GROUPS_PERMISSION_MISSING,
   type ProjectCheck,
   permissionList,
   SCOPES,
   tokenDaysLeft,
   tokenExpiryWarning,
+  UNSEEN_PROJECT,
 } from "./check";
 import type { JiraDeployment } from "./deployment";
 
@@ -64,6 +69,8 @@ export type SetupDeps = {
   random: (bytes: number) => string;
   // Shows a secret once, on the terminal, not the log.
   show: (secret: string) => void;
+  // Opens a page in the browser, best effort.
+  openUrl: (url: string) => void;
   now: () => Date;
   log: (line: string) => void;
 };
@@ -88,6 +95,13 @@ const list = (raw: string): string[] =>
     .map((s) => s.trim())
     .filter(Boolean);
 const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+// The link to a page a step needs, always printed; in a terminal, and unless
+// `open` is false, the browser opens it too.
+function page(ctx: Ctx, url: string, open = true): void {
+  ctx.deps.log(`  ${url}`);
+  if (open && ctx.deps.resolver.isTTY) ctx.deps.openUrl(url);
+}
 
 // A setting: its flag, else what is configured, else a prompt (terminal only).
 async function setting(
@@ -126,8 +140,9 @@ async function readToken(ctx: Ctx): Promise<Resolved> {
   }
   if (!found) {
     log(
-      `devbox needs an API token of the service account, with scopes ${SCOPES} (Atlassian Administration → Directory → Service accounts).`,
+      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes ${SCOPES}:`,
     );
+    page(ctx, "https://admin.atlassian.com/");
   }
   const typed = (
     await resolver.prompt(
@@ -391,12 +406,19 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   // 3. Projects: what the bot may do there, and their statuses.
   const keys = await projectKeys(ctx);
   const checks = await checkProjects({ cloudId, email: botEmail }, token.value, keys, deps.fetch);
+  // Each failing project's permissions page; only the first one opens.
+  let opened = false;
   for (const c of checks) {
     if ("error" in c) log(`warning: project ${c.key}: ${c.error}`);
     else if (c.missingPermissions.length > 0) {
       log(
         `warning: the bot lacks ${permissionList(c.missingPermissions)} in project ${c.key}: give the service account a role there that has them`,
       );
+    }
+    if ("error" in c ? c.error === UNSEEN_PROJECT : c.missingPermissions.length > 0) {
+      const key = encodeURIComponent(c.key);
+      page(ctx, `${siteUrl}/plugins/servlet/project-config/${key}/permissions`, !opened);
+      opened = true;
     }
   }
   const statuses = await chooseStatuses(ctx, checks);
@@ -410,6 +432,9 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
       deps.fetch,
     );
     if (warning) log(warning);
+    if (warning === GROUPS_PERMISSION_MISSING) {
+      page(ctx, `${siteUrl}/secure/admin/GlobalPermissions!default.jspa`);
+    }
   }
   const tokenExpiresAt = await tokenExpiry(ctx, token.source === "prompt");
   const webhook = byo ? undefined : await webhookSecret(ctx);
@@ -474,6 +499,14 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
           ? "the new secret shown below"
           : "the secret you entered";
   log("The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):");
+  // Opened on a first run and when this run generated a new secret, which
+  // Jira must get; a re-run that changes neither only prints the link.
+  page(
+    ctx,
+    `${siteUrl}/plugins/servlet/webhooks`,
+    cur === undefined || webhook?.generated === true,
+  );
+  log("Click Create there, or edit the webhook you have, and paste these values:");
   log(`  URL     ${publicUrl}/webhook/jira`);
   log(`  Secret  ${secretWhere}`);
   log("  Events  Issue: created, updated; Comment: created");
