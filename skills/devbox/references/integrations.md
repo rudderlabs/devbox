@@ -82,7 +82,7 @@ bun run jira:status [--target <file>]
 
 - The service account's API token needs exactly the classic scopes
   `read:jira-work`, `write:jira-work` and `read:jira-user`, not granular
-  ones; setup prints them before it asks for the token. Setup asks for its expiry date;
+  ones; setup names them in its hint and in the token prompt. Setup asks for its expiry date;
   devbox warns 14 days before.
 - Secrets: `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET`. Unlike
   `linear:setup`, `jira:setup` uses them from the environment when they are

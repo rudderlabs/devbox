@@ -143,15 +143,11 @@ async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolve
       `no JIRA_API_TOKEN: run \`${ctx.again}\` in a terminal, or set JIRA_API_TOKEN`,
     );
   }
-  // At every prompt: a rotation needs the scopes as much as a first run does.
-  ctx.deps.log(
-    `The API token needs exactly these scopes (Jira's classic scopes, not the granular ones): ${SCOPES}`,
-  );
   const typed = (
     await resolver.prompt(
       found
-        ? "Jira API token (input hidden; press Enter to keep the saved one): "
-        : "Jira API token (input hidden): ",
+        ? `Jira API token with ${SCOPES} (input hidden; press Enter to keep the saved one): `
+        : `Jira API token with ${SCOPES} (input hidden): `,
     )
   ).trim();
   if (typed && typed !== found?.value) {
@@ -378,7 +374,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   const found = await availableToken(resolver);
   if (!found && resolver.isTTY) {
     log(
-      "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it:",
+      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes (not the granular ones) ${SCOPES}:`,
     );
     page(ctx, "https://admin.atlassian.com/");
   }
@@ -402,7 +398,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
       await readToken(ctx, found),
       resolver,
       (t) => checkJira({ cloudId, email: botEmail }, t, deps.fetch),
-      { forgetRejected: false },
+      { forgetRejected: false, label: `Jira API token with ${SCOPES}` },
     ));
   } catch (err) {
     // An empty answer at the re-ask: setup's own message, not up's env hint.

@@ -169,14 +169,13 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    (`The service account's email (shown on its page in Atlassian Administration): `).
    First, in a terminal with no token in your environment or the keychain,
    it prints
-   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it:`
+   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes (not the granular ones) read:jira-work, write:jira-work and read:jira-user:`
    and the link `https://admin.atlassian.com/`, and opens it: the email and
    the new token both come from there.
 4. **The API token.** `JIRA_API_TOKEN` from your environment is used as it
-   is. Otherwise, in a terminal, it prints
-   `The API token needs exactly these scopes (Jira's classic scopes, not the granular ones): read:jira-work, write:jira-work and read:jira-user`
-   and asks `Jira API token (input hidden): `, or, with a token saved in the
-   keychain, `Jira API token (input hidden; press Enter to keep the saved one): `.
+   is. Otherwise, in a terminal, it asks
+   `Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden): `, or, with a token saved in the
+   keychain, `Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden; press Enter to keep the saved one): `.
    Without a terminal it uses the saved one, or stops with
    `no JIRA_API_TOKEN: run bun run jira:setup in a terminal, or set JIRA_API_TOKEN`.
    It checks the token with Jira (`GET /myself`) and prints

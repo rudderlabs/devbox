@@ -117,8 +117,12 @@ async function ghToken(deps: Pick<ResolverDeps, "run">): Promise<string> {
   }
 }
 
-async function promptFor(name: SecretName, deps: ResolverDeps): Promise<Resolved> {
-  const value = (await deps.prompt(`${LABELS[name]} (input hidden): `)).trim();
+async function promptFor(
+  name: SecretName,
+  deps: ResolverDeps,
+  label = LABELS[name],
+): Promise<Resolved> {
+  const value = (await deps.prompt(`${label} (input hidden): `)).trim();
   if (!value) throw missing(name, deps, true);
   return { name, value, source: "prompt" };
 }
@@ -187,7 +191,9 @@ export async function checkWithRetry<T>(
   r: Resolved,
   deps: ResolverDeps,
   check: (value: string) => Promise<T>,
-  opts: { forgetRejected?: boolean } = {},
+  // label: what the re-ask calls the secret, when it needs more than its name
+  // (say, the scopes a token must have).
+  opts: { forgetRejected?: boolean; label?: string } = {},
 ): Promise<{ resolved: Resolved; result: T }> {
   let current = r;
   for (;;) {
@@ -207,7 +213,7 @@ export async function checkWithRetry<T>(
       if (!deps.isTTY || (current.source !== "keychain" && current.source !== "prompt")) throw err;
       deps.log(err.message);
       deps.log(`Enter ${current.name} again, or press Enter on an empty value to exit.`);
-      current = await promptFor(current.name, deps);
+      current = await promptFor(current.name, deps, opts.label);
     }
   }
 }
