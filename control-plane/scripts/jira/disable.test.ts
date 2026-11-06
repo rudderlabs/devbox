@@ -21,7 +21,6 @@ const JIRA: JiraIntegration = {
   botAccountId: "712020:00000000-0000-0000-0000-000000000000",
   botName: "devbox",
   statuses: { started: "In Progress", done: "Done" },
-  tokenExpiresAt: "2027-06-30",
 };
 const OFF = { ...JIRA, enabled: false };
 // The other integrations, which disable never touches.

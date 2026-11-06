@@ -258,8 +258,7 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "statuses": { "started": "In Progress" },
-  "tokenExpiresAt": "2027-01-31" } }
+  "statuses": { "started": "In Progress" } } }
 ```
 
 | Field | Required | Meaning |
@@ -270,7 +269,6 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 | `botEmail` | when `enabled` is `true` | The service account's email. With `JIRA_API_TOKEN`, it signs devbox in to Jira. |
 | `botAccountId`, `botName` | when `enabled` is `true` | The service account's account ID and display name, as Jira reported them to `jira:setup`. People type `@<botName>` to mention the bot. |
 | `statuses` | no | `started`, `done` and `failed`: the status names devbox moves an issue to, in any letter case. An absent one means no move ([docs/jira.md](jira.md#statuses)). |
-| `tokenExpiresAt` | when `enabled` is `true` | When the API token expires, `YYYY-MM-DD`. devbox warns from 14 days before. |
 | `allowRestrictedIssues` | no, default `false` | `true` acts on issues with a security level too. |
 
 **`github`** is a top-level key: `trustedOrgs` and `trustedUsers`, lists of
@@ -293,8 +291,8 @@ empty.
 
 `bun run jira:setup` writes `integrations.jira` ([docs/jira.md](jira.md)); you
 may also edit it. Only `enabled: true` turns Jira on. With it, `up` needs
-`JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET` ([Secrets](#secrets)), warns when
-the token expires within 14 days, checks the token with Jira, and passes the
+`JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET` ([Secrets](#secrets)), checks the
+token with Jira, and passes the
 `JIRA_*` variables ([Control-plane settings](#control-plane-settings)) to the
 control plane. Otherwise it passes them all empty.
 
@@ -555,8 +553,7 @@ Requests 1 to 4 use the GitHub token; requests 2 to 4 run once per repo, in
 the order of `repos`. Request 5 uses the LLM key. Requests 6 and 7 run only
 with Linear enabled, and use the client ID and `LINEAR_CLIENT_SECRET`.
 Request 8 runs only with Jira enabled, and uses `botEmail` and
-`JIRA_API_TOKEN`. Before it, even when it is skipped, `up` and `k8s:install`
-warn when `tokenExpiresAt` is less than 14 days away.
+`JIRA_API_TOKEN`.
 
 | # | Request | What it proves | Passes on | Fails with |
 |---|---|---|---|---|
@@ -731,7 +728,6 @@ way.
 | `JIRA_SITE_URL`, `JIRA_CLOUD_ID` | | The site's `https` origin and its cloud ID (a UUID). |
 | `JIRA_BOT_EMAIL`, `JIRA_BOT_ACCOUNT_ID`, `JIRA_BOT_NAME` | | The service account's email, account ID and display name. |
 | `JIRA_STATUS_STARTED`, `JIRA_STATUS_DONE`, `JIRA_STATUS_FAILED` | | The statuses devbox moves an issue to. Unset: no move. |
-| `JIRA_TOKEN_EXPIRES_AT` | | When the API token expires, an ISO date such as `2027-01-31`. |
 | `JIRA_ALLOW_RESTRICTED_ISSUES` | `false` | `true` acts on issues with a security level too. |
 | `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET` | | The service account's API token, and the webhook's secret, which signs each delivery (`X-Hub-Signature`). |
 | `SHUTDOWN_DRAIN_MS` | `10000` | How long shutdown waits, in milliseconds, for in-flight provisions and integration hooks once it has finished the task it was reconciling. On Kubernetes, set it with `extraEnv` and raise `controlPlane.terminationGracePeriodSeconds` by as much. |

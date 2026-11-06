@@ -309,7 +309,6 @@ export async function install(
   }
   const jiraOpts = {
     fetch: deps.fetch,
-    now: deps.now(),
     setup: `bun run jira:setup --target ${deps.targetPath}`,
   };
   const slackR = await resolveIf(integrations?.slack?.enabled, "SLACK_BOT_TOKEN");
@@ -383,7 +382,7 @@ export async function install(
       );
     }
   }
-  // With the user's own integrations Secret, only the expiry is checked here;
+  // With the user's own integrations Secret, nothing is checked here;
   // k8s:check checks the token in it.
   if (jira && !opts.skipJiraCheck) {
     jiraR = await jiraPreflight(jira, jiraR, secretDeps, { ...jiraOpts, skip: false });

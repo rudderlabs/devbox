@@ -150,7 +150,6 @@ describe("chartValues", () => {
       botAccountId: "712020:00000000-0000-0000-0000-000000000000",
       botName: "devbox",
       statuses: { started: "In Progress", done: "Done" },
-      tokenExpiresAt: "2027-06-30",
       allowRestrictedIssues: false,
     };
     expect(chartValues(cfg, {}, { integrations: { jira } }).integrations).toEqual({ jira });

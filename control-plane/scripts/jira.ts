@@ -1,7 +1,6 @@
 // The Jira integration:
 //   bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
-//                      [--email <address>] [--token-expires <YYYY-MM-DD>]
-//                      [--no-keychain]
+//                      [--email <address>] [--no-keychain]
 //   bun run jira:status  [--target <file>] [--no-keychain]
 //   bun run jira:disable [--target <file>] [--no-keychain] [--forget [--yes]]
 // Without --target it acts on the Compose deployment (devbox.config.json),
@@ -28,8 +27,7 @@ const COMMANDS = ["setup", "status", "disable"];
 
 const USAGE = `Usage:
   bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
-                     [--email <address>] [--token-expires <YYYY-MM-DD>]
-                     [--no-keychain]
+                     [--email <address>] [--no-keychain]
 
 Connects devbox to a Jira Cloud site through a service account: checks its
 API token (from JIRA_API_TOKEN, the system keychain or a hidden prompt) and
@@ -53,7 +51,6 @@ in Jira yourself.
   --public-url <url>       the public HTTPS URL Jira sends webhooks to
   --site <url>             the Jira site, e.g. https://example.atlassian.net
   --email <address>        the service account's email
-  --token-expires <date>   when the API token expires, e.g. 2027-01-31
   --no-keychain            never read or write the system keychain
   --forget                 disable: delete the configuration and saved secrets
   --yes                    disable --forget: confirm without asking
@@ -68,7 +65,6 @@ const SETUP_FLAGS = {
   "public-url": { type: "string" },
   site: { type: "string" },
   email: { type: "string" },
-  "token-expires": { type: "string" },
   "no-keychain": { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const;
@@ -114,7 +110,6 @@ async function main(command: string | undefined, argv: string[]): Promise<number
           publicUrl: values["public-url"],
           site: values.site,
           email: values.email,
-          tokenExpires: values["token-expires"],
         },
         {
           resolver: resolverFor(d, values["no-keychain"] === true),
@@ -124,7 +119,6 @@ async function main(command: string | undefined, argv: string[]): Promise<number
           // The terminal, not the log: shown once, for the user to copy.
           show: (secret) => process.stderr.write(`${secret}\n`),
           openUrl,
-          now: () => new Date(),
           log,
         },
       );

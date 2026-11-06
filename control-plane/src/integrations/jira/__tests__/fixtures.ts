@@ -19,7 +19,6 @@ export const SECRET = "webhook-test-secret";
 export const NAME = "Some Person";
 export const EMAIL = "some.person@example.com";
 export const NOW = new Date("2026-11-02T12:00:00Z").getTime();
-export const DAY = 24 * 60 * 60 * 1000;
 
 export const CFG: JiraConfig = {
   siteUrl: "https://example.atlassian.net",
@@ -28,7 +27,6 @@ export const CFG: JiraConfig = {
   botAccountId: BOT,
   botName: "devbox",
   statuses: { started: "In Progress", done: "Done" },
-  tokenExpiresAt: new Date(NOW + 90 * DAY),
   allowRestrictedIssues: false,
   apiToken: "jira-test-token",
   webhookSecret: SECRET,

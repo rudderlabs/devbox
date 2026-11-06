@@ -20,7 +20,6 @@ const EMAIL = "devbox@example.com";
 const API = `https://api.atlassian.com/ex/jira/${CLOUD}/rest/api/3`;
 const COMPOSE: Deployment = { kind: "compose" };
 const K8S: Deployment = { kind: "k8s", context: "kind-devbox", namespace: "devbox" };
-const NOW = new Date("2026-11-03T12:00:00Z");
 const GENERATED = "ab".repeat(32);
 const ALL_PERMISSIONS = [
   "BROWSE_PROJECTS",
@@ -38,8 +37,6 @@ const TOKEN_Q =
   "Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden): ";
 const KEEP_TOKEN_Q =
   "Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden; press Enter to keep the saved one): ";
-const EXPIRY_Q =
-  "When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): ";
 const WEBHOOK_Q =
   "Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate a new one to set in Jira): ";
 const SAVE_TOKEN_Q = "Save JIRA_API_TOKEN to the system keychain for compose? [Y/n] ";
@@ -81,7 +78,6 @@ const JIRA: JiraIntegration = {
   botAccountId: BOT_ID,
   botName: "devbox",
   statuses: { started: "In Progress" },
-  tokenExpiresAt: "2027-06-30",
 };
 
 let n = 0;
@@ -202,7 +198,6 @@ function harness(o: {
     random: () => GENERATED,
     show: (secret) => w.shown.push(secret),
     openUrl: (url) => w.opened.push(url),
-    now: () => NOW,
     log: (line) => w.log.push(line),
   };
   return { d, deps, w };
@@ -213,14 +208,13 @@ const FLAGS: SetupOptions = {
   publicUrl: PUBLIC,
   site: SITE,
   email: EMAIL,
-  tokenExpires: "2027-06-30",
 };
 
 describe("jira setup", () => {
   it("first run on Compose: every question in order, write, save, the webhook, next step", async () => {
     const { d, deps, w } = harness({
-      // URL, site, email, expiry, show.
-      lines: [PUBLIC, SITE, EMAIL, "2027-06-30", ""],
+      // URL, site, email, show.
+      lines: [PUBLIC, SITE, EMAIL, ""],
       hidden: ["jira-token", ""],
     });
     // What was logged and opened before the email was asked for.
@@ -233,16 +227,7 @@ describe("jira setup", () => {
     await setup(d, {}, deps);
     expect(w.log.slice(0, atEmail.log)).toEqual([`Public URL: ${PUBLIC}`, ...TOKEN_HINT]);
     expect(atEmail.opened).toBe(1);
-    expect(w.asked).toEqual([
-      URL_Q,
-      SITE_Q,
-      EMAIL_Q,
-      TOKEN_Q,
-      EXPIRY_Q,
-      WEBHOOK_Q,
-      SAVE_BOTH_Q,
-      SHOW_Q,
-    ]);
+    expect(w.asked).toEqual([URL_Q, SITE_Q, EMAIL_Q, TOKEN_Q, WEBHOOK_Q, SAVE_BOTH_Q, SHOW_Q]);
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
       ...TOKEN_HINT,
@@ -332,10 +317,9 @@ describe("jira setup", () => {
       jira: JIRA,
       saved: { "compose/JIRA_API_TOKEN": "expired", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
       hidden: ["", "jira-token"],
-      lines: ["2027-12-31"],
     });
     await setup(d, {}, deps);
-    expect(w.asked).toEqual([KEEP_TOKEN_Q, TOKEN_Q, EXPIRY_Q, SAVE_TOKEN_Q]);
+    expect(w.asked).toEqual([KEEP_TOKEN_Q, TOKEN_Q, SAVE_TOKEN_Q]);
     expect(w.log).toContain("The saved JIRA_API_TOKEN for compose was rejected; keeping it");
     expect(w.keychain.entries()["compose/JIRA_API_TOKEN"]).toBe("jira-token");
   });
@@ -374,8 +358,8 @@ describe("jira setup", () => {
 
   it("statuses: a first run moves issues to In Progress when devbox starts, and nowhere when it finishes", async () => {
     const { d, deps } = harness({
-      // URL, site, email, expiry, show.
-      lines: [PUBLIC, SITE, EMAIL, "2027-06-30", ""],
+      // URL, site, email, show.
+      lines: [PUBLIC, SITE, EMAIL, ""],
       hidden: ["jira-token", ""],
     });
     await setup(d, {}, deps);
@@ -423,7 +407,6 @@ describe("jira setup", () => {
       saved: { "compose/JIRA_API_TOKEN": "old-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
       validTokens: ["old-token", "jira-token"],
       hidden: ["jira-token"],
-      lines: ["2027-12-31"],
     });
     await setup(d, {}, deps);
     expect(w.asked[0]).toBe(KEEP_TOKEN_Q);
@@ -432,22 +415,17 @@ describe("jira setup", () => {
     expect(w.log).not.toContain(TOKEN_HINT[0]);
   });
 
-  it("rotation: a new token asks for its expiry, the other settings kept", async () => {
+  it("rotation: a new token replaces the saved one, the other settings kept", async () => {
     const { d, deps, w } = harness({
       jira: { ...JIRA, allowRestrictedIssues: true },
       saved: { "compose/JIRA_API_TOKEN": "old-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
       validTokens: ["old-token", "jira-token"],
       hidden: ["jira-token"],
-      lines: ["2026-11-10"],
     });
     await setup(d, {}, deps);
-    expect(w.asked).toEqual([KEEP_TOKEN_Q, EXPIRY_Q, SAVE_TOKEN_Q]);
-    expect(w.log).toContain(
-      "warning: the Jira API token expires in 6 days (2026-11-10): create a new one for the service account, then run bun run jira:setup",
-    );
+    expect(w.asked).toEqual([KEEP_TOKEN_Q, SAVE_TOKEN_Q]);
     expect((readJson(d.configPath).integrations as { jira: JiraIntegration }).jira).toEqual({
       ...JIRA,
-      tokenExpiresAt: "2026-11-10",
       allowRestrictedIssues: true,
     });
     expect(w.keychain.entries()["compose/JIRA_API_TOKEN"]).toBe("jira-token");
@@ -459,11 +437,10 @@ describe("jira setup", () => {
       saved: { "compose/JIRA_API_TOKEN": "old-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
       validTokens: ["old-token", "jira-token"],
       hidden: ["jira-token"],
-      lines: ["2027-12-31"],
       save: false,
     });
     await setup(d, {}, deps);
-    expect(w.asked).toEqual([KEEP_TOKEN_Q, EXPIRY_Q, SAVE_TOKEN_Q]);
+    expect(w.asked).toEqual([KEEP_TOKEN_Q, SAVE_TOKEN_Q]);
     expect(w.keychain.entries()).toEqual({ "compose/JIRA_WEBHOOK_SECRET": "whsec" });
     expect(w.log).toContain(
       "Removed the old JIRA_API_TOKEN saved in the system keychain for compose, so that bun run up doesn't use it instead of the new one",
@@ -471,10 +448,7 @@ describe("jira setup", () => {
     expect(w.log).toContain(
       "Set JIRA_API_TOKEN in your environment before bun run up; otherwise it asks for it in a terminal",
     );
-    expect((readJson(d.configPath).integrations as { jira: JiraIntegration }).jira).toEqual({
-      ...JIRA,
-      tokenExpiresAt: "2027-12-31",
-    });
+    expect((readJson(d.configPath).integrations as { jira: JiraIntegration }).jira).toEqual(JIRA);
   });
 
   it("pasting the saved token again keeps it, as Enter does", async () => {
@@ -561,10 +535,6 @@ describe("jira setup", () => {
         "email",
         "no service account email: pass --email <address>, or run `bun run jira:setup` in a terminal",
       ],
-      [
-        "tokenExpires",
-        "no API token expiry date: pass --token-expires <YYYY-MM-DD>, or run `bun run jira:setup` in a terminal",
-      ],
     ];
     for (const [flag, message] of cases) {
       const { d, deps } = harness({ isTTY: false, env });
@@ -581,11 +551,6 @@ describe("jira setup", () => {
         "the Jira site URL must be an https origin such as https://example.atlassian.net",
       ],
       [{ email: "devbox" }, "the service account's email must be an email address"],
-      [{ tokenExpires: "next year" }, "the token expiry must be a date such as 2027-01-31"],
-      [
-        { tokenExpires: "2026-11-01" },
-        "the token expiry 2026-11-01 is in the past: enter the date Atlassian showed for this token",
-      ],
     ];
     for (const [opts, message] of cases) {
       const { d, deps } = harness({ isTTY: false, env });

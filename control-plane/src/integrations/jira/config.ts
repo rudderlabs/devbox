@@ -14,8 +14,6 @@ export type JiraConfig = {
   botName: string;
   // Status names devbox moves an issue to; an absent one means no transition.
   statuses: { started?: string; done?: string; failed?: string };
-  // When the API token expires (Atlassian tokens last at most a year).
-  tokenExpiresAt: Date;
   // Act on issues restricted by a security level too (default no).
   allowRestrictedIssues: boolean;
   apiToken: string;
@@ -26,7 +24,6 @@ export type JiraConfig = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // The shapes the Jira module accepts in payloads and URLs.
 const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\S*)?$/;
 
 // Jira is on only with JIRA_ENABLED=true; then every setting read with need()
 // is required, and each value is checked. JIRA_STATUS_STARTED,
@@ -46,7 +43,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
   const botEmail = need("JIRA_BOT_EMAIL");
   const botAccountId = need("JIRA_BOT_ACCOUNT_ID");
   const botName = need("JIRA_BOT_NAME");
-  const expiresAt = need("JIRA_TOKEN_EXPIRES_AT");
   const apiToken = need("JIRA_API_TOKEN");
   const webhookSecret = need("JIRA_WEBHOOK_SECRET");
   if (missing.length > 0) throw missingError("JIRA_ENABLED", missing);
@@ -54,10 +50,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
   if (!UUID.test(cloudId)) throw new Error("JIRA_CLOUD_ID must be a UUID");
   if (!JIRA_ACCOUNT_ID.test(botAccountId)) {
     throw new Error("JIRA_BOT_ACCOUNT_ID is not a Jira account id");
-  }
-  const tokenExpiresAt = new Date(expiresAt);
-  if (!ISO_DATE.test(expiresAt) || Number.isNaN(tokenExpiresAt.getTime())) {
-    throw new Error("JIRA_TOKEN_EXPIRES_AT must be an ISO date such as 2027-01-31");
   }
   return {
     siteUrl: jiraSiteOrigin(siteUrl),
@@ -70,7 +62,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
       done: present(env, "JIRA_STATUS_DONE"),
       failed: present(env, "JIRA_STATUS_FAILED"),
     },
-    tokenExpiresAt,
     allowRestrictedIssues: parseSwitch(env, "JIRA_ALLOW_RESTRICTED_ISSUES"),
     apiToken,
     webhookSecret,

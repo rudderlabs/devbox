@@ -8,19 +8,7 @@ import type { AdfDoc } from "../adf";
 import type { RemoteLink } from "../client";
 import type { JiraConfig } from "../config";
 import type { Client } from "../index";
-import {
-  assignmentEvent,
-  BOT,
-  CFG,
-  commentEvent,
-  DAY,
-  HUMAN,
-  NOW,
-  setup,
-  TASK,
-  TRANSITIONS,
-  user,
-} from "./fixtures";
+import { assignmentEvent, BOT, CFG, HUMAN, NOW, setup, TASK, TRANSITIONS, user } from "./fixtures";
 
 let info: ReturnType<typeof spyOn>;
 let warn: ReturnType<typeof spyOn>;
@@ -224,7 +212,6 @@ describe("JiraIntegration status", () => {
       lastWebhookAt: new Date(NOW).toISOString(),
       bot: { accountId: BOT, name: "devbox" },
       auth: "ok",
-      tokenDaysLeft: 90,
       // Held in no project.
       permissions: { missing: ["ASSIGNABLE_USER"] },
       lastReplyFailure: null,
@@ -261,25 +248,6 @@ describe("JiraIntegration status", () => {
       },
     });
     expect(await jira.status()).toMatchObject({ auth: "unknown" });
-  });
-
-  it("warns about an expiring token at most once a day, from webhooks and status calls", async () => {
-    const tokenWarnings = () =>
-      logged(warn).filter(([msg]) => msg.startsWith("Jira API token expires soon"));
-    const fresh = setup();
-    await fresh.jira.status();
-    expect(tokenWarnings()).toEqual([]);
-
-    const { jira, signed, clock } = setup({ cfg: { tokenExpiresAt: new Date(NOW + 13 * DAY) } });
-    await signed(commentEvent("no mention"));
-    await jira.status();
-    expect(tokenWarnings()).toEqual([
-      [expect.stringContaining("JIRA_TOKEN_EXPIRES_AT"), { daysLeft: 13 }],
-    ]);
-    clock.t += DAY;
-    await signed(commentEvent("no mention"));
-    expect(tokenWarnings()).toHaveLength(2);
-    expect(await jira.status()).toMatchObject({ tokenDaysLeft: 12 });
   });
 });
 

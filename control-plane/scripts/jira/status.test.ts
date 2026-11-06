@@ -16,14 +16,12 @@ const JIRA: JiraIntegration = {
   botAccountId: BOT_ID,
   botName: "devbox",
   statuses: { started: "In Progress", done: "Done" },
-  tokenExpiresAt: "2027-06-30",
 };
 const BODY = {
   configured: true,
   lastWebhookAt: "2026-11-02T07:55:25.031Z",
   bot: { accountId: BOT_ID, name: "devbox" },
   auth: "ok",
-  tokenDaysLeft: 238,
   permissions: { missing: [] },
   lastReplyFailure: null,
   holds: { heldTasks: 0, oldestHoldAgeMs: 0 },
@@ -72,14 +70,12 @@ const HEAD = [
   "Jira (compose)",
   "  site            https://example.atlassian.net",
   "  bot             devbox (devbox@example.com)",
-  "  tokenExpiresAt  2027-06-30",
   "  publicUrl       https://hooks.example.com",
   "  JIRA_API_TOKEN       keychain",
   "  JIRA_WEBHOOK_SECRET  env",
 ];
 const CP = [
   "Control plane: bot devbox, auth ok, last webhook from Jira 2026-11-02T07:55:25.031Z",
-  "API token: expires in 238 days",
   "Permissions: ok",
 ];
 const OK_LINE = `Webhook URL ${PROBE_URL}: reaches devbox with Jira on`;
@@ -102,7 +98,7 @@ describe("jira status", () => {
     expect(r.probed).toEqual([PROBE_URL]);
   });
 
-  it("a rejected token, a short expiry, a permissions error, failed and held replies", async () => {
+  it("a rejected token, a permissions error, failed and held replies", async () => {
     const r = await run({
       jira: JIRA,
       api: async () =>
@@ -110,7 +106,6 @@ describe("jira status", () => {
           ...BODY,
           lastWebhookAt: null,
           auth: "rejected",
-          tokenDaysLeft: 5,
           permissions: { error: "timeout" },
           lastReplyFailure: { status: 400, at: "2026-11-02T08:00:00.000Z" },
           holds: { heldTasks: 2, oldestHoldAgeMs: 300_000 },
@@ -119,7 +114,6 @@ describe("jira status", () => {
     expect(r.log.slice(HEAD.length)).toEqual([
       "Control plane: bot devbox, auth rejected, last webhook from Jira none yet",
       "Jira rejects JIRA_API_TOKEN: create a new token for the service account, run bun run jira:setup, then bun run up",
-      "API token: expires in 5 days: rotate it soon (create a new one, then run bun run jira:setup)",
       "Permissions: can't check (timeout)",
       "Last failed reply to Jira: HTTP 400 at 2026-11-02T08:00:00.000Z",
       "Replies held for 2 task(s), the oldest for 5 min: Jira is refusing or rate-limiting them",
@@ -127,18 +121,16 @@ describe("jira status", () => {
     ]);
   });
 
-  it("an expired token, permissions held in no project, a reply with no answer", async () => {
+  it("permissions held in no project, a reply with no answer", async () => {
     const r = await run({
       jira: JIRA,
       api: async () =>
         Response.json({
           ...BODY,
-          tokenDaysLeft: -3,
           permissions: { missing: ["LINK_ISSUES", "ASSIGNABLE_USER"] },
           lastReplyFailure: { status: null, at: "2026-11-02T08:00:00.000Z" },
         }),
     });
-    expect(r.log).toContain("API token: expired 3 days ago");
     expect(r.log).toContain(
       "Permissions: missing LINK_ISSUES, ASSIGNABLE_USER (needed to assign issues to the bot) in every project",
     );

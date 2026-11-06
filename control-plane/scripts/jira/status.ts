@@ -8,7 +8,7 @@ import { errorMessage } from "../lib/knownError";
 import { probeWebhook } from "../lib/probe";
 import { type PeekDeps, peekSecret } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
-import { permissionList, TOKEN_WARN_DAYS } from "./check";
+import { permissionList } from "./check";
 import type { JiraDeployment } from "./deployment";
 
 export const STATUS_PATH = "/api/integrations/jira";
@@ -18,7 +18,6 @@ export type JiraStatusBody = {
   lastWebhookAt?: string | null;
   bot?: { accountId?: string; name?: string };
   auth?: "ok" | "rejected" | "unknown";
-  tokenDaysLeft?: number;
   permissions?: { missing?: string[]; error?: string };
   lastReplyFailure?: { status: number | null; at: string } | null;
   holds?: { heldTasks?: number; oldestHoldAgeMs?: number };
@@ -51,14 +50,6 @@ function controlPlaneLines(d: JiraDeployment, s: JiraStatusBody): string[] {
   if (s.auth === "rejected") {
     lines.push(
       `Jira rejects JIRA_API_TOKEN: create a new token for the service account, run ${setup}, then ${d.applyCommand}`,
-    );
-  }
-  const days = s.tokenDaysLeft;
-  if (typeof days === "number") {
-    lines.push(
-      days < 0
-        ? `API token: expired ${-days} days ago`
-        : `API token: expires in ${days} days${days < TOKEN_WARN_DAYS ? `: rotate it soon (create a new one, then run ${setup})` : ""}`,
     );
   }
   const p = s.permissions;
@@ -103,7 +94,6 @@ export async function status(d: JiraDeployment, deps: StatusDeps): Promise<void>
   log(`Jira (${scope})`);
   log(`  site            ${j.siteUrl}`);
   log(`  bot             ${j.botName} (${j.botEmail})`);
-  log(`  tokenExpiresAt  ${j.tokenExpiresAt}`);
   log(`  publicUrl       ${d.publicUrl ?? "not set"}`);
   for (const name of ["JIRA_API_TOKEN", "JIRA_WEBHOOK_SECRET"] as const) {
     const where = d.byoIntegrationsSecret

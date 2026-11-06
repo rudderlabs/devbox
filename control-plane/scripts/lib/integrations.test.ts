@@ -400,7 +400,6 @@ describe("integrations.jira", () => {
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
     statuses: { started: "In Progress", done: "Done", failed: "Blocked" },
-    tokenExpiresAt: "2027-06-30",
     allowRestrictedIssues: false,
   };
 
@@ -415,14 +414,7 @@ describe("integrations.jira", () => {
   });
 
   it("each required key is required when enabled", () => {
-    for (const key of [
-      "siteUrl",
-      "cloudId",
-      "botEmail",
-      "botAccountId",
-      "botName",
-      "tokenExpiresAt",
-    ]) {
+    for (const key of ["siteUrl", "cloudId", "botEmail", "botAccountId", "botName"]) {
       const { [key as keyof typeof JIRA]: _, ...rest } = JIRA;
       expect(failure({ jira: rest })).toBe(
         `integrations.jira.${key}: required when enabled is true`,
@@ -451,8 +443,6 @@ describe("integrations.jira", () => {
       ["botAccountId", "bad id!", "must be a Jira account id"],
       ["botName", " ", "must be a non-empty string"],
       ["statuses", "Done", "must be an object"],
-      ["tokenExpiresAt", "soon", "must be a date such as 2027-01-31"],
-      ["tokenExpiresAt", "2027-02-30x", "must be a date such as 2027-01-31"],
       ["allowRestrictedIssues", "yes", "must be true or false"],
     ];
     for (const [key, value, why] of cases) {
@@ -469,7 +459,7 @@ describe("integrations.jira", () => {
 
   it("refuses unknown keys, a secret above all", () => {
     expect(failure({ jira: { ...JIRA, apiToken: "t" } })).toBe(
-      'integrations.jira: unknown key "apiToken" (allowed: enabled, siteUrl, cloudId, botEmail, botAccountId, botName, statuses, tokenExpiresAt, allowRestrictedIssues)',
+      'integrations.jira: unknown key "apiToken" (allowed: enabled, siteUrl, cloudId, botEmail, botAccountId, botName, statuses, allowRestrictedIssues)',
     );
     expect(failure({ jira: { ...JIRA, statuses: { review: "In Review" } } })).toBe(
       'integrations.jira.statuses: unknown key "review" (allowed: started, done, failed)',

@@ -9,8 +9,6 @@ import {
   cloudIdOf,
   JiraCheckError,
   jiraPreflight,
-  tokenDaysLeft,
-  tokenExpiryWarning,
 } from "./check";
 
 const SITE = "https://example.atlassian.net";
@@ -137,26 +135,6 @@ describe("checkPermissions", () => {
   });
 });
 
-describe("token expiry", () => {
-  const now = new Date("2026-11-03T12:00:00Z");
-
-  it("counts whole days, as the control plane does", () => {
-    expect(tokenDaysLeft("2026-11-17", now)).toBe(13);
-    expect(tokenDaysLeft("2026-11-18", now)).toBe(14);
-    expect(tokenDaysLeft("2026-11-02", now)).toBe(-2);
-  });
-
-  it("warns under 14 days and once expired, naming the deployment's setup", () => {
-    expect(tokenExpiryWarning("2026-11-18", now)).toBeUndefined();
-    expect(tokenExpiryWarning("2026-11-17", now)).toBe(
-      "warning: the Jira API token expires in 13 days (2026-11-17): create a new one for the service account, then run bun run jira:setup",
-    );
-    expect(tokenExpiryWarning("2026-11-02", now, "bun run jira:setup --target t.json")).toBe(
-      "warning: the Jira API token expired on 2026-11-02: create a new one for the service account, then run bun run jira:setup --target t.json",
-    );
-  });
-});
-
 describe("checkJiraBot and jiraPreflight", () => {
   const JIRA = {
     enabled: true as const,
@@ -165,9 +143,7 @@ describe("checkJiraBot and jiraPreflight", () => {
     botEmail: "devbox@example.com",
     botAccountId: BOT_ID,
     botName: "devbox",
-    tokenExpiresAt: "2027-06-30",
   };
-  const NOW = new Date("2026-11-03T12:00:00Z");
   // /myself answers for "jira-token" as `accountId`, and 401 for anything else.
   const jiraFetch = (accountId = BOT_ID) =>
     fakeFetch((url) =>
@@ -235,7 +211,6 @@ describe("checkJiraBot and jiraPreflight", () => {
     const out = await jiraPreflight(JIRA, secrets("prompt"), r.deps, {
       skip: false,
       fetch: gated,
-      now: NOW,
     });
     expect(out?.token.value).toBe("jira-token");
     expect(r.log).toEqual([`Jira: devbox acts as devbox on ${SITE}`]);
@@ -254,7 +229,6 @@ describe("checkJiraBot and jiraPreflight", () => {
     const out = await jiraPreflight(JIRA, secrets("keychain", "old"), r.deps, {
       skip: false,
       fetch: gated,
-      now: NOW,
     });
     expect(out?.token).toEqual({ name: "JIRA_API_TOKEN", value: "jira-token", source: "prompt" });
     expect(r.log[0]).toBe("The saved JIRA_API_TOKEN for compose was rejected; keeping it");
@@ -264,7 +238,6 @@ describe("checkJiraBot and jiraPreflight", () => {
       jiraPreflight(JIRA, secrets("keychain", "old"), headless.deps, {
         skip: false,
         fetch: gated,
-        now: NOW,
       }),
     ).rejects.toBeInstanceOf(CredentialRejected);
     expect(headless.keychain.entries()).toEqual({ "compose/JIRA_API_TOKEN": "old" });
@@ -275,7 +248,7 @@ describe("checkJiraBot and jiraPreflight", () => {
     const r = resolver({ hidden: [""], saved });
     const typo = { ...JIRA, botEmail: "typo@example.com" };
     await expect(
-      jiraPreflight(typo, secrets("keychain"), r.deps, { skip: false, fetch: gated, now: NOW }),
+      jiraPreflight(typo, secrets("keychain"), r.deps, { skip: false, fetch: gated }),
     ).rejects.toBeInstanceOf(SecretError);
     expect(r.log).toEqual([
       "The saved JIRA_API_TOKEN for compose was rejected; keeping it",
@@ -288,38 +261,29 @@ describe("checkJiraBot and jiraPreflight", () => {
   it("checks only the token", async () => {
     const r = resolver({ isTTY: false });
     const f = jiraFetch();
-    await jiraPreflight(JIRA, secrets("env"), r.deps, { skip: false, fetch: f.fetch, now: NOW });
+    await jiraPreflight(JIRA, secrets("env"), r.deps, { skip: false, fetch: f.fetch });
     expect(f.requests.map((q) => q.url)).toEqual([`${API}/myself`]);
     expect(r.log).toEqual([`Jira: devbox acts as devbox on ${SITE}`]);
   });
 
-  it("skipped: no call to Jira, the expiry still warned about", async () => {
+  it("skipped: no call to Jira", async () => {
     const r = resolver({ isTTY: false });
     const f = jiraFetch();
-    const soon = { ...JIRA, tokenExpiresAt: "2026-11-10" };
-    const out = await jiraPreflight(soon, secrets("env", "anything"), r.deps, {
+    const out = await jiraPreflight(JIRA, secrets("env", "anything"), r.deps, {
       skip: true,
       fetch: f.fetch,
-      now: NOW,
     });
     expect(out?.token.value).toBe("anything");
     expect(f.requests).toEqual([]);
-    expect(r.log).toEqual([
-      "warning: the Jira API token expires in 6 days (2026-11-10): create a new one for the service account, then run bun run jira:setup",
-    ]);
+    expect(r.log).toEqual([]);
   });
 
-  it("the user's own Secret: only the expiry warning", async () => {
+  it("the user's own Secret: nothing to check", async () => {
     const r = resolver({});
-    const out = await jiraPreflight({ ...JIRA, tokenExpiresAt: "2026-11-01" }, undefined, r.deps, {
-      skip: false,
-      fetch: jiraFetch().fetch,
-      now: NOW,
-      setup: "bun run jira:setup --target t.json",
-    });
+    const f = jiraFetch();
+    const out = await jiraPreflight(JIRA, undefined, r.deps, { skip: false, fetch: f.fetch });
     expect(out).toBeUndefined();
-    expect(r.log).toEqual([
-      "warning: the Jira API token expired on 2026-11-01: create a new one for the service account, then run bun run jira:setup --target t.json",
-    ]);
+    expect(f.requests).toEqual([]);
+    expect(r.log).toEqual([]);
   });
 });

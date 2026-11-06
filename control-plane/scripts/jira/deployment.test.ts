@@ -26,7 +26,6 @@ const JIRA = {
   botEmail: "devbox@example.com",
   botAccountId: "712020:00000000-0000-0000-0000-000000000000",
   botName: "devbox",
-  tokenExpiresAt: "2027-06-30",
 };
 const SETUP = {
   repos: [{ url: "https://github.com/example-org/example-repo.git" }],

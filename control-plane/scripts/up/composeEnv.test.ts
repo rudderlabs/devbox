@@ -38,7 +38,6 @@ const JIRA_OFF = Object.fromEntries(
     "STATUS_STARTED",
     "STATUS_DONE",
     "STATUS_FAILED",
-    "TOKEN_EXPIRES_AT",
     "ALLOW_RESTRICTED_ISSUES",
     "API_TOKEN",
     "WEBHOOK_SECRET",
@@ -151,7 +150,6 @@ describe("jiraComposeEnv", () => {
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
     statuses: { started: "In Progress", done: "Done" },
-    tokenExpiresAt: "2027-06-30",
   };
   const SECRETS = { apiToken: "jira-token", webhookSecret: "jira-whs" };
 
@@ -171,7 +169,6 @@ describe("jiraComposeEnv", () => {
       JIRA_BOT_NAME: "devbox",
       JIRA_STATUS_STARTED: "In Progress",
       JIRA_STATUS_DONE: "Done",
-      JIRA_TOKEN_EXPIRES_AT: "2027-06-30",
       JIRA_API_TOKEN: "jira-token",
       JIRA_WEBHOOK_SECRET: "jira-whs",
     });

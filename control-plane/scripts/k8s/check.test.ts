@@ -60,7 +60,6 @@ const { privateKey: PEM } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
 
-const NOW = new Date("2026-11-03T12:00:00Z");
 const LINEAR_ON: Integrations = { linear: { enabled: true, clientId: "lin_client" } };
 const JIRA_TOKEN = "jira-token";
 const JIRA_ON: Integrations = {
@@ -71,7 +70,6 @@ const JIRA_ON: Integrations = {
     botEmail: "devbox@example.com",
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
-    tokenExpiresAt: "2027-06-30",
   },
 };
 
@@ -178,7 +176,6 @@ async function run(
       targetPath: "devbox.k8s.json",
       runner: f.runner,
       fetch: fetch.fetch,
-      now: () => NOW,
       log: (line) => void logs.push(line),
     },
     { skipPushCheck: opts.skipPushCheck === true },
@@ -407,25 +404,6 @@ describe("k8sCheck", () => {
       "2 failed.",
     ]);
     expect([...ok.logs, ...rejected.logs].filter((l) => l.includes("warning"))).toEqual([]);
-  });
-
-  it("Jira enabled: warns, without failing, when the token expires within 14 days", async () => {
-    const r = await run(
-      [
-        GITHUB_OK,
-        LLM_OK,
-        found("devbox-integrations", { JIRA_API_TOKEN: JIRA_TOKEN, JIRA_WEBHOOK_SECRET: "jw" }),
-      ],
-      { integrations: { jira: { enabled: true, ...JIRA_ON.jira, tokenExpiresAt: "2026-11-10" } } },
-    );
-    expect(r.logs.slice(-5)).toEqual([
-      "  warning: the Jira API token expires in 6 days (2026-11-10): create a new one for the service account, then run bun run jira:setup --target devbox.k8s.json",
-      "  ok    Jira API token (devbox acts as devbox on https://example.atlassian.net)",
-      "  ok    Secret devbox-integrations: JIRA_API_TOKEN",
-      "  ok    Secret devbox-integrations: JIRA_WEBHOOK_SECRET",
-      "All checks passed.",
-    ]);
-    expect(r.code).toBe(0);
   });
 
   it("slack and github app webhook keys required when enabled", async () => {

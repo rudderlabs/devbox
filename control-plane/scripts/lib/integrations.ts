@@ -45,8 +45,6 @@ export type JiraIntegration = {
   botAccountId?: string;
   botName?: string;
   statuses?: JiraStatuses;
-  // The API token's expiry, YYYY-MM-DD.
-  tokenExpiresAt?: string;
   allowRestrictedIssues?: boolean;
 };
 export type JiraStatuses = { started?: string; done?: string; failed?: string };
@@ -87,7 +85,6 @@ export type EnabledJira = JiraIntegration & {
   botEmail: string;
   botAccountId: string;
   botName: string;
-  tokenExpiresAt: string;
 };
 
 // The Jira block when Jira is on; parseIntegrations guarantees its keys.
@@ -273,7 +270,6 @@ function parsePending(raw: unknown, fail: Fail): PendingGithubApp {
 // The shapes the control plane accepts (src/integrations/jira/config.ts).
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\S*)?$/;
 
 // The site as a bare https origin, as the control plane wants it; undefined
 // for anything else.
@@ -289,9 +285,6 @@ export function jiraSiteOrigin(raw: string): string | undefined {
     : undefined;
 }
 
-export const isJiraDate = (v: string): boolean =>
-  ISO_DATE.test(v) && !Number.isNaN(new Date(v).getTime());
-
 function parseJira(raw: unknown, fail: Fail): JiraIntegration {
   const f = "integrations.jira";
   const b = block(
@@ -304,7 +297,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
       "botAccountId",
       "botName",
       "statuses",
-      "tokenExpiresAt",
       "allowRestrictedIssues",
     ],
     fail,
@@ -346,13 +338,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     fail,
   );
   const botName = setting(b, f, "botName", nonEmpty(fail), fail);
-  const tokenExpiresAt = setting(
-    b,
-    f,
-    "tokenExpiresAt",
-    shaped(isJiraDate, "a date such as 2027-01-31"),
-    fail,
-  );
   const optional = <T>(key: string, parse: (v: unknown, field: string) => T): T | undefined =>
     b.obj[key] === undefined ? undefined : parse(b.obj[key], `${f}.${key}`);
   const statuses = optional("statuses", (v, field) => {
@@ -375,7 +360,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     ...(botAccountId !== undefined ? { botAccountId } : {}),
     ...(botName !== undefined ? { botName } : {}),
     ...(statuses !== undefined ? { statuses } : {}),
-    ...(tokenExpiresAt !== undefined ? { tokenExpiresAt } : {}),
     ...(allowRestricted !== undefined ? { allowRestrictedIssues: allowRestricted } : {}),
   };
 }

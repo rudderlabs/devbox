@@ -8,7 +8,7 @@
 // are decoded in memory only. It never saves, removes or prompts.
 import { createPrivateKey } from "node:crypto";
 import { GithubAppError } from "../../src/githubToken/mint";
-import { checkJiraBot, tokenExpiryWarning } from "../jira/check";
+import { checkJiraBot } from "../jira/check";
 import { GithubAppSetupError, mintAppToken } from "../lib/githubApp";
 import { isPem, PrivateKeyError } from "../lib/githubAppKey";
 import { enabledGithubApp, enabledJira, enabledLinear } from "../lib/integrations";
@@ -26,7 +26,6 @@ export type CheckDeps = {
   targetPath: string;
   runner: Runner;
   fetch: Fetch;
-  now: () => Date;
   log: (line: string) => void;
 };
 
@@ -254,9 +253,6 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
     const jira = enabledJira(integrations);
     if (jira && ints) {
       const setup = `bun run jira:setup --target ${deps.targetPath}`;
-      // From the target file, so it shows whether or not the token is usable.
-      const warning = tokenExpiryWarning(jira.tokenExpiresAt, deps.now(), setup);
-      if (warning) log(`  ${warning}`);
       const token = usable(ints, "JIRA_API_TOKEN", false, "Jira API token");
       if (token !== undefined) {
         await serviceItem("Jira API token", async () => {

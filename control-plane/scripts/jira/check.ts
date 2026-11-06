@@ -1,8 +1,7 @@
 // The Jira checks made with the bot's API token: the site's cloud id, the
 // account the token belongs to, and the permissions devbox needs. Calls go
-// through Atlassian's API
-// gateway, as the control plane's do. Each failure names the cause and the
-// next action; the token never appears in a message.
+// through Atlassian's API gateway, as the control plane's do. Each failure
+// names the cause and the next action; the token never appears in a message.
 import { HttpError } from "../../src/integrations/http";
 import { jiraClient, PERMISSIONS } from "../../src/integrations/jira/client";
 import type { EnabledJira } from "../lib/integrations";
@@ -14,9 +13,6 @@ export class JiraCheckError extends PreflightError {}
 export type JiraBot = { accountId: string; displayName: string };
 
 const TIMEOUT_MS = 10_000;
-const DAY_MS = 24 * 60 * 60 * 1000;
-// A token with fewer days left than this is warned about, as the control plane does.
-export const TOKEN_WARN_DAYS = 14;
 export const SCOPES = "read:jira-work, write:jira-work and read:jira-user";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GATEWAY_UNREACHABLE = "can't reach api.atlassian.com: check this machine's egress or proxy";
@@ -91,20 +87,17 @@ export async function checkJiraBot(
 
 export type JiraSecrets = { token: Resolved; webhook: Resolved };
 
-// Before startup (`up`, `k8s:install`): warns when the token expires soon
-// and, unless skipped, checks it (a rejected saved or typed token is asked
-// for again; a saved one is kept, since a 401 may mean the email is wrong);
-// then offers to save both secrets. The webhook secret can't be
+// Before startup (`up`, `k8s:install`): unless skipped, checks the token (a
+// rejected saved or typed token is asked for again; a saved one is kept,
+// since a 401 may mean the email is wrong); then offers to save both secrets. The webhook secret can't be
 // checked: only Jira uses it, to sign. Returns the secrets with the token
 // that was accepted; none when the user's own Secret holds them.
 export async function jiraPreflight(
   jira: EnabledJira,
   secrets: JiraSecrets | undefined,
   deps: ResolverDeps,
-  opts: { skip: boolean; fetch: Fetch; now: Date; setup?: string },
+  opts: { skip: boolean; fetch: Fetch; setup?: string },
 ): Promise<JiraSecrets | undefined> {
-  const warning = tokenExpiryWarning(jira.tokenExpiresAt, opts.now, opts.setup);
-  if (warning) deps.log(warning);
   if (!secrets) return undefined;
   let token = secrets.token;
   if (!opts.skip) {
@@ -149,21 +142,3 @@ export const permissionList = (missing: string[]): string =>
   missing
     .map((p) => (p === "ASSIGNABLE_USER" ? `${p} (needed to assign issues to the bot)` : p))
     .join(", ");
-
-// Whole days until the token expires (negative once it has), as the control
-// plane counts them.
-export const tokenDaysLeft = (expiresAt: string, now: Date): number =>
-  Math.floor((new Date(expiresAt).getTime() - now.getTime()) / DAY_MS);
-
-// A warning when the token has expired or expires within TOKEN_WARN_DAYS;
-// `setup` is the deployment's jira:setup command.
-export function tokenExpiryWarning(
-  expiresAt: string,
-  now: Date,
-  setup = "bun run jira:setup",
-): string | undefined {
-  const days = tokenDaysLeft(expiresAt, now);
-  if (days >= TOKEN_WARN_DAYS) return undefined;
-  const when = days < 0 ? `expired on ${expiresAt}` : `expires in ${days} days (${expiresAt})`;
-  return `warning: the Jira API token ${when}: create a new one for the service account, then run ${setup}`;
-}

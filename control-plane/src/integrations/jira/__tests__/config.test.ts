@@ -11,7 +11,6 @@ const JIRA_ENV = {
   JIRA_BOT_EMAIL: "devbox-bot@example.com",
   JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-4000-8000-0000000000b0",
   JIRA_BOT_NAME: "devbox",
-  JIRA_TOKEN_EXPIRES_AT: "2027-01-31",
   JIRA_API_TOKEN: "jira-test-token",
   JIRA_WEBHOOK_SECRET: "webhook-test-secret",
 };
@@ -38,7 +37,6 @@ describe("parseJiraConfig", () => {
         JIRA_SITE_URL: "https://example.atlassian.net/",
         JIRA_STATUS_STARTED: "In Progress",
         JIRA_STATUS_DONE: " In Review ",
-        JIRA_TOKEN_EXPIRES_AT: "2027-01-31T12:00:00Z",
         JIRA_ALLOW_RESTRICTED_ISSUES: "true",
       }),
     ).toEqual({
@@ -48,7 +46,6 @@ describe("parseJiraConfig", () => {
       botAccountId: "712020:00000000-0000-4000-8000-0000000000b0",
       botName: "devbox",
       statuses: { started: "In Progress", done: "In Review", failed: undefined },
-      tokenExpiresAt: new Date("2027-01-31T12:00:00Z"),
       allowRestrictedIssues: true,
       apiToken: "jira-test-token",
       webhookSecret: "webhook-test-secret",
@@ -65,7 +62,7 @@ describe("parseJiraConfig", () => {
   it("JIRA: on with settings missing, the secrets included", () => {
     expect(() => parseJiraConfig({ JIRA_ENABLED: "true" })).toThrow(
       new Error(
-        "JIRA_ENABLED is true but these are missing: JIRA_SITE_URL, JIRA_CLOUD_ID, JIRA_BOT_EMAIL, JIRA_BOT_ACCOUNT_ID, JIRA_BOT_NAME, JIRA_TOKEN_EXPIRES_AT, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET",
+        "JIRA_ENABLED is true but these are missing: JIRA_SITE_URL, JIRA_CLOUD_ID, JIRA_BOT_EMAIL, JIRA_BOT_ACCOUNT_ID, JIRA_BOT_NAME, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET",
       ),
     );
     const { JIRA_API_TOKEN: _t, JIRA_WEBHOOK_SECRET: _s, ...noSecrets } = JIRA_ENV;
@@ -81,8 +78,6 @@ describe("parseJiraConfig", () => {
     ["JIRA_SITE_URL", "example.atlassian.net", "JIRA_SITE_URL must be an https origin"],
     ["JIRA_CLOUD_ID", "not-a-uuid", "JIRA_CLOUD_ID must be a UUID"],
     ["JIRA_BOT_ACCOUNT_ID", "bot@example.com", "JIRA_BOT_ACCOUNT_ID is not a Jira account id"],
-    ["JIRA_TOKEN_EXPIRES_AT", "next year", "JIRA_TOKEN_EXPIRES_AT must be an ISO date"],
-    ["JIRA_TOKEN_EXPIRES_AT", "2027-02-31x", "JIRA_TOKEN_EXPIRES_AT must be an ISO date"],
     ["JIRA_ALLOW_RESTRICTED_ISSUES", "yes", "JIRA_ALLOW_RESTRICTED_ISSUES must be true or false"],
   ])("JIRA: rejects %s=%p", (name, value, message) => {
     expect(() => parseJiraConfig({ ...JIRA_ENV, [name]: value })).toThrow(message);

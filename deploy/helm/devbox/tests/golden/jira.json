@@ -743,10 +743,6 @@
                 {
                   "name": "JIRA_STATUS_DONE",
                   "value": "Done"
-                },
-                {
-                  "name": "JIRA_TOKEN_EXPIRES_AT",
-                  "value": "2027-06-30"
                 }
               ],
               "envFrom": [

@@ -1988,13 +1988,9 @@ Check Linear with: bun run linear:status --target devbox.k8s.json`);
         botAccountId: JIRA_BOT_ID,
         botName: "devbox",
         statuses: { started: "In Progress", done: "Done" },
-        tokenExpiresAt: "2027-06-30",
       },
     };
-    const jiraTarget = (expires = "2027-06-30"): Target => ({
-      ...target(),
-      integrations: { jira: { ...JIRA.jira, tokenExpiresAt: expires } },
-    });
+    const jiraTarget = (): Target => ({ ...target(), integrations: JIRA });
     const ENV = { GITHUB_TOKEN: "ghp_x", LLM_API_KEY: "sk-y" };
     const SAVED = {
       "k8s:kind-devbox/devbox/JIRA_API_TOKEN": "jira-saved",
@@ -2047,20 +2043,19 @@ Check Jira with: bun run jira:status --target devbox.k8s.json`;
       expect(s.logs.at(-1)).toBe(END);
     });
 
-    it("--skip-jira-check: no call to Jira, the Secret still written; a near expiry warned about", async () => {
+    it("--skip-jira-check: no call to Jira, the Secret still written", async () => {
       const script = writingIntegrations(FRESH([TOKEN]));
       const s = setup(script, {
-        target: jiraTarget("2026-10-20"),
+        target: jiraTarget(),
         env: { ...ENV, JIRA_API_TOKEN: "jt", JIRA_WEBHOOK_SECRET: "jw" },
       });
       await install(s.deps, { ...OPTS, skipJiraCheck: true }, OVERLAY);
       s.f.done();
       expect(s.fetchCalls.some((c) => c.includes("atlassian") || c.startsWith("jira"))).toBe(false);
-      expect(s.logs.slice(4, 8)).toEqual([
+      expect(s.logs.slice(4, 7)).toEqual([
         "JIRA_API_TOKEN: from your environment",
         "JIRA_WEBHOOK_SECRET: from your environment",
         "warning: Jira check skipped (--skip-jira-check)",
-        "warning: the Jira API token expires in 5 days (2026-10-20): create a new one for the service account, then run bun run jira:setup --target devbox.k8s.json",
       ]);
       expect(integrationsSecret(s)).toEqual(
         JSON.parse(

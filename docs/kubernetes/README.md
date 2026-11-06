@@ -152,8 +152,8 @@ It prints seven steps:
 2. **Secrets.** Looks up the values for the Secrets it creates. Checks that
    the token can see, push to and open pull requests in each repo, sends the
    LLM endpoint a one-message request and, with Linear enabled, checks the
-   Linear client secret. With Jira enabled, it warns when the API token
-   expires within 14 days and checks the token. Every request is listed in
+   Linear client secret. With Jira enabled, it checks the API token. Every
+   request is listed in
    [what preflight checks](../configuration.md#what-preflight-checks). In a
    terminal, a rejected value that was saved or typed is asked for again
    ([configuration.md](../configuration.md#rejected-values)); otherwise a bad
@@ -189,7 +189,7 @@ Flags:
 | `--skip-push-check` | Skips the checks that the token can push and open pull requests (requests 3 and 4 in [what preflight checks](../configuration.md#what-preflight-checks)). With a read-only token, tasks then fail when they push or open their pull request. |
 | `--skip-llm-check` | Skips the request to the LLM endpoint. |
 | `--skip-linear-check` | Skips the Linear client-secret check. |
-| `--skip-jira-check` | Skips the Jira API-token check. The expiry warning stays. |
+| `--skip-jira-check` | Skips the Jira API-token check. |
 | `--skip-netpol-check` | Skips the NetworkPolicy check. Sandbox egress is not locked down if the CNI does not enforce NetworkPolicy. |
 | `--netpol-check` | Runs the NetworkPolicy check on a re-run too. By default it runs only on the first install. |
 | `--timeout <duration>` | Helm's `--timeout`. Default `15m`. Raise it if the first snapshot of big repos takes longer. |
@@ -395,8 +395,7 @@ after you change a Secret of your own. For every Secret the chart will use
   installation covers every repo), the LLM key against `llm`, with Linear enabled,
   the Linear client secret with `integrations.linear.clientId`, and, with Jira
   enabled, that the Jira API token works and belongs to
-  `integrations.jira.botAccountId`, with a warning when
-  `integrations.jira.tokenExpiresAt` is less than 14 days away
+  `integrations.jira.botAccountId`
   ([what preflight checks](../configuration.md#what-preflight-checks));
 - each enabled integration's keys in the integrations Secret.
 

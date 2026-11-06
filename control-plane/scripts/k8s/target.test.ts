@@ -122,7 +122,6 @@ describe("parseTarget", () => {
       botEmail: "devbox@example.com",
       botAccountId: "712020:00000000-0000-0000-0000-000000000000",
       botName: "devbox",
-      tokenExpiresAt: "2027-06-30",
     };
     expect(parseTarget({ context: "c", integrations: { jira } }, F).integrations).toEqual({ jira });
     expect(() =>

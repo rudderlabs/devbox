@@ -323,7 +323,6 @@ describe("Jira env", () => {
       JIRA_BOT_NAME: "devbox",
       JIRA_STATUS_STARTED: "In Progress",
       JIRA_STATUS_DONE: "Done",
-      JIRA_TOKEN_EXPIRES_AT: "2027-06-30",
     });
     const r = await renderWith(["base.yaml", "jira.yaml"]);
     const c = (r["Deployment/devbox/devbox-control-plane"] as Doc).spec.template.spec.containers[0];

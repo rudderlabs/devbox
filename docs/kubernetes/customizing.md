@@ -264,7 +264,6 @@ enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 | `integrations.jira.siteUrl`, `integrations.jira.cloudId` | The site's `https` origin and its cloud ID. Required when enabled. |
 | `integrations.jira.botEmail`, `integrations.jira.botAccountId`, `integrations.jira.botName` | The service account's email, account ID and display name. Required when enabled. |
 | `integrations.jira.statuses.started`, `.done`, `.failed` | The statuses devbox moves an issue to. Empty: no move ([docs/jira.md](../jira.md#statuses)). |
-| `integrations.jira.tokenExpiresAt` | When the API token expires, `YYYY-MM-DD`. Required when enabled. |
 | `integrations.jira.allowRestrictedIssues` | Default `false`. `true` acts on issues with a security level too. |
 
 For example, in a target file:
@@ -280,8 +279,7 @@ For example, in a target file:
                    "tokens": "devbox", "tokenScope": "repos", "ciResults": true },
     "jira": { "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
               "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-              "statuses": { "started": "In Progress" },
-              "tokenExpiresAt": "2027-01-31" } } }
+              "statuses": { "started": "In Progress" } } } }
 ```
 
 `bun run github:setup --target <file>` writes the `githubApp` block, and the
@@ -307,7 +305,7 @@ the control plane. For the GitHub App it also refuses:
 
 Each message starts with `integrations.githubApp.enabled is true: `. For
 Jira it refuses an enabled block without `siteUrl`, `cloudId`, `botEmail`,
-`botAccountId`, `botName` or `tokenExpiresAt`.
+`botAccountId` or `botName`.
 
 - **The secrets** go in the Secret `devbox-integrations`, or your own with
   `secrets.integrations.existingSecret`, under their env names:

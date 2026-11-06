@@ -155,8 +155,6 @@ integrations:
       done: ""
       # -- The status devbox moves an issue to when the task fails. Empty: no move.
       failed: ""
-    # -- Required when enabled: when the API token expires (YYYY-MM-DD).
-    tokenExpiresAt: ""
     # -- Act on issues restricted by a security level too (JIRA_ALLOW_RESTRICTED_ISSUES).
     allowRestrictedIssues: false
 

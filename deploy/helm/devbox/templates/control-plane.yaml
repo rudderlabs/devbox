@@ -173,7 +173,6 @@ spec:
             {{- with $statuses.failed }}
             - { name: JIRA_STATUS_FAILED, value: {{ . | quote }} }
             {{- end }}
-            - { name: JIRA_TOKEN_EXPIRES_AT, value: {{ $jira.tokenExpiresAt | quote }} }
             {{- if $jira.allowRestrictedIssues }}
             - { name: JIRA_ALLOW_RESTRICTED_ISSUES, value: "true" }
             {{- end }}

@@ -52,7 +52,7 @@ export function createJira(
   const now = deps.now ?? Date.now;
   const client =
     deps.client ?? jiraClient({ cloudId: cfg.cloudId, email: cfg.botEmail, token: cfg.apiToken });
-  const status = new JiraStatusService(cfg, client, core.log, now);
+  const status = new JiraStatusService(cfg, client, now);
   const controller = new JiraWebhookController(core.tasks, cfg, client, core.log, () =>
     status.recordWebhook(),
   );

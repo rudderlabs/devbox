@@ -1,19 +1,18 @@
-// `bun run jira:setup`: gathers the Jira settings (the public URL, the site,
-// the service account's email and when the API token expires), reads the
-// token, finds the site's cloud id, asks Jira whose token it is and what the
-// bot may do, proposes the statuses devbox moves issues to, records the
-// settings in the deployment's config, optionally saves the secrets in the
-// system keychain, and prints the admin webhook's settings. In a terminal it
-// opens the Atlassian or Jira page a step needs; Jira takes nothing prefilled
-// from a link, so it prints what to do there, and the link too. setup never
-// applies and never touches the cluster.
-// Re-running is safe: a configured setting is kept unless a flag changes it,
-// and a newly entered token asks for its expiry again. The secrets are kept
-// only from the environment or the keychain; otherwise they are asked for
-// again.
+// `bun run jira:setup`: gathers the Jira settings (the public URL, the site
+// and the service account's email), reads the token, finds the site's cloud
+// id, asks Jira whose token it is and what the bot may do, proposes the
+// statuses devbox moves issues to, records the settings in the deployment's
+// config, optionally saves the secrets in the system keychain, and prints the
+// admin webhook's settings. In a terminal it opens the Atlassian or Jira page
+// a step needs; Jira takes nothing prefilled from a link, so it prints what to
+// do there, and the link too. setup never applies and never touches the
+// cluster.
+// Re-running is safe: a configured setting is kept unless a flag changes it.
+// The secrets are kept only from the environment or the keychain; otherwise
+// they are asked for again.
 
 import { writeConfigKeys } from "../lib/configFile";
-import { isJiraDate, type JiraIntegration, jiraSiteOrigin } from "../lib/integrations";
+import { type JiraIntegration, jiraSiteOrigin } from "../lib/integrations";
 import { deploymentScope, entryName, keychainUsable } from "../lib/keychain";
 import { publicUrlChangeLines, resolvePublicUrl } from "../lib/publicUrl";
 import {
@@ -24,14 +23,7 @@ import {
   SecretError,
 } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
-import {
-  checkJira,
-  checkPermissions,
-  cloudIdOf,
-  SCOPES,
-  tokenDaysLeft,
-  tokenExpiryWarning,
-} from "./check";
+import { checkJira, checkPermissions, cloudIdOf, SCOPES } from "./check";
 import type { JiraDeployment } from "./deployment";
 
 export class SetupError extends Error {}
@@ -41,7 +33,6 @@ export type SetupOptions = {
   publicUrl?: string;
   site?: string;
   email?: string;
-  tokenExpires?: string;
 };
 
 export type SetupDeps = {
@@ -55,7 +46,6 @@ export type SetupDeps = {
   show: (secret: string) => void;
   // Opens a page in the browser, best effort.
   openUrl: (url: string) => void;
-  now: () => Date;
   log: (line: string) => void;
 };
 
@@ -129,31 +119,6 @@ async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolve
   throw new SetupError(
     `No Jira API token entered: nothing was written. Run \`${ctx.again}\` again when you have it.`,
   );
-}
-
-// The token's expiry: --token-expires, else the configured one while the token
-// is not new, else a prompt.
-async function tokenExpiry(ctx: Ctx, newToken: boolean): Promise<string> {
-  const { opts, d, deps } = ctx;
-  const current = newToken ? undefined : d.jira?.tokenExpiresAt;
-  const expires = await setting(ctx, {
-    flag: opts.tokenExpires,
-    current,
-    question: "When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): ",
-    what: "API token expiry date",
-    flagName: "--token-expires <YYYY-MM-DD>",
-  });
-  if (!isJiraDate(expires)) {
-    throw new SetupError("the token expiry must be a date such as 2027-01-31");
-  }
-  if (tokenDaysLeft(expires, deps.now()) < 0) {
-    throw new SetupError(
-      `the token expiry ${expires} is in the past: enter the date Atlassian showed for this token`,
-    );
-  }
-  const warning = tokenExpiryWarning(expires, deps.now(), ctx.again);
-  if (warning) deps.log(warning);
-  return expires;
 }
 
 // The webhook's secret: from the environment or the keychain as it is, else
@@ -286,15 +251,14 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   // status is skipped, with a warning, when devbox moves an issue there.
   const statuses = ctx.d.jira?.statuses ?? { started: "In Progress" };
 
-  // 4. The token's expiry and the webhook's secret.
-  const tokenExpiresAt = await tokenExpiry(ctx, token.source === "prompt");
+  // 4. The webhook's secret.
   const webhook = byo ? undefined : await webhookSecret(ctx);
 
   // 5. Save. The user's own integrations Secret holds the secrets; env is moot.
   const fresh = byo ? [] : [token, webhook].filter((r): r is Resolved => r?.source === "prompt");
   const saved = await saveSecrets(ctx, fresh);
-  // A new token that wasn't saved: the saved one would still win over a
-  // prompt at the next apply, while tokenExpiresAt now describes the new one.
+  // A new token that wasn't saved: the old saved one would still win over a
+  // prompt at the next apply.
   const k = resolver.keychain;
   if (
     !byo &&
@@ -318,7 +282,6 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
       botAccountId: bot.accountId,
       botName: bot.displayName,
       statuses,
-      tokenExpiresAt,
       ...(cur?.allowRestrictedIssues !== undefined
         ? { allowRestrictedIssues: cur.allowRestrictedIssues }
         : {}),

@@ -101,10 +101,7 @@ on the page.
 2. Create an API token for it with exactly the scopes `read:jira-work`,
    `write:jira-work` and `read:jira-user`. They are Jira's classic scopes.
    Copy the token: Atlassian shows it only once.
-3. **Note the token's expiry date.** Atlassian tokens last at most a year.
-   devbox can't read the date from Atlassian: `jira:setup` asks for it, and
-   devbox warns from 14 days before ([Rotating the API token](#rotating-the-api-token)).
-4. In each project devbox works in, give the service account a role that lets
+3. In each project devbox works in, give the service account a role that lets
    it browse the project, add comments, transition issues and link issues
    (the permissions Browse projects, Add comments, Transition work items and
    Link work items), and be assigned issues (Assignable user). It needs no
@@ -128,8 +125,7 @@ once. On Kubernetes, the target file must exist.
 
 ```
 bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
-                   [--email <address>] [--token-expires <YYYY-MM-DD>]
-                   [--no-keychain]
+                   [--email <address>] [--no-keychain]
 ```
 
 | Flag | Effect |
@@ -138,7 +134,6 @@ bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
 | `--public-url <url>` | The public HTTPS URL Jira sends webhooks to. Wins over the saved one and the Ingress. |
 | `--site <url>` | The Jira site, `https://example.atlassian.net`: an `https` origin, with no path. |
 | `--email <address>` | The service account's email, shown on its page in Atlassian Administration. |
-| `--token-expires <YYYY-MM-DD>` | When the API token expires. |
 | `--no-keychain` | Never read or write the system keychain. |
 
 What it does, in order. Each value comes from its flag, else from the config,
@@ -177,10 +172,7 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    permission as held when the service account has it in at least one
    project. It warns, and goes on, about any it holds in no project:
    `warning: the bot lacks <permissions> in every project: give the service account a role that has them in each project devbox works in`.
-6. **The token's expiry**
-   (`When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): `),
-   asked again whenever a new token was typed. A date in the past is refused.
-7. **The webhook's secret.** `JIRA_WEBHOOK_SECRET` from your environment or
+6. **The webhook's secret.** `JIRA_WEBHOOK_SECRET` from your environment or
    the keychain is used as it is. Otherwise, in a terminal, it asks
    `Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate a new one to set in Jira): `.
    Paste the secret the webhook in Jira already has, or press Enter to have it
@@ -188,7 +180,7 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    least 20 characters (a secret from Jira's own Generate button qualifies): the signature it makes is the only proof that a
    delivery comes from Jira. A shorter one stops setup with
    `the webhook secret you entered has <n> characters; it needs at least 20 …`.
-8. **Save.** With a terminal and a working keychain, it offers to save what
+7. **Save.** With a terminal and a working keychain, it offers to save what
    you typed or it generated:
    `Save JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET to the system keychain for <scope>? [Y/n]`
    (naming only those), where `<scope>` is `compose` or
@@ -196,11 +188,11 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    When you decline to save a new token, it removes the token saved before,
    so that the next apply doesn't use the old one:
    `Removed the old JIRA_API_TOKEN saved in the system keychain for <scope>, so that <apply command> doesn't use it instead of the new one`.
-9. **Write.** It writes `integrations.jira` with `enabled: true` and
-    `publicUrl` to the deployment's config file, keeping the rest of the file,
-    and prints `Wrote integrations.jira to <file>`.
-10. **The webhook**, on every run ([below](#3-create-the-webhook-in-jira)).
-11. **Next step.** For each secret that is neither saved in the keychain nor
+8. **Write.** It writes `integrations.jira` with `enabled: true` and
+   `publicUrl` to the deployment's config file, keeping the rest of the file,
+   and prints `Wrote integrations.jira to <file>`.
+9. **The webhook**, on every run ([below](#3-create-the-webhook-in-jira)).
+10. **Next step.** For each secret that is neither saved in the keychain nor
     saved now, it says what the next apply does:
     `<apply command> will use <NAME> from your environment`, or
     `Set <NAME> in your environment before <apply command>; otherwise it asks for it in a terminal`.
@@ -278,17 +270,15 @@ The settings go in `devbox.config.json`:
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "statuses": { "started": "In Progress" },
-  "tokenExpiresAt": "2027-01-31" } }
+  "statuses": { "started": "In Progress" } } }
 ```
 
-With `enabled: true`, `bun run up` resolves the two Jira secrets, warns when
-the token expires within 14 days, checks the token with Jira (it must still
-belong to `botAccountId`), and passes `JIRA_*` to the control plane. It
+With `enabled: true`, `bun run up` resolves the two Jira secrets, checks the
+token with Jira (it must still belong to `botAccountId`), and passes `JIRA_*` to the control plane. It
 prints `Jira: devbox acts as <name> on <site>` and, near the end,
 `Check Jira with: bun run jira:status` (followed by `Check GitHub with: …`
 when the GitHub App is on). `--skip-jira-check` skips the token
-check, and `--skip-checks` skips it with the others; the expiry warning stays.
+check, and `--skip-checks` skips it with the others.
 
 #### kind
 
@@ -312,7 +302,7 @@ bun run jira:status --target devbox.k8s.json
 The settings go in the target file's top-level `integrations` block, not
 under `values`, with the same keys as on Compose. The installer copies the
 block into the chart values as it is (`integrations.jira.*`), resolves the
-two secrets, warns about the expiry, checks the token, and writes the secrets
+two secrets, checks the token, and writes the secrets
 to the Secret `devbox-integrations`. `k8s:install --skip-jira-check` skips the
 token check. The control plane needs egress to `api.atlassian.com`.
 
@@ -323,8 +313,8 @@ no secret and prints
 Put them there yourself, then restart the control plane after each change to
 that Secret. Setup generates no webhook secret then: make one (for example
 `openssl rand -hex 32`) and put the same value in the Secret and in Jira's
-webhook. The installer never reads the Secret: it checks only the expiry, and
-`bun run k8s:check --target <file>` checks the token and warns about its expiry
+webhook. The installer never reads the Secret, so it doesn't check the token:
+`bun run k8s:check --target <file>` does
 ([kubernetes/README.md](kubernetes/README.md#check-the-secrets)).
 
 #### GitOps
@@ -353,8 +343,7 @@ which `jira:status` uses. Then:
    `integrations` block: keep it in step with the chart values.
 
 The chart refuses to render `integrations.jira.enabled: true` without each of
-`siteUrl`, `cloudId`, `botEmail`, `botAccountId`, `botName` and
-`tokenExpiresAt`
+`siteUrl`, `cloudId`, `botEmail`, `botAccountId` and `botName`
 (`integrations.jira.enabled is true: integrations.jira.<key> is required`).
 
 ### What turns Jira on
@@ -484,39 +473,29 @@ and so is a move Jira refuses, for example one whose screen requires a field
 
 ## Rotating the API token
 
-devbox warns from 14 days before the date in `tokenExpiresAt`:
+Atlassian API tokens last at most a year. When one expires, `jira:status`
+shows `auth rejected`, `up`, `k8s:install` and `k8s:check` refuse it with
+`Jira rejected JIRA_API_TOKEN …`, and the bot's comments fail with HTTP 401:
+they are dropped, not sent again (`jira:status` shows
+`Last failed reply to Jira: HTTP 401`). Create a new token and run
+`jira:setup` again to rotate it:
 
-- `jira:setup`, `up`, `k8s:install` and `k8s:check` print
-  `warning: the Jira API token expires in <n> days (<date>): create a new one for the service account, then run bun run jira:setup`.
-  Once the date has passed, `up`, `k8s:install` and `k8s:check` say
-  `expired on <date>` instead; `jira:setup` refuses a date in the past;
-- `jira:status` prints `API token: expires in <n> days: rotate it soon …`;
-- the control plane logs
-  `Jira API token expires soon: rotate it, then update JIRA_API_TOKEN and JIRA_TOKEN_EXPIRES_AT`
-  at most once a day per replica, when a webhook or a status call arrives.
-
-To rotate:
-
-1. Create a new API token for the service account, with the same scopes, and
-   note its expiry.
-2. Give devbox the token and the date:
+1. Create a new API token for the service account, with the same scopes.
+2. Give devbox the token:
    - **Saved in the keychain:** run `bun run jira:setup [--target <file>]`,
      paste the new token at
-     `Jira API token (input hidden; press Enter to keep the saved one): `,
-     enter its expiry, and save it. If you don't save it, setup removes the
-     old saved token, and the next apply takes the token from
-     `JIRA_API_TOKEN` or asks for it in a terminal.
+     `Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden; press Enter to keep the saved one): `,
+     and save it. If you don't save it, setup removes the old saved token,
+     and the next apply takes the token from `JIRA_API_TOKEN` or asks for it
+     in a terminal.
    - **From your environment:** set `JIRA_API_TOKEN` to the new token and run
-     `bun run jira:setup --token-expires <YYYY-MM-DD> [--target <file>]`.
-     Without the flag, setup keeps the old date for a token from your
-     environment.
-   - **In your own Secret, or with GitOps:** put the token in the Secret,
-     and set `tokenExpiresAt` in the target file and in the chart values.
+     `bun run jira:setup [--target <file>]`.
+   - **In your own Secret, or with GitOps:** put the token in the Secret, then
+     restart the control plane.
 3. Apply. `bun run up` recreates the control plane. On Kubernetes,
-   `k8s:install` rewrites the Secret, and the new expiry rolls the control
-   plane. When only `devbox-integrations` changed, it prints the
-   `kubectl rollout restart` command
-   ([kubernetes/secrets.md](kubernetes/secrets.md#rotation)).
+   `k8s:install` rewrites the Secret and prints the
+   `kubectl rollout restart` command: the control plane reads the token only
+   when it starts ([kubernetes/secrets.md](kubernetes/secrets.md#rotation)).
 4. Delete the old token in Atlassian Administration.
 
 ## Replacing the webhook secret
@@ -547,8 +526,8 @@ Read-only: it never prompts, never reads a Kubernetes Secret and never prints
 a secret. It exits 0 whatever the control plane or the probe report; only a
 config or target file it can't load makes it exit 1. It prints:
 
-1. **The settings**: `site`, `bot` (name and email), `tokenExpiresAt`, `publicUrl`, and where each Jira secret would come from
-   at the next apply: `env`, `keychain` or `missing`, or
+1. **The settings**: `site`, `bot` (name and email), `publicUrl`, and where
+   each Jira secret would come from at the next apply: `env`, `keychain` or `missing`, or
    `from Secret "<name>" (not read)` with your own integrations Secret.
    Without a block: `Jira is not configured for <scope>. Run: bun run jira:setup`.
    With `enabled: false`, it says so and stops.
@@ -557,7 +536,6 @@ config or target file it can't load makes it exit 1. It prints:
    from the one replica it reaches.
    - `Control plane: bot <name>, auth <ok | rejected | unknown>, last webhook from Jira <time | none yet>`.
      `auth rejected` means Jira refuses the token; it adds what to do.
-   - `API token: expires in <n> days`, or `expired <n> days ago`.
    - `Permissions: ok`, `Permissions: missing <permissions> in every project`
      for those the service account holds in no project, or
      `Permissions: can't check (<class>)`.
@@ -651,7 +629,7 @@ issue or posting anything to it. So:
   ([Atlassian: the Free plan](https://support.atlassian.com/jira-cloud-administration/docs/what-is-the-free-jira-cloud-plan/)).
   The fixed default scheme gives every user with access to Jira the
   permissions devbox needs, a service account with Jira access included, so
-  step 4 of [The service account](#1-the-service-account) needs no action.
+  step 3 of [The service account](#1-the-service-account) needs no action.
   You can't restrict who edits issues either, which changes nothing for
   devbox, since everyone with access to the site is trusted anyway.
 - Each devbox comment notifies the issue's watchers by email, and Jira Free
@@ -670,7 +648,7 @@ issue or posting anything to it. So:
 | `jira:setup` | `warning: the bot lacks <permissions> in every project: …` | Give the service account a role that has them in each project devbox works in ([The service account](#1-the-service-account)). |
 | `jira:setup` | `warning: can't check the bot's permissions: …` | Jira didn't answer. Check this machine's egress to `api.atlassian.com`, then run `jira:setup` again. |
 | `jira:status` | `Permissions: missing … in every project`, or `Permissions: can't check (<class>)` | As the `jira:setup` rows above. |
-| `jira:status` | `auth rejected`, or `API token: expired …` | Rotate the token ([Rotating the API token](#rotating-the-api-token)). |
+| `jira:status` | `auth rejected`, or `Last failed reply to Jira: HTTP 401` | The token expired or was revoked: rotate it ([Rotating the API token](#rotating-the-api-token)). |
 | `jira:status` | `Replies held for …`, `Last failed reply to Jira: HTTP <status>` | Jira refuses the bot's comments. 403: the bot lacks Add Comments; 429: Jira's rate limit, which passes. |
 | `jira:status` probe | `got no answer (…): the public URL does not reach devbox` | The tunnel is down, or the Ingress or DNS is not ready yet. With the URL from `ingress.api`, that Ingress may be VPN-only: add a public `ingress.webhooks`. |
 | `jira:status` probe | `got 404: something answered, but not devbox with Jira on` | Check that the tunnel or proxy forwards to the control plane (port 3000 on Compose), that `integrations.jira.enabled` is `true` and applied, or restart the control plane. |

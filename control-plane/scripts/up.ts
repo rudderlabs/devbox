@@ -146,7 +146,6 @@ const JIRA_ENV_NAMES = [
   "JIRA_STATUS_STARTED",
   "JIRA_STATUS_DONE",
   "JIRA_STATUS_FAILED",
-  "JIRA_TOKEN_EXPIRES_AT",
   "JIRA_ALLOW_RESTRICTED_ISSUES",
   "JIRA_API_TOKEN",
   "JIRA_WEBHOOK_SECRET",
@@ -175,7 +174,6 @@ export function jiraComposeEnv(
     JIRA_STATUS_STARTED: on.statuses?.started ?? "",
     JIRA_STATUS_DONE: on.statuses?.done ?? "",
     JIRA_STATUS_FAILED: on.statuses?.failed ?? "",
-    JIRA_TOKEN_EXPIRES_AT: on.tokenExpiresAt,
     JIRA_ALLOW_RESTRICTED_ISSUES: on.allowRestrictedIssues ? "true" : "",
     JIRA_API_TOKEN: secrets.apiToken,
     JIRA_WEBHOOK_SECRET: secrets.webhookSecret,
@@ -514,7 +512,7 @@ export async function appToken(
 }
 
 // Whether and when `up` runs Jira's preflight: not at all without Jira;
-// "unchecked" (expiry warning and save offers only) before the other checks
+// "unchecked" (save offers only) before the other checks
 // with --skip-checks or --skip-jira-check, so a failing GitHub or LLM check
 // doesn't lose its typed secrets; else "checked" after them.
 export function jiraPreflightMode(
@@ -609,7 +607,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
   // Unchecked: offered now, so a failing GitHub or LLM check does not lose them.
   if (jira && jiraMode === "unchecked") {
     if (!skipChecks) log("warning: Jira check skipped (--skip-jira-check)");
-    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: true, fetch, now: new Date() });
+    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: true, fetch });
   }
   if (gh.app) {
     github = await appToken(gh.app, cfg, gh.key, secretDeps, { skipChecks, fetch });
@@ -659,7 +657,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     }
   }
   if (jira && jiraMode === "checked") {
-    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: false, fetch, now: new Date() });
+    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: false, fetch });
   }
   const llm = llmR.value;
   if (!github) {

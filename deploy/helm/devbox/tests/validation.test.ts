@@ -171,7 +171,7 @@ describe("chart validation", () => {
       return r.stderr;
     };
 
-    it.each(["siteUrl", "cloudId", "botEmail", "botAccountId", "botName", "tokenExpiresAt"])(
+    it.each(["siteUrl", "cloudId", "botEmail", "botAccountId", "botName"])(
       "requires %s when enabled",
       async (key) => {
         expect(await jiraFailure([`integrations.jira.${key}=`])).toContain(
@@ -190,7 +190,6 @@ describe("chart validation", () => {
       ["integrations.jira.webhookSecret=x", "webhookSecret"],
       ["integrations.jira.siteUrl=http://example.atlassian.net", "siteUrl"],
       ["integrations.jira.cloudId=abc", "cloudId"],
-      ["integrations.jira.tokenExpiresAt=soon", "tokenExpiresAt"],
       ["integrations.jira.statuses.review=x", "review"],
     ])("refuses %s through the schema", async (set, key) => {
       const stderr = await jiraFailure([set]);

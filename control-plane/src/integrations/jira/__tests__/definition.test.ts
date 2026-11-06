@@ -12,7 +12,6 @@ const ENV = {
   JIRA_BOT_EMAIL: "devbox-bot@example.com",
   JIRA_BOT_ACCOUNT_ID: "acct-123",
   JIRA_BOT_NAME: "devbox",
-  JIRA_TOKEN_EXPIRES_AT: "2027-06-30",
   JIRA_API_TOKEN: "jira-test-token",
   JIRA_WEBHOOK_SECRET: "webhook-test-secret",
 };
@@ -64,7 +63,6 @@ it("creates Jira from its settings: a webhook signed with its secret shows in it
     lastWebhookAt: "2026-11-02T12:00:00.000Z",
     bot: { accountId: "acct-123", name: "devbox" },
     auth: "ok",
-    tokenDaysLeft: 239,
     permissions: { missing: [] },
     lastReplyFailure: null,
   });

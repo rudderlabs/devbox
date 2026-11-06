@@ -237,7 +237,6 @@ async function main(command: string | undefined, argv: string[]): Promise<number
           targetPath: path,
           runner: realRunner,
           fetch,
-          now: () => new Date(),
           log,
         },
         { skipPushCheck: values["skip-push-check"] === true },

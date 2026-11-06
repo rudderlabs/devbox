@@ -75,7 +75,7 @@ selectors all assume the release namespace devbox. */ -}}
 {{- fail "integrations.slack.enabled is true: integrations.slack.channelId is required" }}
 {{- end }}
 {{- if $jira.enabled }}
-{{- range $key := list "siteUrl" "cloudId" "botEmail" "botAccountId" "botName" "tokenExpiresAt" }}
+{{- range $key := list "siteUrl" "cloudId" "botEmail" "botAccountId" "botName" }}
 {{- if not (index $jira $key) }}
 {{- fail (printf "integrations.jira.enabled is true: integrations.jira.%s is required" $key) }}
 {{- end }}
