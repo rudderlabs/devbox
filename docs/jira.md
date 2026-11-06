@@ -150,10 +150,16 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
 3. **The service account's email**
    (`The service account's email (shown on its page in Atlassian Administration): `).
    First, in a terminal with no token in your environment or the keychain,
-   it prints
-   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes read:jira-work, write:jira-work and read:jira-user:`
-   and the link `https://admin.atlassian.com/`, and opens it: the email and
-   the new token both come from there.
+   it prints the steps and the link, and opens it: the email and the new
+   token both come from there.
+
+   ```
+   The service account, in Atlassian Administration (Directory → Service accounts):
+     1. Create it, if it doesn't exist.
+     2. Give it access to Jira with the User role (not an admin role).
+     3. Create an API token for it with exactly Jira's classic scopes read:jira-work, write:jira-work and read:jira-user.
+     https://admin.atlassian.com/
+   ```
 4. **The API token.** `JIRA_API_TOKEN` from your environment is used as it
    is. Otherwise, in a terminal, it asks
    `Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden): `, or, with a token saved in the

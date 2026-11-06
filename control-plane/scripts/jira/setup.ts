@@ -206,11 +206,15 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   const cloudId = await cloudIdOf(siteUrl, deps.fetch);
   // Without a token, a new token is needed, and often the service account
   // too: say where before asking for its email.
+  // A blank line before each part of the output: the account, the webhook,
+  // and what was saved and written.
+  log("");
   const found = await availableToken(resolver);
   if (!found && resolver.isTTY) {
-    log(
-      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes ${SCOPES}:`,
-    );
+    log("The service account, in Atlassian Administration (Directory → Service accounts):");
+    log("  1. Create it, if it doesn't exist.");
+    log("  2. Give it access to Jira with the User role (not an admin role).");
+    log(`  3. Create an API token for it with exactly Jira's classic scopes ${SCOPES}.`);
     page(ctx, "https://admin.atlassian.com/");
   }
   const botEmail = await setting(ctx, {
@@ -261,6 +265,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   // when the secret is pasted or generated.
   const savedWebhook = byo ? undefined : await savedWebhookSecret(ctx);
   const askSecret = !byo && savedWebhook === undefined;
+  log("");
   log("The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):");
   // Opened when the webhook must be created or edited: on a first run, when
   // its secret is asked for, and when the public URL changed. Other runs only
@@ -294,6 +299,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   }
 
   // 5. Save. The user's own integrations Secret holds the secrets; env is moot.
+  log("");
   const fresh = byo ? [] : [token, webhook].filter((r): r is Resolved => r?.source === "prompt");
   const saved = await saveSecrets(ctx, fresh);
   // A new token that wasn't saved: the old saved one would still win over a

@@ -46,7 +46,10 @@ const SHOW_Q = "Press Enter to show the webhook secret, to paste into the webhoo
 
 const ADMIN = "https://admin.atlassian.com/";
 const TOKEN_HINT = [
-  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it with exactly Jira's classic scopes read:jira-work, write:jira-work and read:jira-user:",
+  "The service account, in Atlassian Administration (Directory → Service accounts):",
+  "  1. Create it, if it doesn't exist.",
+  "  2. Give it access to Jira with the User role (not an admin role).",
+  "  3. Create an API token for it with exactly Jira's classic scopes read:jira-work, write:jira-work and read:jira-user.",
   `  ${ADMIN}`,
 ];
 const WEBHOOKS = `${SITE}/plugins/servlet/webhooks`;
@@ -57,6 +60,7 @@ const LONG_SECRET = "my-webhook-secret-".repeat(2);
 const PERMISSIONS = `${API}/mypermissions?permissions=${ALL_PERMISSIONS.join("%2C")}`;
 // The Secret line names where the secret comes from; none when it is asked for.
 const webhookBlock = (secret?: string) => [
+  "",
   "The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):",
   `  ${WEBHOOKS}`,
   "Click Create there, or edit the webhook you have, and paste these values:",
@@ -226,14 +230,16 @@ describe("jira setup", () => {
       return ask(q);
     };
     await setup(d, {}, deps);
-    expect(w.log.slice(0, atEmail.log)).toEqual([`Public URL: ${PUBLIC}`, ...TOKEN_HINT]);
+    expect(w.log.slice(0, atEmail.log)).toEqual([`Public URL: ${PUBLIC}`, "", ...TOKEN_HINT]);
     expect(atEmail.opened).toBe(1);
     expect(w.asked).toEqual([URL_Q, SITE_Q, EMAIL_Q, TOKEN_Q, WEBHOOK_Q, SHOW_Q, SAVE_BOTH_Q]);
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
+      "",
       ...TOKEN_HINT,
       ACT_AS,
       ...webhookBlock(),
+      "",
       `Wrote integrations.jira to ${d.configPath}`,
       ...NEXT_COMPOSE,
     ]);
@@ -264,10 +270,12 @@ describe("jira setup", () => {
     expect(w.asked).toEqual([]);
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
+      "",
       "JIRA_API_TOKEN: from your environment",
       ACT_AS,
       "JIRA_WEBHOOK_SECRET: from your environment",
       ...webhookBlock("JIRA_WEBHOOK_SECRET from your environment"),
+      "",
       `Wrote integrations.jira to ${d.configPath}`,
       "bun run up will use JIRA_API_TOKEN from your environment",
       "bun run up will use JIRA_WEBHOOK_SECRET from your environment",
@@ -383,12 +391,14 @@ describe("jira setup", () => {
     expect(w.asked).toEqual([KEEP_TOKEN_Q]);
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
+      "",
       "JIRA_API_TOKEN: from the system keychain (compose)",
       ACT_AS,
       "JIRA_WEBHOOK_SECRET: from the system keychain (compose)",
       ...webhookBlock(
         "the JIRA_WEBHOOK_SECRET saved in the system keychain for compose (not shown; to replace it, run bun run secrets rm JIRA_WEBHOOK_SECRET, then bun run jira:setup)",
       ),
+      "",
       `Wrote integrations.jira to ${d.configPath}`,
       ...NEXT_COMPOSE,
     ]);
@@ -570,8 +580,9 @@ describe("jira setup", () => {
     const flag = ` --target ${d.configPath}`;
     // No webhook secret asked for and no save offered: the Secret holds them.
     expect(w.asked).toEqual([KEEP_TOKEN_Q]);
-    expect(w.log.slice(-12)).toEqual([
+    expect(w.log.slice(-14)).toEqual([
       ...webhookBlock('JIRA_WEBHOOK_SECRET from Secret "my-integrations"'),
+      "",
       `Wrote integrations.jira to ${d.configPath}`,
       'Put JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET in Secret "my-integrations" in namespace devbox.',
       `Next: bun run k8s:install${flag} (setup applies nothing)`,
