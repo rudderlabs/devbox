@@ -122,27 +122,26 @@ async function setting(
   return answer;
 }
 
-// The token: from the environment as it is; with a terminal, a saved one is
-// kept unless another one is pasted (rotation), and a missing one is asked for.
-async function readToken(ctx: Ctx): Promise<Resolved> {
-  const { resolver, log } = ctx.deps;
-  let found: Resolved | undefined;
+// The token from the environment or the keychain, without asking.
+async function availableToken(resolver: ResolverDeps): Promise<Resolved | undefined> {
   try {
-    found = await resolveSecret("JIRA_API_TOKEN", resolver, { noPrompt: true });
+    return await resolveSecret("JIRA_API_TOKEN", resolver, { noPrompt: true });
   } catch (err) {
     if (!(err instanceof SecretError)) throw err;
+    return undefined;
   }
+}
+
+// The token: `found` (availableToken's) from the environment as it is; with a
+// terminal, a saved one is kept unless another one is pasted (rotation), and a
+// missing one is asked for.
+async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolved> {
+  const { resolver } = ctx.deps;
   if (found && (found.source === "env" || !resolver.isTTY)) return found;
   if (!resolver.isTTY) {
     throw new SetupError(
       `no JIRA_API_TOKEN: run \`${ctx.again}\` in a terminal, or set JIRA_API_TOKEN`,
     );
-  }
-  if (!found) {
-    log(
-      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes ${SCOPES}:`,
-    );
-    page(ctx, "https://admin.atlassian.com/");
   }
   const typed = (
     await resolver.prompt(
@@ -370,6 +369,15 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
     );
   }
   const cloudId = await cloudIdOf(siteUrl, deps.fetch);
+  // Without a token, a new token is needed, and often the service account
+  // too: say where before asking for its email.
+  const found = await availableToken(resolver);
+  if (!found && resolver.isTTY) {
+    log(
+      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes ${SCOPES}:`,
+    );
+    page(ctx, "https://admin.atlassian.com/");
+  }
   const botEmail = await setting(ctx, {
     flag: opts.email,
     current: cur?.botEmail,
@@ -387,7 +395,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   try {
     // A 401 may mean the email is wrong, not the saved token: keep it.
     ({ resolved: token, result: bot } = await checkWithRetry(
-      await readToken(ctx),
+      await readToken(ctx, found),
       resolver,
       (t) => checkJira({ cloudId, email: botEmail }, t, deps.fetch),
       { forgetRejected: false },
@@ -499,12 +507,13 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
           ? "the new secret shown below"
           : "the secret you entered";
   log("The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):");
-  // Opened on a first run and when this run generated a new secret, which
-  // Jira must get; a re-run that changes neither only prints the link.
+  // Opened when the webhook must be created or edited: on a first run, and
+  // when this run generated a new secret or changed the public URL. Other
+  // runs only print the link.
   page(
     ctx,
     `${siteUrl}/plugins/servlet/webhooks`,
-    cur === undefined || webhook?.generated === true,
+    cur === undefined || webhook?.generated === true || d.publicUrl !== publicUrl,
   );
   log("Click Create there, or edit the webhook you have, and paste these values:");
   log(`  URL     ${publicUrl}/webhook/jira`);

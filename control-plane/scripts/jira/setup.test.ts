@@ -258,7 +258,16 @@ describe("jira setup", () => {
       lines: [PUBLIC, SITE, EMAIL, "eng", "", "", "jira-software-users", "", "2027-06-30", ""],
       hidden: ["jira-token", ""],
     });
+    // What was logged and opened before the email was asked for.
+    let atEmail = { log: -1, opened: -1 };
+    const ask = deps.promptLine;
+    deps.promptLine = (q) => {
+      if (q === EMAIL_Q) atEmail = { log: w.log.length, opened: w.opened.length };
+      return ask(q);
+    };
     await setup(d, {}, deps);
+    expect(w.log.slice(0, atEmail.log)).toEqual([`Public URL: ${PUBLIC}`, ...TOKEN_HINT]);
+    expect(atEmail.opened).toBe(1);
     expect(w.asked).toEqual([
       URL_Q,
       SITE_Q,
@@ -605,6 +614,12 @@ describe("jira setup", () => {
     const narrowed = harness({ jira: noTrust, isTTY: false, env });
     await setup(narrowed.d, { trustedGroups: "jira-software-users" }, narrowed.deps);
     expect((readJson(narrowed.d.configPath).integrations as { jira: unknown }).jira).toEqual(JIRA);
+
+    // Empty flags switch a narrowed config back to the site.
+    const reset = harness({ jira: { ...JIRA, trustedUsers: [USER_ID] }, isTTY: false, env });
+    await setup(reset.d, { trustedGroups: "", trustedUsers: "" }, reset.deps);
+    expect((readJson(reset.d.configPath).integrations as { jira: unknown }).jira).toEqual(noTrust);
+    expect(reset.w.log).toContain(SITE_TRUST);
   });
 
   it("opens the permissions pages a failing check points to, the first project's only", async () => {
@@ -645,6 +660,18 @@ describe("jira setup", () => {
     await setup(site.d, { projects: "DEV" }, site.deps);
     expect(site.w.opened).toEqual([]);
     expect(site.w.log.some((l) => l.includes("GlobalPermissions"))).toBe(false);
+  });
+
+  it("a re-run with a new public URL opens the webhooks page", async () => {
+    const { d, deps, w } = harness({
+      jira: JIRA,
+      publicUrl: "https://old.example.com",
+      saved: { "compose/JIRA_API_TOKEN": "jira-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
+      hidden: [""],
+    });
+    await setup(d, { publicUrl: PUBLIC }, deps);
+    expect(w.opened).toEqual([WEBHOOKS]);
+    expect(w.log).toContain(`  URL     ${PUBLIC}/webhook/jira`);
   });
 
   it("a re-run that generates a new webhook secret opens the webhooks page", async () => {

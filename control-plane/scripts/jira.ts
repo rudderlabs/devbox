@@ -58,7 +58,7 @@ in Jira yourself.
   --projects <KEY,…>       the project keys devbox works in, e.g. ENG
   --trusted-groups <names> only these Jira groups' members may assign issues to
                            devbox (default: everyone with access to the site)
-  --trusted-users <ids>    account ids of other people who may
+  --trusted-users <ids>    account ids of people who may, besides any groups
   --token-expires <date>   when the API token expires, e.g. 2027-01-31
   --no-keychain            never read or write the system keychain
   --forget                 disable: delete the configuration and saved secrets
