@@ -175,6 +175,11 @@ gitlab:
   # -- GitLab usernames who may drive devbox. Required with trustedGroups (either) when
   # integrations.gitlab is enabled.
   trustedUsers: []
+  git:
+    # -- Commit identity for commits on GitLab repos, instead of `git` above (the GitHub
+    # user's). `bun run k8s:install` sets the token's GitLab user. Both or neither.
+    name: ""
+    email: ""
 
 controlPlane:
   # -- More than one adds a PodDisruptionBudget.

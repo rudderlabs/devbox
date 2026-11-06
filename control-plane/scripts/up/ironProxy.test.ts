@@ -84,6 +84,65 @@ describe("renderIronProxyConfig", () => {
     });
   });
 
+  it("adds a GitLab project's git and API paths, the trust lookups and the token swap", () => {
+    const withGitlab = parseConfig({
+      repos: [
+        { url: "https://github.com/a/x.git" },
+        { url: "https://git.example.com/gitlab/platform/backend/api.git", branch: "develop" },
+      ],
+      gitlab: {
+        baseUrl: "https://git.example.com/gitlab",
+        trustedGroups: ["platform", "platform/backend"],
+      },
+      llm: { baseUrl: "https://openrouter.ai/api/v1", model: "m" },
+    });
+    const doc = parse(renderIronProxyConfig(template, withGitlab, "9.9.9.9:53"));
+    const rules = doc.transforms[0].config.rules;
+    expect(rules.filter((r: { host: string }) => r.host === "git.example.com")).toEqual([
+      {
+        host: "git.example.com",
+        paths: ["/gitlab/platform/backend/api/*", "/gitlab/platform/backend/api.git/*"],
+      },
+      {
+        host: "git.example.com",
+        paths: [
+          "/gitlab/api/v4/projects/platform/backend/api",
+          "/gitlab/api/v4/projects/platform/backend/api/*",
+        ],
+      },
+      {
+        host: "git.example.com",
+        methods: ["GET", "HEAD"],
+        paths: [
+          "/gitlab/api/v4/groups/platform/members/all",
+          "/gitlab/api/v4/groups/platform/backend/members/all",
+          "/gitlab/api/v4/users",
+        ],
+      },
+    ]);
+    // The GitLab repo gets no github.com rule; the GitHub one is untouched.
+    expect(
+      JSON.stringify(rules.filter((r: { host: string }) => r.host !== "git.example.com")),
+    ).not.toContain("backend");
+    expect(rules).toContainEqual({ host: "github.com", paths: ["/a/x/*", "/a/x.git/*"] });
+    // The token swap sits between GitHub's and the LLM's, as in the chart.
+    expect(
+      doc.transforms[1].config.secrets.map((s: { source: { var: string } }) => s.source.var),
+    ).toEqual(["GITHUB_TOKEN", "GITLAB_TOKEN", "LLM_API_KEY"]);
+    expect(doc.transforms[1].config.secrets[1]).toEqual({
+      source: { type: "env", var: "GITLAB_TOKEN" },
+      proxy_value: "proxy-gitlab-dummy-token",
+      match_headers: ["Authorization", "PRIVATE-TOKEN"],
+      rules: [{ host: "git.example.com" }],
+    });
+  });
+
+  it("has no GitLab rules without an instance", () => {
+    const text = renderIronProxyConfig(template, cfg, "9.9.9.9:53");
+    expect(text).not.toContain("GITLAB_TOKEN");
+    expect(text).not.toContain("/api/v4/");
+  });
+
   const rulesFor = (github: { trustedOrgs: string[]; trustedUsers: string[] }) =>
     parse(renderIronProxyConfig(template, { ...cfg, github }, "9.9.9.9:53")).transforms[0].config
       .rules;

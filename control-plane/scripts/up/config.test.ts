@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, loadConfig, parseConfig } from "./config";
+import { ConfigError, loadConfig, needsGithub, parseConfig } from "./config";
 
 const dir = mkdtempSync(join(tmpdir(), "devbox-config-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -521,6 +521,23 @@ describe("parseConfig with gitlab", () => {
     ...(gitlab === null ? {} : { gitlab }),
   });
 
+  it("gitlab.trustedGroups and trustedUsers: Compose's trust lists", () => {
+    const cfg = parseConfig(
+      withGitlab([{ url: `${GITLAB}/acme/api.git` }], {
+        baseUrl: GITLAB,
+        trustedGroups: ["acme", "acme/platform"],
+        trustedUsers: [" carol "],
+      }),
+    );
+    expect(cfg.gitlab?.trustedGroups).toEqual(["acme", "acme/platform"]);
+    expect(cfg.gitlab?.trustedUsers).toEqual(["carol"]);
+    expect(() =>
+      parseConfig(
+        withGitlab([{ url: `${GITLAB}/acme/api.git` }], { baseUrl: GITLAB, trustedUsers: [""] }),
+      ),
+    ).toThrow("gitlab.trustedUsers[0]: must be a non-empty string");
+  });
+
   it("gitlab.caFile: an absolute path, kept; anything else refused", () => {
     const cfg = parseConfig(
       withGitlab([{ url: `${GITLAB}/acme/api.git` }], {
@@ -528,7 +545,12 @@ describe("parseConfig with gitlab", () => {
         caFile: "/etc/corp-ca.pem",
       }),
     );
-    expect(cfg.gitlab).toEqual({ baseUrl: GITLAB, caFile: "/etc/corp-ca.pem" });
+    expect(cfg.gitlab).toEqual({
+      baseUrl: GITLAB,
+      caFile: "/etc/corp-ca.pem",
+      trustedGroups: [],
+      trustedUsers: [],
+    });
     expect(() =>
       parseConfig(
         withGitlab([{ url: `${GITLAB}/acme/api.git` }], { baseUrl: GITLAB, caFile: "corp-ca.pem" }),
@@ -544,7 +566,7 @@ describe("parseConfig with gitlab", () => {
         { url: `${GITLAB}/tools/cli.git` },
       ]),
     );
-    expect(cfg.gitlab).toEqual({ baseUrl: GITLAB });
+    expect(cfg.gitlab).toEqual({ baseUrl: GITLAB, trustedGroups: [], trustedUsers: [] });
     expect(cfg.repos).toEqual([
       {
         url: "https://github.com/acme/app.git",
@@ -576,7 +598,11 @@ describe("parseConfig with gitlab", () => {
         baseUrl: "https://example.com/gitlab/",
       }),
     );
-    expect(cfg.gitlab).toEqual({ baseUrl: "https://example.com/gitlab" });
+    expect(cfg.gitlab).toEqual({
+      baseUrl: "https://example.com/gitlab",
+      trustedGroups: [],
+      trustedUsers: [],
+    });
     expect(cfg.repos[0]).toMatchObject({ host: "gitlab", owner: "acme", name: "app" });
   });
 
@@ -627,9 +653,31 @@ describe("parseConfig with gitlab", () => {
     [
       "an unknown gitlab key",
       withGitlab([{ url: "https://github.com/acme/app.git" }], { baseUrl: GITLAB, token: "x" }),
-      'gitlab: unknown key "token" (allowed: baseUrl, caFile)',
+      'gitlab: unknown key "token" (allowed: baseUrl, caFile, trustedGroups, trustedUsers)',
     ],
   ])("refuses %s", (_name, raw, message) => {
     expect(() => parseConfig(raw)).toThrow(new ConfigError(`devbox.config.json: ${message}`));
+  });
+});
+
+describe("needsGithub", () => {
+  const gh = {
+    url: "https://github.com/a/x.git",
+    branch: "main",
+    host: "github",
+    owner: "a",
+    name: "x",
+  } as const;
+  const gl = {
+    url: "https://git.example.com/g/p.git",
+    branch: "main",
+    host: "gitlab",
+    owner: "g",
+    name: "p",
+  } as const;
+  it("is true with a GitHub repo or the GitHub App, false with GitLab repos alone", () => {
+    expect(needsGithub([gh, gl], undefined)).toBe(true);
+    expect(needsGithub([gl], { enabled: true })).toBe(true);
+    expect(needsGithub([gl], undefined)).toBe(false);
   });
 });

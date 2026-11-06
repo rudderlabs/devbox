@@ -44,22 +44,36 @@ export type RepoConfig = {
 };
 
 // The configured GitLab instance, or undefined: {baseUrl} with no trailing
-// slash, and caFile, the PEM of the private CA that signed its certificate,
-// when it has one (the installer puts it in a Secret for the chart).
-export type GitlabConfig = { baseUrl: string; caFile?: string };
+// slash; caFile, the PEM of the private CA that signed its certificate, when
+// it has one (the installer puts it in a Secret for the chart; `up` mounts
+// it); and who may drive the agent from GitLab (Compose; on k8s these are the
+// target's values.gitlab). Empty lists by default.
+export type GitlabConfig = {
+  baseUrl: string;
+  caFile?: string;
+  // Always set by the parser; optional so callers that only know the instance
+  // (the k8s commands, which take trust from the target) can build one.
+  trustedGroups?: string[];
+  trustedUsers?: string[];
+};
 
 // The repos on GitHub: what the GitHub token checks and the App's token cover.
 export const githubRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
   repos.filter((r) => r.host === "github");
 export const gitlabRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
   repos.filter((r) => r.host === "gitlab");
+// Whether the deployment talks to GitHub at all: a repo there, or the GitHub
+// App. Without either no GitHub token is asked for, checked or needed (the
+// token Secret then exists empty on Kubernetes, a placeholder on Compose).
+export const needsGithub = (repos: readonly RepoConfig[], githubApp: unknown): boolean =>
+  githubApp !== undefined || githubRepos(repos).length > 0;
 
 export type SandboxConfig = { maxConcurrent: number; cpu: string; memory: string };
 
 type BaseDevboxConfig = {
   repos: RepoConfig[];
   llm: LlmConfig;
-  // Set when any repo may live on a GitLab instance (Kubernetes only).
+  // Set when any repo may live on a GitLab instance.
   gitlab?: GitlabConfig;
   // The deployment's public URL for webhooks, validated.
   publicUrl?: string;
@@ -155,16 +169,18 @@ function parseRepo(raw: unknown, i: number, gitlab: GitlabConfig | undefined): R
   return { url: url as string, branch, host, owner, name };
 }
 
-// gitlab: {baseUrl, caFile}. The URL's origin and path, no trailing slash;
-// like llm.baseUrl it must use the default port, because iron-proxy
-// intercepts only 80 and 443. The chart validates the same way
-// (templates/validate.yaml). caFile is read by the installer, not here.
+// gitlab: {baseUrl, caFile, trustedGroups, trustedUsers}. The URL's origin
+// and path, no trailing slash; like llm.baseUrl it must use the default port,
+// because iron-proxy intercepts only 443. The chart validates the same way
+// (templates/validate.yaml). caFile is read by `up` and the installer, not
+// here. The trust lists are Compose's; a k8s target holds its own.
 function parseGitlab(raw: unknown): GitlabConfig | undefined {
   if (raw === undefined) return undefined;
   if (!isObject(raw)) return fail("gitlab: must be an object");
-  const extra = Object.keys(raw).find((k) => k !== "baseUrl" && k !== "caFile");
+  const allowed = ["baseUrl", "caFile", "trustedGroups", "trustedUsers"];
+  const extra = Object.keys(raw).find((k) => !allowed.includes(k));
   if (extra !== undefined) {
-    return fail(`gitlab: unknown key ${JSON.stringify(extra)} (allowed: baseUrl, caFile)`);
+    return fail(`gitlab: unknown key ${JSON.stringify(extra)} (allowed: ${allowed.join(", ")})`);
   }
   let caFile: string | undefined;
   if (raw.caFile !== undefined) {
@@ -190,6 +206,8 @@ function parseGitlab(raw: unknown): GitlabConfig | undefined {
   return {
     baseUrl: `${url.origin}${url.pathname.replace(/\/+$/, "")}`,
     ...(caFile !== undefined ? { caFile } : {}),
+    trustedGroups: parseTrustList(raw, "trustedGroups", "gitlab"),
+    trustedUsers: parseTrustList(raw, "trustedUsers", "gitlab"),
   };
 }
 
@@ -297,10 +315,10 @@ function parseLlm(raw: unknown): DevboxConfig["llm"] {
   };
 }
 
-function parseTrustList(raw: Record<string, unknown>, key: string): string[] {
+function parseTrustList(raw: Record<string, unknown>, key: string, block = "github"): string[] {
   const v = raw[key];
   if (v === undefined) return [];
-  const field = `github.${key}`;
+  const field = `${block}.${key}`;
   if (!Array.isArray(v)) return fail(`${field}: must be a list of non-empty strings`);
   return v.map((item, i) =>
     typeof item === "string" && item.trim()

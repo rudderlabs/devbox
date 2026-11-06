@@ -31,7 +31,7 @@ import { confirm, promptHidden, promptLine } from "./up/prompt";
 const COMMANDS = ["setup", "status", "disable"];
 
 const USAGE = `Usage:
-  bun run gitlab:setup --target <file> [--public-url <url>]
+  bun run gitlab:setup [--target <file>] [--public-url <url>]
                        [--trusted-group <group>]... [--trusted-user <name>]...
                        [--secret-token] [--bot-username <name> --bot-user-id <id>]
                        [--skip-webhook] [--skip-push-check] [--no-keychain]
@@ -39,11 +39,12 @@ const USAGE = `Usage:
 Checks the GitLab token against the instance in devbox.config.json (gitlab.baseUrl)
 and the repos under it, learns the bot's identity from it, registers a webhook
 on each project (comments and pipelines) with a token it generates, saves the
-settings in the target file and, if you choose, the secrets in the system
-keychain. It applies nothing: it names the command that does (k8s:install).
+settings in devbox.config.json (Compose) or the target file (Kubernetes) and,
+if you choose, the secrets in the system keychain. It applies nothing: it names
+the command that does (bun run up, or k8s:install).
 
-  bun run gitlab:status  --target <file> [--no-keychain]
-  bun run gitlab:disable --target <file> [--no-keychain] [--forget [--yes]]
+  bun run gitlab:status  [--target <file>] [--no-keychain]
+  bun run gitlab:disable [--target <file>] [--no-keychain] [--forget [--yes]]
 
 status shows the configuration, where the secrets are found, what the control
 plane reports and whether the webhook URL reaches devbox. disable switches the
@@ -52,7 +53,7 @@ gitlab:setup turns them back on. --forget removes integrations.gitlab, the
 trust lists and the saved GitLab secrets instead, after you confirm (--yes
 confirms without a terminal); the webhooks in GitLab are left for you to delete.
 
-  --target <file>          the k8s deployment's target file (required)
+  --target <file>          a k8s deployment's target file; without it, the Compose stack
   --public-url <url>       the public HTTPS URL GitLab sends webhooks to
   --trusted-group <group>  a group (or group/subgroup) whose members may drive devbox
   --trusted-user <name>    a username who may drive devbox

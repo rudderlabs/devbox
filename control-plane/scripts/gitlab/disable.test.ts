@@ -51,6 +51,7 @@ async function run(o: {
   const d: GitlabDeployment = {
     deployment: K8S,
     configPath: path,
+    trustKey: "values.gitlab",
     instance: { baseUrl: "https://gitlab.example.com" },
     repos: [
       {

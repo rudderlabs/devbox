@@ -52,6 +52,22 @@ export function parseSandboxGitIdentity(
   return { name, email };
 }
 
+// The commit identity for repos on the GitLab instance (the chart's
+// gitlab.git, the installer's from the token's user). A sandbox has one
+// identity of its own, the GitHub user's or App bot's; without this one,
+// commits on GitLab would carry that GitHub name. Both or neither.
+export function parseSandboxGitlabGitIdentity(
+  env: Record<string, string | undefined>,
+): GitIdentity | undefined {
+  const name = env.SANDBOX_GITLAB_GIT_NAME?.trim();
+  const email = env.SANDBOX_GITLAB_GIT_EMAIL?.trim();
+  if (!name && !email) return undefined;
+  if (!name || !email) {
+    throw new Error("SANDBOX_GITLAB_GIT_NAME and SANDBOX_GITLAB_GIT_EMAIL must be set together");
+  }
+  return { name, email };
+}
+
 // The one self-managed GitLab instance sandboxes may push to and open merge
 // requests on (GITLAB_BASE_URL; the chart sets it from gitlab.baseUrl).
 // Normalised to scheme://host[/prefix] with no trailing slash, so the harness,

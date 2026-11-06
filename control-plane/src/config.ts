@@ -7,6 +7,7 @@ import { parseSlackConfig } from "./integrationsConfig";
 import {
   parseGitlabBaseUrl,
   parseSandboxGitIdentity,
+  parseSandboxGitlabGitIdentity,
   parseSandboxRuntimeConfig,
 } from "./sandboxConfig";
 
@@ -155,6 +156,7 @@ export const config = {
     reconcileFilesTimeoutMs,
     // Commit identity for sandboxes; see sandboxConfig.ts.
     gitIdentity: parseSandboxGitIdentity(process.env),
+    gitlabGitIdentity: parseSandboxGitlabGitIdentity(process.env),
     // Only the reviewed HARNESS_* names in forwardedEnv.ts cross into the
     // sandbox. New harness settings require an explicit contract update, so
     // platform-injected variables and stray control-plane values stay out. Real

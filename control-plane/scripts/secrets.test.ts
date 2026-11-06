@@ -57,12 +57,15 @@ describe("bun run secrets", () => {
     expect(s.out.join("\n")).toBe(
       [
         "Secrets for compose:",
-        "  GITHUB_TOKEN            env",
-        "  LLM_API_KEY             keychain",
-        "  LINEAR_CLIENT_SECRET    missing",
-        "  LINEAR_WEBHOOK_SECRET   missing",
-        "  GITHUB_APP_PRIVATE_KEY  missing",
-        "  GITHUB_WEBHOOK_SECRET   missing",
+        "  GITHUB_TOKEN                  env",
+        "  LLM_API_KEY                   keychain",
+        "  LINEAR_CLIENT_SECRET          missing",
+        "  LINEAR_WEBHOOK_SECRET         missing",
+        "  GITHUB_APP_PRIVATE_KEY        missing",
+        "  GITHUB_WEBHOOK_SECRET         missing",
+        "  GITLAB_TOKEN                  missing",
+        "  GITLAB_WEBHOOK_SIGNING_TOKEN  missing",
+        "  GITLAB_WEBHOOK_SECRET         missing",
       ].join("\n"),
     );
     expect(s.ran).toEqual([]);
@@ -74,12 +77,15 @@ describe("bun run secrets", () => {
     expect(s.out.join("\n")).toBe(
       [
         "Secrets for compose:",
-        "  GITHUB_TOKEN            gh",
-        "  LLM_API_KEY             missing",
-        "  LINEAR_CLIENT_SECRET    missing",
-        "  LINEAR_WEBHOOK_SECRET   missing",
-        "  GITHUB_APP_PRIVATE_KEY  missing",
-        "  GITHUB_WEBHOOK_SECRET   missing",
+        "  GITHUB_TOKEN                  gh",
+        "  LLM_API_KEY                   missing",
+        "  LINEAR_CLIENT_SECRET          missing",
+        "  LINEAR_WEBHOOK_SECRET         missing",
+        "  GITHUB_APP_PRIVATE_KEY        missing",
+        "  GITHUB_WEBHOOK_SECRET         missing",
+        "  GITLAB_TOKEN                  missing",
+        "  GITLAB_WEBHOOK_SIGNING_TOKEN  missing",
+        "  GITLAB_WEBHOOK_SECRET         missing",
       ].join("\n"),
     );
     expect(s.ran).toEqual([["gh", "auth", "token"]]);
@@ -92,19 +98,22 @@ describe("bun run secrets", () => {
       expect(s.out.join("\n")).toBe(
         [
           "Secrets for compose:",
-          "  GITHUB_TOKEN            missing",
-          "  LLM_API_KEY             missing",
-          "  LINEAR_CLIENT_SECRET    missing",
-          "  LINEAR_WEBHOOK_SECRET   missing",
-          "  GITHUB_APP_PRIVATE_KEY  missing",
-          "  GITHUB_WEBHOOK_SECRET   missing",
+          "  GITHUB_TOKEN                  missing",
+          "  LLM_API_KEY                   missing",
+          "  LINEAR_CLIENT_SECRET          missing",
+          "  LINEAR_WEBHOOK_SECRET         missing",
+          "  GITHUB_APP_PRIVATE_KEY        missing",
+          "  GITHUB_WEBHOOK_SECRET         missing",
+          "  GITLAB_TOKEN                  missing",
+          "  GITLAB_WEBHOOK_SIGNING_TOKEN  missing",
+          "  GITLAB_WEBHOOK_SECRET         missing",
         ].join("\n"),
       );
       expect(s.ran).toEqual([["gh", "auth", "token"]]);
     }
   });
 
-  it("secrets ls on k8s lists ten names; on Compose six", async () => {
+  it("secrets ls on k8s lists ten names; on Compose nine", async () => {
     const s = setup({ entries: { "k8s:ctx/devbox/LLM_API_KEY": "sk-x" } });
     expect(await secretsCommand(["ls", "--target", "t.json"], s.deps)).toBe(0);
     expect(s.out.join("\n")).toBe(
@@ -116,10 +125,10 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET         missing",
         "  GITHUB_APP_PRIVATE_KEY        missing",
         "  GITHUB_WEBHOOK_SECRET         missing",
-        "  SLACK_BOT_TOKEN               missing",
         "  GITLAB_TOKEN                  missing",
         "  GITLAB_WEBHOOK_SIGNING_TOKEN  missing",
         "  GITLAB_WEBHOOK_SECRET         missing",
+        "  SLACK_BOT_TOKEN               missing",
       ].join("\n"),
     );
   });
@@ -154,12 +163,15 @@ describe("bun run secrets", () => {
       expect(s.out.join("\n")).toBe(
         [
           "Secrets for compose:",
-          "  GITHUB_TOKEN            missing",
-          "  LLM_API_KEY             missing",
-          "  LINEAR_CLIENT_SECRET    missing",
-          "  LINEAR_WEBHOOK_SECRET   missing",
-          `  GITHUB_APP_PRIVATE_KEY  ${key}`,
-          "  GITHUB_WEBHOOK_SECRET   missing",
+          "  GITHUB_TOKEN                  missing",
+          "  LLM_API_KEY                   missing",
+          "  LINEAR_CLIENT_SECRET          missing",
+          "  LINEAR_WEBHOOK_SECRET         missing",
+          `  GITHUB_APP_PRIVATE_KEY        ${key}`,
+          "  GITHUB_WEBHOOK_SECRET         missing",
+          "  GITLAB_TOKEN                  missing",
+          "  GITLAB_WEBHOOK_SIGNING_TOKEN  missing",
+          "  GITLAB_WEBHOOK_SECRET         missing",
         ].join("\n"),
       );
     };
@@ -193,6 +205,9 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET           missing",
         "  GITHUB_APP_PRIVATE_KEY          missing",
         "  GITHUB_WEBHOOK_SECRET           missing",
+        "  GITLAB_TOKEN                    missing",
+        "  GITLAB_WEBHOOK_SIGNING_TOKEN    missing",
+        "  GITLAB_WEBHOOK_SECRET           missing",
         "  GITHUB_APP_PRIVATE_KEY_PENDING  keychain (GitHub App private key of the new App, not installed yet)",
       ].join("\n"),
     );
@@ -207,6 +222,9 @@ describe("bun run secrets", () => {
         "  LINEAR_WEBHOOK_SECRET           missing",
         "  GITHUB_APP_PRIVATE_KEY          missing",
         "  GITHUB_WEBHOOK_SECRET           missing",
+        "  GITLAB_TOKEN                    missing",
+        "  GITLAB_WEBHOOK_SIGNING_TOKEN    missing",
+        "  GITLAB_WEBHOOK_SECRET           missing",
         "  GITHUB_APP_PRIVATE_KEY_PENDING  keychain (GitHub App private key of the new App, not installed yet)",
         "  GITHUB_WEBHOOK_SECRET_PENDING   keychain (GitHub webhook secret of the new App, not installed yet)",
       ].join("\n"),
@@ -236,7 +254,7 @@ describe("bun run secrets", () => {
     const s = setup({ entries: ALL });
     expect(await secretsCommand(["rm", "NOPE"], s.deps)).toBe(2);
     expect(s.out).toEqual([
-      'unknown secret "NOPE": use one of GITHUB_TOKEN, LLM_API_KEY, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY_PENDING, GITHUB_WEBHOOK_SECRET_PENDING',
+      'unknown secret "NOPE": use one of GITHUB_TOKEN, LLM_API_KEY, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, GITLAB_TOKEN, GITLAB_WEBHOOK_SIGNING_TOKEN, GITLAB_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY_PENDING, GITHUB_WEBHOOK_SECRET_PENDING',
     ]);
     expect(Object.keys(s.keychain.entries())).toHaveLength(4);
   });

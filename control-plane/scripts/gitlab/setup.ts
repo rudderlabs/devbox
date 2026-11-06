@@ -306,17 +306,17 @@ export async function setup(
   const ciResults = d.gitlab?.ciResults ?? true;
   writeConfigKeys(d.configPath, {
     "integrations.gitlab": { enabled: true, botUsername, botUserId, ciResults, webhookAuth: auth },
-    "values.gitlab.trustedGroups": trust.trustedGroups,
-    "values.gitlab.trustedUsers": trust.trustedUsers,
+    [`${d.trustKey}.trustedGroups`]: trust.trustedGroups,
+    [`${d.trustKey}.trustedUsers`]: trust.trustedUsers,
     publicUrl,
   });
-  log(`Wrote integrations.gitlab and values.gitlab to ${d.configPath}`);
+  log(`Wrote integrations.gitlab and ${d.trustKey} to ${d.configPath}`);
   for (const line of publicUrlChangeLines(
     d.publicUrl,
     publicUrl,
     { linear: d.linear, ...(d.githubApp ? { githubApp: d.githubApp } : {}) },
     "linear",
-    ` --target ${d.configPath}`,
+    d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : "",
   )) {
     log(line);
   }

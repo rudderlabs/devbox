@@ -8,6 +8,7 @@ import {
   composeProfiles,
   composeStartSteps,
   githubComposeEnv,
+  gitlabComposeEnv,
   ironProxyTokenOptions,
   linearComposeEnv,
   llmSummary,
@@ -42,6 +43,25 @@ const MODEL_ENV_EMPTY = {
   HARNESS_FOLLOWUP_MODEL: "",
   HARNESS_FOLLOWUP_REASONING_EFFORT: "",
 };
+// The GitLab values without an instance: all empty, as for GitHub.
+const GITLAB_OFF = {
+  GITLAB_BASE_URL: "",
+  GITLAB_TOKEN: "",
+  GITLAB_WEBHOOKS_ENABLED: "",
+  GITLAB_WEBHOOK_SIGNING_TOKEN: "",
+  GITLAB_WEBHOOK_SECRET: "",
+  GITLAB_BOT_USERNAME: "",
+  GITLAB_BOT_USER_ID: "",
+  GITLAB_CI_RESULT_ENABLED: "",
+  GITLAB_TRUSTED_GROUPS: "",
+  GITLAB_TRUSTED_USERS: "",
+  IRON_PROXY_GITLAB_HOST: "",
+  IRON_PROXY_SSL_CERT_FILE: "",
+  CONTROL_PLANE_NODE_EXTRA_CA_CERTS: "",
+  SANDBOX_GITLAB_GIT_NAME: "",
+  SANDBOX_GITLAB_GIT_EMAIL: "",
+};
+
 const common = {
   PATH: "/usr/bin",
   MAX_CONCURRENT_SANDBOXES: "5",
@@ -55,6 +75,7 @@ const common = {
   HARNESS_MODEL: "m1",
   HARNESS_LLM_PROVIDER: "openai",
   ...MODEL_ENV_EMPTY,
+  ...GITLAB_OFF,
 };
 
 const OFF = {
@@ -245,6 +266,7 @@ describe("composeEnvFor", () => {
       HARNESS_MODEL: "m1",
       HARNESS_LLM_PROVIDER: "openai",
       ...MODEL_ENV_EMPTY,
+      ...GITLAB_OFF,
       GITHUB_TOKEN: "no-github-token",
       LLM_API_KEY: "",
       ...OFF,
@@ -569,5 +591,90 @@ describe("docker-compose.yml", () => {
     ]) {
       expect(env[name]).toBe(empty(name));
     }
+  });
+});
+
+describe("gitlabComposeEnv", () => {
+  const instance = {
+    baseUrl: "https://git.example.com/gitlab",
+    trustedGroups: ["platform", "platform/backend"],
+    trustedUsers: ["carol"],
+  };
+  const webhooks = {
+    enabled: true as const,
+    botUsername: "devbox",
+    botUserId: 2,
+    ciResults: true,
+    webhookAuth: "signing" as const,
+  };
+
+  it("is all empty without an instance, whatever the shell holds", () => {
+    expect(gitlabComposeEnv(undefined, webhooks, { token: "glpat" })).toEqual(GITLAB_OFF);
+  });
+
+  it("sets the instance, token, trust lists and proxy alias; webhooks off", () => {
+    expect(gitlabComposeEnv(instance, undefined, { token: "glpat" })).toEqual({
+      ...GITLAB_OFF,
+      GITLAB_BASE_URL: "https://git.example.com/gitlab",
+      GITLAB_TOKEN: "glpat",
+      GITLAB_TRUSTED_GROUPS: "platform,platform/backend",
+      GITLAB_TRUSTED_USERS: "carol",
+      IRON_PROXY_GITLAB_HOST: "git.example.com",
+    });
+    expect(() => gitlabComposeEnv(instance, undefined)).toThrow("GITLAB_TOKEN was not resolved");
+  });
+
+  it("turns the webhooks on under the key webhookAuth names, and mounts a private CA", () => {
+    const withCa = { ...instance, caFile: "/etc/corp-ca.pem" };
+    expect(gitlabComposeEnv(withCa, webhooks, { token: "glpat", webhookToken: "whsec_x" })).toEqual(
+      {
+        ...GITLAB_OFF,
+        GITLAB_BASE_URL: "https://git.example.com/gitlab",
+        GITLAB_TOKEN: "glpat",
+        GITLAB_TRUSTED_GROUPS: "platform,platform/backend",
+        GITLAB_TRUSTED_USERS: "carol",
+        IRON_PROXY_GITLAB_HOST: "git.example.com",
+        IRON_PROXY_SSL_CERT_FILE: "/certs/gitlab-ca.crt",
+        CONTROL_PLANE_NODE_EXTRA_CA_CERTS: "/etc/devbox/ca/ca.crt",
+        GITLAB_WEBHOOKS_ENABLED: "true",
+        GITLAB_WEBHOOK_SIGNING_TOKEN: "whsec_x",
+        GITLAB_BOT_USERNAME: "devbox",
+        GITLAB_BOT_USER_ID: "2",
+        GITLAB_CI_RESULT_ENABLED: "true",
+      },
+    );
+    const legacy = gitlabComposeEnv(
+      instance,
+      { ...webhooks, webhookAuth: "secret" },
+      { token: "glpat", webhookToken: "hex" },
+    );
+    expect(legacy.GITLAB_WEBHOOK_SECRET).toBe("hex");
+    expect(legacy.GITLAB_WEBHOOK_SIGNING_TOKEN).toBe("");
+    expect(() => gitlabComposeEnv(instance, webhooks, { token: "glpat" })).toThrow(
+      "GITLAB_WEBHOOK_SIGNING_TOKEN was not resolved",
+    );
+  });
+
+  it("passes the commit identity for GitLab repos when it is known", () => {
+    const env = gitlabComposeEnv(
+      instance,
+      undefined,
+      { token: "glpat" },
+      {
+        gitName: "devbox",
+        gitEmail: "2-devbox@users.noreply.git.example.com",
+      },
+    );
+    expect(env.SANDBOX_GITLAB_GIT_NAME).toBe("devbox");
+    expect(env.SANDBOX_GITLAB_GIT_EMAIL).toBe("2-devbox@users.noreply.git.example.com");
+    expect(gitlabComposeEnv(instance, undefined, { token: "glpat" }).SANDBOX_GITLAB_GIT_NAME).toBe(
+      "",
+    );
+  });
+
+  it("stays off with integrations.gitlab disabled", () => {
+    const env = gitlabComposeEnv(instance, { ...webhooks, enabled: false }, { token: "glpat" });
+    expect(env.GITLAB_WEBHOOKS_ENABLED).toBe("");
+    expect(env.GITLAB_BOT_USERNAME).toBe("");
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   parseGitlabBaseUrl,
   parseSandboxGitIdentity,
+  parseSandboxGitlabGitIdentity,
   parseSandboxRuntimeConfig,
 } from "../sandboxConfig";
 
@@ -96,5 +97,20 @@ describe("parseGitlabBaseUrl", () => {
     ["https://gitlab.example.com/?x=1", "must not have a query, fragment or credentials"],
   ])("rejects %s", (raw, message) => {
     expect(() => parseGitlabBaseUrl({ GITLAB_BASE_URL: raw })).toThrow(message);
+  });
+});
+
+describe("parseSandboxGitlabGitIdentity", () => {
+  it("reads both, is undefined with neither, and refuses one without the other", () => {
+    expect(parseSandboxGitlabGitIdentity({})).toBeUndefined();
+    expect(
+      parseSandboxGitlabGitIdentity({
+        SANDBOX_GITLAB_GIT_NAME: " devbox ",
+        SANDBOX_GITLAB_GIT_EMAIL: "2-devbox@users.noreply.git.example.com",
+      }),
+    ).toEqual({ name: "devbox", email: "2-devbox@users.noreply.git.example.com" });
+    expect(() => parseSandboxGitlabGitIdentity({ SANDBOX_GITLAB_GIT_NAME: "devbox" })).toThrow(
+      "SANDBOX_GITLAB_GIT_NAME and SANDBOX_GITLAB_GIT_EMAIL must be set together",
+    );
   });
 });

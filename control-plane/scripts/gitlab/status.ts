@@ -58,13 +58,13 @@ export async function status(d: GitlabDeployment, deps: StatusDeps): Promise<voi
   const g = d.gitlab;
   if (!g) {
     log(
-      `Webhooks are not configured for ${scope}. Run: bun run gitlab:setup --target ${d.configPath}`,
+      `Webhooks are not configured for ${scope}. Run: bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""}`,
     );
     return;
   }
   if (!g.enabled) {
     log(
-      `Webhooks are disabled for ${scope} (enabled: false in ${d.configPath}). Turn them on again: bun run gitlab:setup --target ${d.configPath}, or set enabled to true, then ${d.applyCommand}.`,
+      `Webhooks are disabled for ${scope} (enabled: false in ${d.configPath}). Turn them on again: bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""}, or set enabled to true, then ${d.applyCommand}.`,
     );
     return;
   }

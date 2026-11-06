@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { RepoConfig } from "../up/config";
 import { CredentialRejected, type Fetch } from "../up/preflight";
-import { checkGitlab, GitlabCheckError, versionAtLeast } from "./check";
+import { checkGitlab, GitlabCheckError, gitlabCommitIdentity, versionAtLeast } from "./check";
 
 type Req = { method: string; url: string; headers: Record<string, string>; body?: unknown };
 
@@ -274,5 +274,32 @@ describe("checkGitlab", () => {
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GitlabCheckError);
     expect(String((err as Error).message)).toContain("(the token needs Job: Read)");
+  });
+});
+
+describe("gitlabCommitIdentity", () => {
+  const instance = { baseUrl: "https://git.example.com/gitlab" };
+  it("is the user's name and GitLab's private commit email; none for an unknown identity", () => {
+    expect(
+      gitlabCommitIdentity(instance, {
+        id: 42,
+        username: "devbox",
+        name: "Dev Box",
+        bot: true,
+        version: "19.5.3",
+      }),
+    ).toEqual({ gitName: "Dev Box", gitEmail: "42-devbox@users.noreply.git.example.com" });
+    expect(
+      gitlabCommitIdentity(instance, {
+        id: 42,
+        username: "devbox",
+        name: "",
+        bot: false,
+        version: "",
+      }),
+    ).toEqual({ gitName: "devbox", gitEmail: "42-devbox@users.noreply.git.example.com" });
+    expect(
+      gitlabCommitIdentity(instance, { id: 0, username: "", name: "", bot: false, version: "" }),
+    ).toBeUndefined();
   });
 });

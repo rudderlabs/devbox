@@ -29,6 +29,10 @@ describe("chart validation", () => {
       "gitlab.baseUrl is set: secrets.gitlab.existingSecret is required",
     ],
     [
+      ["gitlab.git.name=devbox"],
+      "gitlab.git: name and email go together (the commit identity for GitLab repos)",
+    ],
+    [
       ["gitlab.baseUrl=https://gitlab.example.com:8443", "secrets.gitlab.existingSecret=s"],
       "gitlab.baseUrl: must use the default port (443)",
     ],
