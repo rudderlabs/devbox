@@ -1,7 +1,7 @@
 // The `integrations` block of a deployment's config: each
 // integration's `enabled` switch and its non-secret settings. Linear on both
-// platforms; the GitHub App on both; Slack on Kubernetes only. Secrets
-// never live here, and a secret never turns an integration on: only
+// platforms; the GitHub App on both; Slack and GitLab on Kubernetes only.
+// Secrets never live here, and a secret never turns an integration on: only
 // `enabled: true` does. Unknown keys are refused so a typo (or a pasted
 // secret) fails loudly.
 
@@ -34,10 +34,22 @@ export type GithubAppIntegration = {
 // publicUrl: the public URL the new App was set up with, when it differs
 // from the saved one; it becomes the deployment's once the App is installed.
 export type PendingGithubApp = { appId: number; slug: string; org?: string; publicUrl?: string };
+// GitLab webhooks (notes and pipelines on the agent's merge requests). The
+// bot is the user the GitLab token belongs to; gitlab:setup fills it in.
+// webhookAuth: how deliveries are verified, the signing token (GitLab 19.1+)
+// or the legacy secret token; it names the key in the integrations Secret.
+export type GitlabIntegration = {
+  enabled: boolean;
+  botUsername?: string;
+  botUserId?: number;
+  ciResults: boolean;
+  webhookAuth: "signing" | "secret";
+};
 export type Integrations = {
   linear?: LinearIntegration;
   slack?: SlackIntegration;
   githubApp?: GithubAppIntegration;
+  gitlab?: GitlabIntegration;
 };
 
 export type EnabledLinear = LinearIntegration & { enabled: true; clientId: string };
@@ -62,6 +74,24 @@ export function enabledGithubApp(i: Integrations): EnabledGithubApp | undefined 
   const g = i.githubApp;
   return g?.enabled ? (g as EnabledGithubApp) : undefined;
 }
+
+export type EnabledGitlab = GitlabIntegration & {
+  enabled: true;
+  botUsername: string;
+  botUserId: number;
+};
+
+// The GitLab block when it is on; parseIntegrations guarantees its keys.
+export function enabledGitlab(i: Integrations): EnabledGitlab | undefined {
+  const g = i.gitlab;
+  return g?.enabled ? (g as EnabledGitlab) : undefined;
+}
+
+// The integrations Secret key a GitLab webhook token goes under.
+export const gitlabWebhookSecretName = (
+  g: Pick<GitlabIntegration, "webhookAuth">,
+): "GITLAB_WEBHOOK_SIGNING_TOKEN" | "GITLAB_WEBHOOK_SECRET" =>
+  g.webhookAuth === "secret" ? "GITLAB_WEBHOOK_SECRET" : "GITLAB_WEBHOOK_SIGNING_TOKEN";
 
 type Fail = (msg: string) => never;
 
@@ -237,7 +267,27 @@ function parsePending(raw: unknown, fail: Fail): PendingGithubApp {
   };
 }
 
-const K8S_ONLY = ["slack"] as const;
+function parseGitlab(raw: unknown, fail: Fail): GitlabIntegration {
+  const f = "integrations.gitlab";
+  const b = block(raw, "gitlab", ["botUsername", "botUserId", "ciResults", "webhookAuth"], fail);
+  const botUsername = setting(b, f, "botUsername", nonEmpty(fail), fail);
+  const botUserId = setting(b, f, "botUserId", positiveInt(fail), fail);
+  const ciResults = b.obj.ciResults === undefined ? true : b.obj.ciResults;
+  if (typeof ciResults !== "boolean") return fail(`${f}.ciResults: must be true or false`);
+  const webhookAuth = b.obj.webhookAuth === undefined ? "signing" : b.obj.webhookAuth;
+  if (webhookAuth !== "signing" && webhookAuth !== "secret") {
+    return fail(`${f}.webhookAuth: must be "signing" or "secret"`);
+  }
+  return {
+    enabled: b.enabled,
+    ...(botUsername !== undefined ? { botUsername } : {}),
+    ...(botUserId !== undefined ? { botUserId } : {}),
+    ciResults,
+    webhookAuth,
+  };
+}
+
+const K8S_ONLY = ["slack", "gitlab"] as const;
 
 export function parseIntegrations(
   raw: unknown,
@@ -265,5 +315,6 @@ export function parseIntegrations(
   if (raw.githubApp !== undefined) {
     out.githubApp = parseGithubApp(raw.githubApp, fail, opts.platform);
   }
+  if (raw.gitlab !== undefined) out.gitlab = parseGitlab(raw.gitlab, fail);
   return out;
 }

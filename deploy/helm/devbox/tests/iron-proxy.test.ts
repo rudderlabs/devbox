@@ -137,7 +137,8 @@ describe("iron-proxy config with a GitLab instance", () => {
   it("allows the project's git and API paths under the instance's URL root, and nothing else there", async () => {
     const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
     const rules = config.transforms[0].config.rules as Doc[];
-    const gitlab = rules.filter((r) => r.host === "git.example.com");
+    // The project rules (any method); the read-only trust rules are tested below.
+    const gitlab = rules.filter((r) => r.host === "git.example.com" && !r.methods);
     expect(gitlab).toEqual([
       { host: "git.example.com", paths: ["/gitlab/platform/backend/api/*", "/gitlab/platform/backend/api.git/*"] },
       {
@@ -149,6 +150,31 @@ describe("iron-proxy config with a GitLab instance", () => {
     // The GitHub repo keeps its usual rules; the GitLab one gets none on github.com.
     expect(rules).toContainEqual({ host: "github.com", paths: ["/acme/widgets/*", "/acme/widgets.git/*"] });
     expect(JSON.stringify(rules.filter((r) => r.host !== "git.example.com"))).not.toContain("backend");
+  });
+
+  it("allows the trust lookups read-only: each trusted group's members, and usernames", async () => {
+    const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      'gitlab.trustedGroups={platform,platform/backend}',
+    ]);
+    const rules = config.transforms[0].config.rules as Doc[];
+    expect(rules.filter((r) => r.host === "git.example.com" && r.methods)).toEqual([
+      {
+        host: "git.example.com",
+        methods: ["GET", "HEAD"],
+        paths: [
+          "/gitlab/api/v4/groups/platform/members/all",
+          "/gitlab/api/v4/groups/platform/backend/members/all",
+          "/gitlab/api/v4/users",
+        ],
+      },
+    ]);
+    // Without groups, usernames can still be resolved.
+    const plain = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
+    const plainRules = plain.config.transforms[0].config.rules as Doc[];
+    expect(plainRules.filter((r) => r.host === "git.example.com" && r.methods)).toEqual([
+      { host: "git.example.com", methods: ["GET", "HEAD"], paths: ["/gitlab/api/v4/users"] },
+    ]);
   });
 
   it("swaps the GitLab token on the Authorization header for that host only", async () => {
@@ -195,12 +221,38 @@ describe("iron-proxy config with a GitLab instance", () => {
       secret: { secretName: "corp-ca", defaultMode: MODE_0440, items: [{ key: "ca.crt", path: "ca.crt" }] },
     });
     expect(deployment.spec.template.metadata.annotations["checksum/ca-bundle"]).toMatch(/^[0-9a-f]{64}$/);
+    // The control plane (its own GitLab calls) and the snapshot builder (clones)
+    // talk to the instance directly too, so they get the bundle as well.
+    const caVolume = {
+      name: "ca-bundle",
+      secret: { secretName: "corp-ca", defaultMode: MODE_0440, items: [{ key: "ca.crt", path: "ca.crt" }] },
+    };
+    const caMount = { name: "ca-bundle", mountPath: "/etc/devbox/ca", readOnly: true };
+    const cp = (rendered["Deployment/devbox/devbox-control-plane"] as Doc).spec.template;
+    expect(cp.spec.containers[0].env).toContainEqual({ name: "NODE_EXTRA_CA_CERTS", value: "/etc/devbox/ca/ca.crt" });
+    expect(cp.spec.containers[0].volumeMounts).toContainEqual(caMount);
+    // 0444: the control plane runs as uid 1000 without an fsGroup, and a CA
+    // certificate is public.
+    expect(cp.spec.volumes).toContainEqual({ ...caVolume, secret: { ...caVolume.secret, defaultMode: 444 } });
+    expect(cp.metadata.annotations["checksum/ca-bundle"]).toMatch(/^[0-9a-f]{64}$/);
+    // The builder runs in the sandbox namespace, so it reads the Secret
+    // through the API like the tokens, and its Role names it.
+    const builder = (rendered["CronJob/devbox-sandboxes/devbox-snapshot-builder"] as Doc).spec.jobTemplate.spec.template.spec;
+    expect(builder.containers[0].env).toContainEqual({ name: "GITLAB_CA_SECRET", value: "corp-ca" });
+    expect(JSON.stringify(builder.volumes)).not.toContain("ca-bundle");
+    expect((rendered["Role/devbox/devbox-snapshot-builder-token"] as Doc).rules[0].resourceNames).toEqual([
+      "devbox-github",
+      "my-gitlab-token",
+      "corp-ca",
+    ]);
     // Without it: no env, no mount, as before.
     const plain = (await chartConfig("https://llm.example.com/v1")).rendered;
     const plainSpec = (plain["Deployment/devbox/devbox-iron-proxy"] as Doc).spec.template.spec;
     expect(plainSpec.containers[0].env).toBeUndefined();
     expect(JSON.stringify(plainSpec.volumes)).not.toContain("ca-bundle");
     expect(JSON.stringify(plainSpec.volumes)).not.toContain("gitlab");
+    expect(JSON.stringify(plain["Deployment/devbox/devbox-control-plane"])).not.toContain("ca-bundle");
+    expect(JSON.stringify(plain["CronJob/devbox-sandboxes/devbox-snapshot-builder"])).not.toContain("ca-bundle");
   });
 
   it("lets the snapshot builder read the GitLab token Secret, and only with GitLab on", async () => {

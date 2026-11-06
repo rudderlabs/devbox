@@ -228,6 +228,57 @@ describe("apiIngressUrl", () => {
 });
 
 describe("chartValues with gitlab", () => {
+  it("gitlab: the block, the installer's Secret names and the CA bundle", () => {
+    const gitlabCfg: DevboxConfig = {
+      ...cfg,
+      gitlab: { baseUrl: "https://gitlab.example.com", caFile: "/ca.pem" },
+    };
+    const integrations = {
+      gitlab: {
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: false,
+        webhookAuth: "secret" as const,
+      },
+    };
+    expect(
+      chartValues(
+        gitlabCfg,
+        {},
+        {
+          clusterIP: "10.96.0.20",
+          integrations,
+          gitlabSecret: "devbox-gitlab",
+          gitlabCaSecret: "devbox-gitlab-ca",
+        },
+      ),
+    ).toEqual({
+      repos: [{ url: "https://github.com/acme/widgets.git", branch: "main" }],
+      llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "gpt-test" },
+      gitlab: { baseUrl: "https://gitlab.example.com" },
+      secrets: { gitlab: { existingSecret: "devbox-gitlab" } },
+      ironProxy: { clusterIP: "10.96.0.20", caBundle: "devbox-gitlab-ca" },
+      // webhookAuth is not a chart value: the Secret key says which token it is.
+      integrations: {
+        gitlab: { enabled: true, botUsername: "devbox", botUserId: 2, ciResults: false },
+      },
+    });
+    // The user's own token Secret: no installer name, and the CA bundle alone.
+    expect(
+      chartValues(
+        gitlabCfg,
+        { secrets: { gitlab: { existingSecret: "mine" } } },
+        {
+          gitlabCaSecret: "devbox-gitlab-ca",
+        },
+      ),
+    ).toMatchObject({
+      secrets: { gitlab: { existingSecret: "mine" } },
+      ironProxy: { caBundle: "devbox-gitlab-ca" },
+    });
+  });
+
   it("passes gitlab.baseUrl through and leaves it out otherwise", () => {
     expect("gitlab" in chartValues(cfg, {}, {})).toBe(false);
     const withGitlab: DevboxConfig = {

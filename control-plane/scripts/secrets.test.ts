@@ -104,19 +104,22 @@ describe("bun run secrets", () => {
     }
   });
 
-  it("secrets ls on k8s lists seven names; on Compose six", async () => {
+  it("secrets ls on k8s lists ten names; on Compose six", async () => {
     const s = setup({ entries: { "k8s:ctx/devbox/LLM_API_KEY": "sk-x" } });
     expect(await secretsCommand(["ls", "--target", "t.json"], s.deps)).toBe(0);
     expect(s.out.join("\n")).toBe(
       [
         "Secrets for k8s:ctx/devbox:",
-        "  GITHUB_TOKEN            missing",
-        "  LLM_API_KEY             keychain",
-        "  LINEAR_CLIENT_SECRET    missing",
-        "  LINEAR_WEBHOOK_SECRET   missing",
-        "  GITHUB_APP_PRIVATE_KEY  missing",
-        "  GITHUB_WEBHOOK_SECRET   missing",
-        "  SLACK_BOT_TOKEN         missing",
+        "  GITHUB_TOKEN                  missing",
+        "  LLM_API_KEY                   keychain",
+        "  LINEAR_CLIENT_SECRET          missing",
+        "  LINEAR_WEBHOOK_SECRET         missing",
+        "  GITHUB_APP_PRIVATE_KEY        missing",
+        "  GITHUB_WEBHOOK_SECRET         missing",
+        "  SLACK_BOT_TOKEN               missing",
+        "  GITLAB_TOKEN                  missing",
+        "  GITLAB_WEBHOOK_SIGNING_TOKEN  missing",
+        "  GITLAB_WEBHOOK_SECRET         missing",
       ].join("\n"),
     );
   });

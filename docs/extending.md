@@ -78,7 +78,7 @@ chart (`deploy/helm/devbox/templates/control-plane.yaml`, from a value in
 though, treats a new source as not live, and sends it no progress messages,
 unless `LIVE_CHANNEL_SOURCES` in `harness/src/harness/handlers/_common.py`
 lists it. It also adds the PR discussion to a follow-up only for `github`
-rounds (`harness/src/harness/followup.py`).
+and `gitlab` rounds (`harness/src/harness/followup.py`).
 
 - **The definition.** The folder exports an `IntegrationDefinition`
   (`control-plane/src/integrations/types.ts`). Its `name` is stored as the

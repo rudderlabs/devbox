@@ -100,6 +100,10 @@ export type SandboxManagerOptions = {
   // HARNESS_TRUSTED_USERS; undefined → not set on the sandbox.
   trustedOrgs?: string;
   trustedUsers?: string;
+  // The GitLab trust lists (config.gitlab.trustedGroups/trustedUsers), the
+  // same way: HARNESS_GITLAB_TRUSTED_GROUPS and HARNESS_GITLAB_TRUSTED_USERS.
+  gitlabTrustedGroups?: string;
+  gitlabTrustedUsers?: string;
   // The configured GitLab instance (config.gitlab.baseUrl), forwarded as
   // GITLAB_BASE_URL so the harness recognises its remotes; undefined → not set.
   gitlabBaseUrl?: string;
@@ -133,6 +137,8 @@ export class SandboxManager {
   private readonly forwardedEnv: Record<string, string>;
   private readonly trustedOrgs: string | undefined;
   private readonly trustedUsers: string | undefined;
+  private readonly gitlabTrustedGroups: string | undefined;
+  private readonly gitlabTrustedUsers: string | undefined;
   private readonly gitlabBaseUrl: string | undefined;
   // Hosts a pr_opened URL may name: github.com, plus the GitLab instance.
   private readonly prUrlHosts: ReadonlySet<string>;
@@ -165,6 +171,8 @@ export class SandboxManager {
     this.forwardedEnv = opts.forwardedEnv;
     this.trustedOrgs = opts.trustedOrgs;
     this.trustedUsers = opts.trustedUsers;
+    this.gitlabTrustedGroups = opts.gitlabTrustedGroups;
+    this.gitlabTrustedUsers = opts.gitlabTrustedUsers;
     this.gitlabBaseUrl = opts.gitlabBaseUrl;
     this.prUrlHosts = prUrlHostsFor(opts.gitlabBaseUrl);
   }
@@ -454,10 +462,18 @@ export class SandboxManager {
     if (this.trustedUsers !== undefined) {
       env.HARNESS_TRUSTED_USERS = this.trustedUsers;
     }
-    // Never from forwardedEnv: the sandbox learns the GitLab instance only
-    // from the control plane's validated setting (sandboxConfig.ts).
+    // Never from forwardedEnv: the sandbox learns the GitLab instance and its
+    // trust lists only from the control plane's validated settings.
     delete env.GITLAB_BASE_URL;
+    delete env.HARNESS_GITLAB_TRUSTED_GROUPS;
+    delete env.HARNESS_GITLAB_TRUSTED_USERS;
     if (this.gitlabBaseUrl !== undefined) env.GITLAB_BASE_URL = this.gitlabBaseUrl;
+    if (this.gitlabTrustedGroups !== undefined) {
+      env.HARNESS_GITLAB_TRUSTED_GROUPS = this.gitlabTrustedGroups;
+    }
+    if (this.gitlabTrustedUsers !== undefined) {
+      env.HARNESS_GITLAB_TRUSTED_USERS = this.gitlabTrustedUsers;
+    }
     if (this.sandboxRuntime === "k8s") Object.assign(env, K8S_EGRESS_ENV);
     if (this.gitIdentity) {
       const { name, email } = this.gitIdentity;

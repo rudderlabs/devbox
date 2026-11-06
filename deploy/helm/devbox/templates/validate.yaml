@@ -107,6 +107,25 @@ selectors all assume the release namespace devbox. */ -}}
 {{- if and $slack.enabled (not $slack.channelId) }}
 {{- fail "integrations.slack.enabled is true: integrations.slack.channelId is required" }}
 {{- end }}
+{{- $gitlabApp := .Values.integrations.gitlab | default dict }}
+{{- if $gitlabApp.enabled }}
+{{- if not (include "devbox.gitlabBaseUrl" .) }}
+{{- fail "integrations.gitlab.enabled is true: gitlab.baseUrl is required" }}
+{{- end }}
+{{- range $key := list "botUsername" "botUserId" }}
+{{- if not (index $gitlabApp $key) }}
+{{- fail (printf "integrations.gitlab.enabled is true: integrations.gitlab.%s is required" $key) }}
+{{- end }}
+{{- end }}
+{{- if not (or .Values.gitlab.trustedGroups .Values.gitlab.trustedUsers) }}
+{{- fail "integrations.gitlab.enabled is true: gitlab.trustedGroups or gitlab.trustedUsers is required" }}
+{{- end }}
+{{- end }}
+{{- range .Values.gitlab.trustedGroups }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$" .) }}
+{{- fail (printf "gitlab.trustedGroups: %q is not a group path" .) }}
+{{- end }}
+{{- end }}
 {{- if $app.enabled }}
 {{- range $key := list "appId" "installationId" "botLogin" "botUserId" "tokens" }}
 {{- if not (index $app $key) }}

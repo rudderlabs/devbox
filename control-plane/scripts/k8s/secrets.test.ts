@@ -47,6 +47,27 @@ describe("userSecrets", () => {
     ]);
   });
 
+  it("the GitLab token and CA Secrets, unless the user brings the token", () => {
+    expect(
+      userSecrets({}, { ...tokens, gitlab: { token: "glpat" }, gitlabCa: { pem: "PEM" } }),
+    ).toEqual([
+      { name: "devbox-github", data: { token: "ghp_x" } },
+      { name: "devbox-gitlab", data: { token: "glpat" } },
+      { name: "devbox-gitlab-ca", data: { "ca.crt": "PEM" } },
+      { name: "devbox-llm", data: { "api-key": "sk-y" } },
+    ]);
+    expect(
+      userSecrets(
+        { secrets: { gitlab: { existingSecret: "mine" } } },
+        { ...tokens, gitlab: { token: "glpat" }, gitlabCa: { pem: "PEM" } },
+      ),
+    ).toEqual([
+      { name: "devbox-github", data: { token: "ghp_x" } },
+      { name: "devbox-gitlab-ca", data: { "ca.crt": "PEM" } },
+      { name: "devbox-llm", data: { "api-key": "sk-y" } },
+    ]);
+  });
+
   it("no token Secret when the installer has no token to write", () => {
     expect(userSecrets({}, { ...tokens, github: undefined })).toEqual([
       { name: "devbox-llm", data: { "api-key": "sk-y" } },

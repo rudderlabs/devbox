@@ -43,8 +43,10 @@ export type RepoConfig = {
   name: string;
 };
 
-// The configured GitLab instance, or undefined: {baseUrl} with no trailing slash.
-export type GitlabConfig = { baseUrl: string };
+// The configured GitLab instance, or undefined: {baseUrl} with no trailing
+// slash, and caFile, the PEM of the private CA that signed its certificate,
+// when it has one (the installer puts it in a Secret for the chart).
+export type GitlabConfig = { baseUrl: string; caFile?: string };
 
 // The repos on GitHub: what the GitHub token checks and the App's token cover.
 export const githubRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
@@ -153,15 +155,23 @@ function parseRepo(raw: unknown, i: number, gitlab: GitlabConfig | undefined): R
   return { url: url as string, branch, host, owner, name };
 }
 
-// gitlab: {baseUrl}. The URL's origin and path, no trailing slash; like
-// llm.baseUrl it must use the default port, because iron-proxy intercepts
-// only 80 and 443. The chart validates the same way (templates/validate.yaml).
+// gitlab: {baseUrl, caFile}. The URL's origin and path, no trailing slash;
+// like llm.baseUrl it must use the default port, because iron-proxy
+// intercepts only 80 and 443. The chart validates the same way
+// (templates/validate.yaml). caFile is read by the installer, not here.
 function parseGitlab(raw: unknown): GitlabConfig | undefined {
   if (raw === undefined) return undefined;
   if (!isObject(raw)) return fail("gitlab: must be an object");
-  const extra = Object.keys(raw).find((k) => k !== "baseUrl");
+  const extra = Object.keys(raw).find((k) => k !== "baseUrl" && k !== "caFile");
   if (extra !== undefined) {
-    return fail(`gitlab: unknown key ${JSON.stringify(extra)} (allowed: baseUrl)`);
+    return fail(`gitlab: unknown key ${JSON.stringify(extra)} (allowed: baseUrl, caFile)`);
+  }
+  let caFile: string | undefined;
+  if (raw.caFile !== undefined) {
+    if (typeof raw.caFile !== "string" || !raw.caFile.startsWith("/")) {
+      return fail("gitlab.caFile: must be an absolute path to a PEM file");
+    }
+    caFile = raw.caFile;
   }
   const baseUrl = raw.baseUrl;
   const url = typeof baseUrl === "string" && URL.canParse(baseUrl) ? new URL(baseUrl) : null;
@@ -177,7 +187,10 @@ function parseGitlab(raw: unknown): GitlabConfig | undefined {
   if (url.search || url.hash || url.username || url.password) {
     return fail("gitlab.baseUrl: must not have a query, fragment or credentials");
   }
-  return { baseUrl: `${url.origin}${url.pathname.replace(/\/+$/, "")}` };
+  return {
+    baseUrl: `${url.origin}${url.pathname.replace(/\/+$/, "")}`,
+    ...(caFile !== undefined ? { caFile } : {}),
+  };
 }
 
 function parseReasoningEffort(raw: unknown, provider: Provider, field: string): ReasoningEffort {
