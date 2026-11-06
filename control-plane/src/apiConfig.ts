@@ -1,5 +1,6 @@
 // /api settings. Pure: takes the env, so it is testable without
 // mocking ../config. config.ts calls it at startup; a bad value fails boot.
+import { api } from "./integrations/api";
 
 export type ApiConfig = {
   enabled: boolean;
@@ -26,7 +27,9 @@ function positiveInt(env: Record<string, string | undefined>, name: string, def:
 }
 
 export function parseApiConfig(env: Record<string, string | undefined>): ApiConfig {
-  const enabled = env.API_ENABLED === "true";
+  // API_ENABLED, read by the API integration's definition, so /api is mounted
+  // exactly when that integration is on.
+  const enabled = api.parseConfig(env) !== undefined;
   const publicBaseUrl = (env.API_PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, "");
   if (enabled && !publicBaseUrl) {
     throw new Error("API_PUBLIC_BASE_URL is required when API_ENABLED=true");

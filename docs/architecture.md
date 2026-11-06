@@ -124,9 +124,13 @@ The event log is how the harness reports back.
 - The control plane keeps a cursor per task, the last `seq` it read. On each
   loop it reads the file through OpenSandbox and handles the events after the
   cursor. It ignores lines it can't parse.
-- For API tasks, the control plane stores the harness's events, and its own
-  (`task_created`, `message_queued`, `task_restarted`, `sandbox_started`,
-  `round_failed`), in the `task_events` table. The API serves them from there.
+- For every task, whatever its source, the control plane stores the harness's
+  events, and its own (`task_created`, `message_queued`, `task_restarted`,
+  `sandbox_started`, `round_failed`), in the `task_events` table. The API
+  serves them from there, so `bun run devbox logs` works on any task, and any
+  API token can read any task's log, agent output and comment text included.
+- `message_queued` marks each follow-up round, from any source. Its data is the
+  round's `source` and `kind`, plus the text as `body` for a `comment`.
 
 ## The harness's stages
 

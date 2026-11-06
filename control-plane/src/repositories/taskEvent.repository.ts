@@ -2,11 +2,12 @@ import { sql } from "drizzle-orm";
 import { db } from "../db";
 import type { HarnessEvent } from "../types/harnessEvent";
 
-// The progress log for API tasks. Every write goes through the two helpers
-// below, called inside the transaction of the action that causes the event.
-// Both are no-ops for non-API tasks; Linear tasks do not use this event log.
+// Every task's progress log. Every write goes through the two helpers below,
+// called inside the transaction of the action that causes the event.
 
 export type SqlExecutor = Pick<typeof db, "execute">;
+// A transaction handle, for writes that also run inside a caller's transaction.
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export type CpEventType =
   | "task_created"
@@ -35,12 +36,11 @@ function asRows<T>(result: unknown): T[] {
   return Array.isArray(result) ? (result as T[]) : [];
 }
 
-// Inserts a control_plane event iff the task is an API task. The source check
-// is in SQL, so callers never branch on source themselves.
+// Inserts a control_plane event, for a task of any source.
 // The caller's transaction must already hold the tasks row lock (UPDATE tasks or
 // FOR NO KEY UPDATE), so ids are assigned in commit order per task. The lock is
 // not taken here: that would invert the tasks-then-inbox lock order.
-export async function insertCpEventIfApi(
+export async function insertCpEvent(
   ex: SqlExecutor,
   p: { taskId: string; type: CpEventType; inboxId: string | null; data: unknown },
 ): Promise<void> {
@@ -49,12 +49,12 @@ export async function insertCpEventIfApi(
     INSERT INTO task_events (task_id, origin, type, inbox_id, data)
     SELECT t.id, 'control_plane', ${p.type}, ${p.inboxId}, ${JSON.stringify(p.data)}::text::jsonb
       FROM tasks t
-     WHERE t.id = ${p.taskId} AND t.source = 'api';
+     WHERE t.id = ${p.taskId};
   `);
 }
 
 // Stores a daemon event as received. The caller (recordEventCursor) has
-// already checked that the task is an API task and the cursor advanced.
+// already checked that the cursor advanced.
 export async function insertDaemonEvent(
   ex: SqlExecutor,
   p: { taskId: string; event: HarnessEvent },

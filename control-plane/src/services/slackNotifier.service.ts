@@ -1,8 +1,7 @@
-import type { LinearClient } from "@linear/sdk";
-import { getIssueHumanAssignee } from "../clients/linear";
 import { lookupSlackUserIdByEmail, postSlackMessage } from "../clients/slack";
 import type { Task } from "../db/schema";
 import type { TaskRepository } from "../repositories/task.repository";
+import type { WrappedIntegration } from "./integrationRegistry";
 
 // Terminal-state granularity. `completed | partial_failure | no_action` come
 // from the sandbox `completed` event's status field; `failed` is used by both
@@ -16,8 +15,9 @@ type PrUrlEntry = { repo: string; url: string };
 // message per Linear-sourced task). Disabled unless both a bot token and a
 // channel are configured.
 //
-// Best-effort by contract: callers fire-and-forget with a `.catch`. A Slack
-// outage or a missing thread must never affect task dispatch or teardown.
+// Best-effort by contract: callers run it in BackgroundWork, which shutdown
+// drains, and log its failure themselves. A Slack outage or a missing thread
+// must never affect task dispatch or teardown.
 export class SlackNotifierService {
   constructor(
     private readonly taskRepo: TaskRepository,
@@ -27,18 +27,14 @@ export class SlackNotifierService {
     private readonly botToken: string,
     // config.slack.channel in production. Empty ⇒ Slack disabled (no-op).
     private readonly channel: string,
+    // The task's own integration's assignee(), for the connect-GitHub nudge.
+    private readonly assignee: WrappedIntegration["assignee"],
     // Injected for testability; default to the real implementations.
     private readonly post: typeof postSlackMessage = postSlackMessage,
-    private readonly resolveAssignee: typeof getIssueHumanAssignee = getIssueHumanAssignee,
     private readonly lookupSlackUser: typeof lookupSlackUserIdByEmail = lookupSlackUserIdByEmail,
   ) {}
 
-  async notifyTerminal(
-    linearClient: LinearClient,
-    task: Task,
-    status: TerminalStatus,
-    message?: string,
-  ): Promise<void> {
+  async notifyTerminal(task: Task, status: TerminalStatus, message?: string): Promise<void> {
     if (!this.enabledFor(task)) return;
 
     // Re-read for the freshest pr_urls — the in-memory task handed in from the
@@ -50,44 +46,42 @@ export class SlackNotifierService {
     const t = fresh ?? task;
     const prUrls = parsePrUrls(t.prUrls);
     // Nudge shown alongside PR links when the ticket's human assignee hasn't
-    // connected GitHub in Linear — the PR couldn't be assigned to them
-    // (eventDispatcher's pr_opened mirror skipped with no_github_mapping) and
+    // connected GitHub in Linear — the PR couldn't be assigned to them (the
+    // code host's assignee mirror skipped with no_github_mapping) and
     // self-service is the only fix. Re-checked lazily here so a user who
     // connected mid-run isn't nagged. Skipped for no_action, whose message
     // renders no PR section for the nudge to ride on.
     const wantsNudge = status !== "no_action" && prUrls.length > 0;
-    const connectNote = wantsNudge ? await this.connectGitHubNote(linearClient, t) : "";
+    const connectNote = wantsNudge ? await this.connectGitHubNote(t) : "";
 
     const text = buildMessage(status, t, prUrls, connectNote, message);
     await this.post({ channel: this.channel, text });
   }
 
-  // "" when there is nothing to nag about: no human assignee, already mapped,
-  // or the Linear lookup failed (best-effort — never blocks the post).
-  private async connectGitHubNote(linearClient: LinearClient, task: Task): Promise<string> {
-    try {
-      const human = await this.resolveAssignee(linearClient, task.externalId);
-      if (!human || human.gitHubUserId) return "";
-      // @-mention the assignee so the nudge notifies them (Slack only pings
-      // members of the channel — a non-member renders un-notified). Linear and
-      // Slack share the org email, so lookupByEmail is reliable here (it's only
-      // GitHub where personal emails diverge — the whole reason for this nudge).
-      // Degrades to the plain display name on any lookup miss (users_not_found,
-      // bot missing the users:read.email scope, transport error). displayName
-      // is member-editable — escape it so it can't inject mrkdwn (<!channel>,
-      // forged <@mentions>, disguised links) into a trusted bot message.
-      const slackId = human.email
-        ? await this.lookupSlackUser(human.email).catch(() => null)
-        : null;
-      const mention = slackId ? `<@${slackId}>` : escapeMrkdwn(human.displayName);
-      return (
-        `\n⚠️ ${mention}: I couldn't assign the PR to you — your GitHub account ` +
-        "isn't connected in Linear. Connect it under *Linear → Settings → Connected accounts* " +
-        "and future PRs will be assigned to you automatically."
-      );
-    } catch {
-      return "";
-    }
+  // "" when there is nothing to nag about: no human assignee, already linked,
+  // or the lookup failed (the registry logs it; never blocks the post). Only
+  // whether an account is linked matters, so this is one Linear lookup and no
+  // GitHub call.
+  private async connectGitHubNote(task: Task): Promise<string> {
+    const person = await this.assignee(task, { purpose: "slack_nudge" });
+    if (person?.githubAccount !== null) return "";
+    // @-mention the assignee so the nudge notifies them (Slack only pings
+    // members of the channel — a non-member renders un-notified). Linear and
+    // Slack share the org email, so lookupByEmail is reliable here (it's only
+    // GitHub where personal emails diverge — the whole reason for this nudge).
+    // Degrades to the plain display name on any lookup miss (users_not_found,
+    // bot missing the users:read.email scope, transport error). displayName
+    // is member-editable — escape it so it can't inject mrkdwn (<!channel>,
+    // forged <@mentions>, disguised links) into a trusted bot message.
+    const slackId = person.email
+      ? await this.lookupSlackUser(person.email).catch(() => null)
+      : null;
+    const mention = slackId ? `<@${slackId}>` : escapeMrkdwn(person.displayName);
+    return (
+      `\n⚠️ ${mention}: I couldn't assign the PR to you — your GitHub account ` +
+      "isn't connected in Linear. Connect it under *Linear → Settings → Connected accounts* " +
+      "and future PRs will be assigned to you automatically."
+    );
   }
 
   // Common gate for every Slack post: a token and a channel are provisioned

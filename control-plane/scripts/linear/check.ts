@@ -6,7 +6,10 @@
 // A Linear app answers "Entity not found: Organization" for a while after it
 // is created (about a minute, seen on a new app): the check retries that one
 // answer, with a fresh token each time, before it fails.
-import { LinearTokenError, requestClientCredentialsToken } from "../../src/clients/linearOauth";
+import {
+  LinearTokenError,
+  requestClientCredentialsToken,
+} from "../../src/integrations/linear/oauth";
 import { CredentialRejected, type Fetch, PreflightError } from "../up/preflight";
 
 export type LinearIdentity = { viewerName: string; workspaceName: string; urlKey: string };

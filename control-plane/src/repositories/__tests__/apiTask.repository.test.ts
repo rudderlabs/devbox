@@ -16,17 +16,47 @@ const repo = new ApiTaskRepository();
 const taskRepo = new TaskRepository();
 const inboxRepo = new InboxRepository();
 const T0 = "2026-10-07T12:00:00.000Z";
+const apiSessionTarget = (id: string) => ({ id, spec: { kind: "api_session" as const } });
 
-const create = (o: Partial<Parameters<typeof repo.createApiTask>[0]> = {}) =>
-  repo.createApiTask({
-    keyPrefix: "DBX-API-",
-    publicBaseUrl: "https://api.example",
+// An API create: assign with a sequence key, as TaskService does it.
+const create = async (o: { createdBy?: string } = {}) => {
+  const t = await taskRepo.assign({
+    source: "api",
+    key: { sequencePrefix: "DBX-API-" },
     title: "Add a thing",
     description: "Please",
-    experimentalFlags: ["FOO"],
-    createdBy: null,
-    ...o,
+    flags: ["FOO"],
+    url: (ref) => `https://api.example/api/tasks/${ref.key}`,
+    target: (ref) => apiSessionTarget(ref.id),
+    createdBy: o.createdBy,
   });
+  return { taskId: t.id, key: t.key };
+};
+
+// An API message: a comment round through the follow-up transaction, with
+// its text for message_queued as TaskService passes it.
+const appendMessage = async (p: { task: { id: string; key: string }; body: string }) => {
+  const result = await inboxRepo.appendFollowUp({
+    taskId: p.task.id,
+    message: {
+      source: "api",
+      kind: "comment",
+      external_id: crypto.randomUUID(),
+      payload: {
+        target_id: p.task.id,
+        body: p.body,
+        pr: null,
+        created_at: T0,
+        task_id: p.task.id,
+        task_key: p.task.key,
+      },
+    },
+    replyTargets: [apiSessionTarget(p.task.id)],
+    body: p.body,
+  });
+  if (!("roundId" in result)) throw new Error(`dropped: ${result.dropped}`);
+  return result;
+};
 
 // Pins every DB timestamp of a task to T0 (+ offsets for inbox rows) so whole
 // records compare exactly.
@@ -64,7 +94,7 @@ describe("ApiTaskRepository", () => {
     await db.execute(sql`ALTER SEQUENCE api_task_key_seq RESTART`);
   });
 
-  describe("createApiTask", () => {
+  describe("assign (API create)", () => {
     it("inserts the task, the assignment row and task_created in one transaction", async () => {
       const { taskId, key } = await create();
       expect(key).toBe("DBX-API-1");
@@ -157,14 +187,10 @@ describe("ApiTaskRepository", () => {
     });
   });
 
-  describe("appendApiMessage", () => {
+  describe("appendFollowUp (API message)", () => {
     it("inserts a comment row and message_queued atomically", async () => {
       const { taskId, key } = await create();
-      const { roundId } = await repo.appendApiMessage({
-        task: { id: taskId, key },
-        body: "more",
-        createdAt: T0,
-      });
+      const { roundId } = await appendMessage({ task: { id: taskId, key }, body: "more" });
       const [row] = await db.execute(
         sql`SELECT source, kind, payload, reply_targets FROM inbox WHERE id = ${roundId}`,
       );
@@ -185,7 +211,11 @@ describe("ApiTaskRepository", () => {
         sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
       );
       expect([...events].slice(1)).toEqual([
-        { type: "message_queued", inbox_id: roundId, data: { body: "more" } },
+        {
+          type: "message_queued",
+          inbox_id: roundId,
+          data: { source: "api", kind: "comment", body: "more" },
+        },
       ]);
     });
 
@@ -195,9 +225,7 @@ describe("ApiTaskRepository", () => {
         sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'message_queued')`,
       );
       try {
-        await expect(
-          repo.appendApiMessage({ task: { id: taskId, key }, body: "x", createdAt: T0 }),
-        ).rejects.toThrow();
+        await expect(appendMessage({ task: { id: taskId, key }, body: "x" })).rejects.toThrow();
         const [n] = await db.execute<{ n: number }>(
           sql`SELECT count(*)::int AS n FROM inbox WHERE kind = 'comment'`,
         );
@@ -260,6 +288,7 @@ describe("ApiTaskRepository", () => {
         taskId,
         inboxPayload: { title: "t", description: null, external_url: "u", target_id: taskId },
         inboxReplyTargets: [{ id: taskId, spec: { kind: "api_session" } }],
+        flags: [],
       });
       // The re-run completes later than the superseded follow-up's failure.
       await db.execute(sql`
@@ -305,7 +334,7 @@ describe("ApiTaskRepository", () => {
         taskId,
         inboxPayload: { title: "New", description: "D2", external_url: "u", target_id: taskId },
         inboxReplyTargets: [{ id: taskId, spec: { kind: "api_session" } }],
-        api: { title: "New", description: "D2", experimentalFlags: ["BAR"] },
+        flags: ["BAR"],
       });
       expect(res).toEqual({
         prevSandboxId: null,
@@ -351,7 +380,7 @@ describe("ApiTaskRepository", () => {
             taskId,
             inboxPayload: { title: "New", description: null, external_url: "u", target_id: taskId },
             inboxReplyTargets: [{ id: taskId, spec: { kind: "api_session" } }],
-            api: { title: "New", description: null, experimentalFlags: [] },
+            flags: [],
           }),
         ).rejects.toThrow();
         expect((await repo.findById(taskId))?.title).toBe("Add a thing");
@@ -428,11 +457,11 @@ describe("ApiTaskRepository", () => {
       expect(await logTypes(taskId)).toEqual(["task_created", "agent_action", cpType]);
     }
 
-    it("appendApiMessage waits for a concurrent per-task writer to commit", async () => {
+    it("an API message waits for a concurrent per-task writer to commit", async () => {
       const { taskId, key } = await create();
       await expectSerialized(
         taskId,
-        () => repo.appendApiMessage({ task: { id: taskId, key }, body: "more", createdAt: T0 }),
+        () => appendMessage({ task: { id: taskId, key }, body: "more" }),
         "message_queued",
       );
     });

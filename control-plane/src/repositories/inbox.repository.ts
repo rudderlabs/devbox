@@ -1,14 +1,14 @@
 import { sql } from "drizzle-orm";
 import { db } from "../db";
 import type { Task } from "../db/schema";
+import { logger } from "../logger";
 import type {
   AssignmentPayload,
   InboxKind,
   InboxMessage,
-  InboxSource,
   TaskIdentity,
 } from "../types/inboxMessage";
-import { insertCpEventIfApi } from "./taskEvent.repository";
+import { insertCpEvent, type Tx } from "./taskEvent.repository";
 
 // Re-export contract types so existing repo-import sites stay valid without
 // reaching into types/ directly.
@@ -18,54 +18,37 @@ export type {
   CommentPayload,
   InboxKind,
   InboxMessage,
-  InboxSource,
   PrScope,
   ReviewPayload,
   ReviewPrScope,
   TaskIdentity,
 } from "../types/inboxMessage";
 
-// ──── Reply-target types — CP-internal routing, NOT part of the wire ────
-// ──── contract. Daemon never sees these.                            ────
-
-// Per-target routing spec — discriminated by `kind` at the target level
-// (distinct from the inbox row's `kind`). Linear emits route to the agent
-// session, not to individual activities — `linear_session` covers both
-// assignment-run progress + completion and comment-reply posts. The session id
-// itself lives in the enclosing ReplyTarget.id; the assignment row's entry is
-// the canonical store, refreshed on re-delegation.
-export type ReplyTargetSpec =
-  | {
-      kind: "issue_comment";
-      owner: string;
-      repo: string;
-      prNumber: number;
-      commentId: number;
-      quotedUser?: string;
-      quotedBody?: string;
-    }
-  | {
-      kind: "review_comment";
-      owner: string;
-      repo: string;
-      prNumber: number;
-      commentId: number;
-      inReplyTo: number;
-      path: string;
-      line: number;
-      startLine?: number;
-    }
-  | { kind: "review_body"; owner: string; repo: string; prNumber: number; reviewId: number }
-  | { kind: "linear_session" }
-  // API tasks: replies are delivered nowhere — the task_events log is the channel.
-  | { kind: "api_session" };
+// ──── Reply targets — CP-internal routing, NOT part of the wire ────
+// ──── contract. Daemon never sees these.                        ────
 
 export type ReplyTarget = {
   // Mirrors the corresponding payload.*.target_id so a targeted agent_response
   // event from the daemon routes to the right thread.
   id: string;
-  spec: ReplyTargetSpec;
+  // Where the reply goes, in the round's integration's own shape. Core stores
+  // it and hands it back to that integration's deliver, which checks it.
+  spec: unknown;
+  // An assignment's delegation order, when the platform has one: a delegation
+  // whose order is not above the stored one is a duplicate (TaskService.assign).
+  order?: number;
 };
+
+// A row to insert: the wire message without its id.
+type NewInboxMessage = Omit<InboxMessage, "id">;
+
+// A Postgres unique violation (23505) on `constraint`. drizzle wraps the
+// driver's error in `cause`.
+export function isUniqueViolation(err: unknown, constraint: string): boolean {
+  const e = (err as { cause?: unknown })?.cause ?? err;
+  const pg = e as { errno?: unknown; constraint?: unknown };
+  return pg.errno === "23505" && pg.constraint === constraint;
+}
 
 // Assignment content as callers build it. The identity fields are stamped by
 // the repository from the tasks row (see TaskRepository).
@@ -75,19 +58,13 @@ export function taskIdentity(task: Pick<Task, "id" | "key">): TaskIdentity {
   return { task_id: task.id, task_key: task.key };
 }
 
-export function apiSessionTarget(taskId: string): ReplyTarget {
-  return { id: taskId, spec: { kind: "api_session" } };
-}
-
 // Row lifecycle. pending → delivered → responded; failed is the CP-side
 // delivery dead-letter (terminal branch off pending). responded + failed are
 // terminal — the reaper frees the sandbox once no row is pending/delivered.
 export type InboxStatus = "pending" | "delivered" | "responded" | "failed";
 
 // Persisted row = the wire contract (InboxMessage) plus CP-internal metadata:
-// task ownership, reply routing, delivery state, timestamps. The `& InboxMessage`
-// intersection preserves the (source, kind) tagged union so `row.kind ===
-// "assignment"` still narrows `row.payload` to `AssignmentPayload`.
+// task ownership, reply routing, delivery state, timestamps.
 export type InboxRow = InboxMessage & {
   task_id: string;
   reply_targets: ReplyTarget[];
@@ -118,7 +95,7 @@ function mapRow(raw: RawInboxRow): InboxRow {
   return {
     id: raw.id,
     task_id: raw.task_id,
-    source: raw.source as InboxSource,
+    source: raw.source,
     external_id: raw.external_id,
     kind: raw.kind as InboxKind,
     payload: raw.payload,
@@ -128,7 +105,7 @@ function mapRow(raw: RawInboxRow): InboxRow {
     outcome: raw.outcome,
     created_at: raw.created_at,
     updated_at: raw.updated_at,
-  } as unknown as InboxRow;
+  };
 }
 
 function asRows<T>(result: unknown): T[] {
@@ -137,44 +114,109 @@ function asRows<T>(result: unknown): T[] {
 
 export class InboxRepository {
   // INSERT (synthetic uuid PK auto-generated). Idempotent on
-  // (source, external_id) via the unique index. Returns the synthetic id on
-  // insert, null on conflict.
-  //
-  // `message` is the wire contract sans `id` — the tagged union forbids
-  // invalid (source, kind) combos at the type level.
-  async appendInbox(params: {
-    taskId: string;
-    message: Omit<InboxMessage, "id">;
-    replyTargets: ReplyTarget[];
-  }): Promise<{ id: string } | null> {
+  // (source, kind, external_id) via the unique index. Returns the synthetic id
+  // on insert, null on conflict. It inserts in a savepoint of `tx`, so a
+  // unique violation leaves that transaction usable.
+  async appendInbox(
+    params: {
+      taskId: string;
+      message: NewInboxMessage;
+      replyTargets: ReplyTarget[];
+    },
+    tx: Tx,
+  ): Promise<{ id: string } | null> {
     const { source, kind, external_id, payload } = params.message;
     // bun-sql JSON-encodes a JS string param, so `${jsonStr}::jsonb` would
     // store a JSON *string scalar*, not the array/object. Casting via
     // `::text::jsonb` forces PG to parse the raw text into proper jsonb.
     const payloadJson = JSON.stringify(payload);
     const replyTargetsJson = JSON.stringify(params.replyTargets ?? []);
-    const result = await db.execute<{ id: string }>(sql`
-      INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
-           VALUES (${params.taskId}, ${source}, ${kind}, ${external_id},
-                   ${payloadJson}::text::jsonb, ${replyTargetsJson}::text::jsonb)
-      ON CONFLICT (source, external_id) DO NOTHING
-      RETURNING id;
-    `);
-    return asRows<{ id: string }>(result)[0] ?? null;
+    try {
+      const result = await tx.transaction((savepoint) =>
+        savepoint.execute<{ id: string }>(sql`
+          INSERT INTO inbox (task_id, source, kind, external_id, payload, reply_targets)
+               VALUES (${params.taskId}, ${source}, ${kind}, ${external_id},
+                       ${payloadJson}::text::jsonb, ${replyTargetsJson}::text::jsonb)
+          ON CONFLICT (source, kind, external_id) DO NOTHING
+          RETURNING id;
+        `),
+      );
+      return asRows<{ id: string }>(result)[0] ?? null;
+    } catch (err) {
+      // Until a later release drops it, the old (source, external_id) index
+      // also rejects a row whose id another kind of the same source already
+      // uses, with a 23505 instead of DO NOTHING. Dedupe it as before; this
+      // goes with the index.
+      if (isUniqueViolation(err, "inbox_source_external_uniq")) return null;
+      throw err;
+    }
   }
 
-  // Count of ci_result rows already forwarded for a task — the loop breaker's
-  // denominator. Counts every ci_result row regardless of status: a 'failed'
-  // or 'responded' row still represents a CI failure harness already saw, so
-  // it must count toward the runaway threshold. Enqueue is idempotent on
-  // (source, external_id) = workflow_run:run:attempt:pr, so a redelivered
-  // webhook does not inflate this count.
-  async countCiResultsByTask(taskId: string): Promise<number> {
-    const result = await db.execute<{ n: number }>(sql`
-      SELECT COUNT(*)::int AS n FROM inbox
-       WHERE task_id = ${taskId} AND source = 'github' AND kind = 'ci_result';
-    `);
-    return asRows<{ n: number }>(result)[0]?.n ?? 0;
+  // TaskService.enqueueRound's transaction. Locks the task row first: tasks
+  // before inbox, and task_events ids handed out in commit order per task.
+  // Drops the round when `prUrl` is no longer one of the task's PRs (a restart
+  // cleared it) or when the task already has `limit` rounds of this source and
+  // kind, and as a duplicate when the round is already stored. An inserted
+  // round gets message_queued: its source and kind, and `body` when given.
+  async appendFollowUp(p: {
+    taskId: string;
+    message: NewInboxMessage;
+    replyTargets: ReplyTarget[];
+    prUrl?: string;
+    limit?: number;
+    body?: string; // a comment round's text, for message_queued
+  }): Promise<
+    { roundId: string } | { dropped: "duplicate" | "stale" } | { dropped: "limit"; count: number }
+  > {
+    const { message } = p;
+    const hasPr =
+      p.prUrl === undefined
+        ? sql`true`
+        : sql`pr_urls @> jsonb_build_array(jsonb_build_object('url', ${p.prUrl}::text))`;
+    return db.transaction(async (tx) => {
+      const [task] = asRows<{ has_pr: boolean }>(
+        await tx.execute(
+          sql`SELECT ${hasPr} AS has_pr FROM tasks WHERE id = ${p.taskId} FOR NO KEY UPDATE`,
+        ),
+      );
+      if (!task) throw new Error(`appendFollowUp: task ${p.taskId} not found`);
+      if (!task.has_pr) {
+        logger.info("follow-up dropped: the PR is no longer on the task", {
+          taskId: p.taskId,
+          prUrl: p.prUrl,
+        });
+        return { dropped: "stale" };
+      }
+
+      // Every row counts regardless of status: a 'failed' or 'responded' row
+      // is still a round the harness saw. The count runs under the task lock,
+      // so concurrent webhooks can't overshoot. The caller logs a drop.
+      const limit = p.limit ?? 0;
+      if (limit > 0) {
+        const [count] = asRows<{ n: number }>(
+          await tx.execute(sql`
+            SELECT COUNT(*)::int AS n FROM inbox
+             WHERE task_id = ${p.taskId} AND source = ${message.source} AND kind = ${message.kind};
+          `),
+        );
+        const n = count?.n ?? 0;
+        if (n >= limit) return { dropped: "limit", count: n };
+      }
+
+      const row = await this.appendInbox(
+        { taskId: p.taskId, message, replyTargets: p.replyTargets },
+        tx,
+      );
+      if (!row) return { dropped: "duplicate" };
+      await insertCpEvent(tx, {
+        taskId: p.taskId,
+        type: "message_queued",
+        inboxId: row.id,
+        // An undefined body is left out of the JSON.
+        data: { source: message.source, kind: message.kind, body: p.body },
+      });
+      return { roundId: row.id };
+    });
   }
 
   // Rows still awaiting delivery to the sandbox (status = 'pending').
@@ -187,9 +229,7 @@ export class InboxRepository {
     return asRows<RawInboxRow>(result).map(mapRow);
   }
 
-  // Every non-terminal row of a task (pending or delivered). failTask walks
-  // these to broadcast the failure message to each reply target before
-  // dead-lettering.
+  // Every non-terminal row of a task (pending or delivered).
   async listNonTerminalByTask(taskId: string): Promise<InboxRow[]> {
     const result = await db.execute<RawInboxRow>(sql`
       SELECT * FROM inbox
@@ -210,32 +250,34 @@ export class InboxRepository {
   // Task-scoped lookup. The dispatcher resolves event.inbox_id (a value
   // written by the sandbox) — a plain getById would happily return a row
   // belonging to a different task (confused-deputy). Filtering on task_id
-  // makes a cross-task inbox_id resolve to null instead.
-  async getByIdForTask(id: string, taskId: string): Promise<InboxRow | null> {
+  // makes a cross-task inbox_id resolve to null instead. The same query reads
+  // the task's assignment id, which the row's hooks compare against when they
+  // ask whether their run is still the current one.
+  async getByIdForTask(
+    id: string,
+    taskId: string,
+  ): Promise<{ row: InboxRow; assignmentId: string | null } | null> {
+    type Raw = RawInboxRow & { task_assignment_id: string | null };
+    const result = await db.execute<Raw>(sql`
+      SELECT i.*,
+             (SELECT a.id FROM inbox a
+               WHERE a.task_id = i.task_id AND a.kind = 'assignment' LIMIT 1) AS task_assignment_id
+        FROM inbox i
+       WHERE i.id = ${id} AND i.task_id = ${taskId}
+       LIMIT 1;
+    `);
+    const row = asRows<Raw>(result)[0];
+    return row ? { row: mapRow(row), assignmentId: row.task_assignment_id } : null;
+  }
+
+  // The task's assignment row. A restart re-pends it under a new id, which is
+  // how hooks tell whether their run is still the current one.
+  async getAssignment(taskId: string): Promise<InboxRow | null> {
     const result = await db.execute<RawInboxRow>(sql`
-      SELECT * FROM inbox WHERE id = ${id} AND task_id = ${taskId} LIMIT 1;
+      SELECT * FROM inbox WHERE task_id = ${taskId} AND kind = 'assignment' LIMIT 1;
     `);
     const row = asRows<RawInboxRow>(result)[0];
     return row ? mapRow(row) : null;
-  }
-
-  // Reply target id for task-scoped CP-originated emits (provisioning
-  // lifecycle). Reads the first entry of the assignment row's reply_targets —
-  // the canonical store, written on `created` and overwritten on
-  // re-delegation. An assignment row carries exactly one reply target by
-  // construction. Returns null when the assignment row is missing or its
-  // reply_targets is empty.
-  async getAssignmentReplyTargetId(taskId: string): Promise<string | null> {
-    const result = await db.execute<{ target_id: string | null }>(sql`
-      SELECT reply_targets->0->>'id' AS target_id
-        FROM inbox
-       WHERE task_id = ${taskId} AND kind = 'assignment'
-       LIMIT 1;
-    `);
-    const row = Array.isArray(result)
-      ? (result[0] as { target_id: string | null } | undefined)
-      : undefined;
-    return row?.target_id ?? null;
   }
 
   // pending → delivered. Owner-guarded (a stale-lease pod must not advance a
@@ -258,32 +300,36 @@ export class InboxRepository {
   // task-failure paths (provision failure, sandbox crash/timeout) call this so
   // a failed task cannot leave a row stuck pre-terminal — a non-terminal row
   // pins the idle reaper, and on a no-sandbox provision failure a 'pending'
-  // row would otherwise stay claimable forever. Returns the affected row ids
-  // for the caller to log.
+  // row would otherwise stay claimable forever. Returns the rows it failed, in
+  // arrival order: the caller logs them and sends the failure message only to
+  // those rows.
   async failTaskInbox(params: {
     taskId: string;
     ownerId: string;
     reason: string;
-  }): Promise<{ id: string }[]> {
+  }): Promise<InboxRow[]> {
     return db.transaction(async (tx) => {
       // Lock the task row first so task_events ids are handed out in commit
       // order per task for stable event cursors. Tasks before inbox,
       // the same order as restartTaskWithInbox.
       await tx.execute(sql`SELECT 1 FROM tasks WHERE id = ${params.taskId} FOR NO KEY UPDATE`);
-      const result = await tx.execute<{ id: string }>(sql`
-        UPDATE inbox i
-           SET status = 'failed', failure_reason = ${params.reason}, updated_at = now()
-          FROM tasks t
-         WHERE i.task_id = ${params.taskId}
-           AND i.task_id = t.id
-           AND t.owner_id = ${params.ownerId}
-           AND i.status IN ('pending', 'delivered')
-        RETURNING i.id;
+      const result = await tx.execute<RawInboxRow>(sql`
+        WITH failed AS (
+          UPDATE inbox i
+             SET status = 'failed', failure_reason = ${params.reason}, updated_at = now()
+            FROM tasks t
+           WHERE i.task_id = ${params.taskId}
+             AND i.task_id = t.id
+             AND t.owner_id = ${params.ownerId}
+             AND i.status IN ('pending', 'delivered')
+          RETURNING i.*
+        )
+        SELECT * FROM failed ORDER BY created_at ASC;
       `);
-      const failed = asRows<{ id: string }>(result);
+      const failed = asRows<RawInboxRow>(result).map(mapRow);
       // Write one round_failed event per failed row in the same transaction.
       for (const row of failed) {
-        await insertCpEventIfApi(tx, {
+        await insertCpEvent(tx, {
           taskId: params.taskId,
           type: "round_failed",
           inboxId: row.id,
@@ -326,7 +372,7 @@ export class InboxRepository {
       `);
       const rows = asRows<{ id: string; task_id: string }>(result);
       for (const row of rows) {
-        await insertCpEventIfApi(tx, {
+        await insertCpEvent(tx, {
           taskId: row.task_id,
           type: "round_failed",
           inboxId: row.id,

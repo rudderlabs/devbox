@@ -605,8 +605,9 @@ def _format_completion_body(
     Two sections: a per-repo "Planned / Done" recap — the plan.json repo `goal`
     and the implementation.json repo `summary`, matched by repo name; a repo
     with neither is dropped from the recap — then a "Pull requests" list of
-    every opened PR. CP relays this body verbatim — see CP eventDispatcher
-    handleAssignmentCompleted.
+    every opened PR. CP relays this body verbatim; for a failed run it is the
+    failure's user-safe summary, so it must never carry exception text (see the
+    control plane's labelAgentEmit; test_daemon's TestAgentErrorContract pins it).
     """
     plan_by_name = {
         r["name"]: r

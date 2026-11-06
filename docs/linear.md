@@ -297,9 +297,10 @@ bun run linear:disable [--target <file>] [--no-keychain] [--forget [--yes]]
 ```
 
 - **`linear:disable`** sets `integrations.linear.enabled` to `false` and keeps
-  the client ID, the public URL and the saved secrets. Turn Linear back on with
-  the same app with `bun run linear:setup`, or by setting `enabled` to `true`.
-  It asks nothing.
+  the client ID, the public URL and the saved secrets. Open Linear tasks keep
+  running, but nothing more is posted to Linear. Turn Linear back on with the
+  same app with `bun run linear:setup`, or by setting `enabled` to `true`. It
+  asks nothing.
 - **`linear:disable --forget`** removes the `integrations.linear` block and the
   deployment's saved `LINEAR_CLIENT_SECRET` and `LINEAR_WEBHOOK_SECRET`. It
   lists what it deletes and asks `[y/N]`; Enter or Ctrl-D answers no, and

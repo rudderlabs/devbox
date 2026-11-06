@@ -1,15 +1,15 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
+import { fakeDefinitions, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
+import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
 import type { InboxRepository, InboxRow } from "../../repositories/inbox.repository";
-import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
 
-// Pin the two config values InboxService reads (podId, the ci_result cap) so
-// results do not depend on the environment the suite runs in.
+// Pin the config value InboxService reads (podId) so results do not depend on
+// the environment the suite runs in.
 mock.module("../../config", () => ({
   config: {
     podId: "pod-test",
-    github: { ciResultMaxPerTask: 20 },
   },
 }));
 
@@ -21,7 +21,7 @@ const setIssueStarted = mock(() => Promise.resolve());
 const attachUrlToIssue = mock(() => Promise.resolve());
 const uploadIssueAttachment = mock(() => Promise.resolve());
 
-mock.module("../../clients/linear", () => ({
+mock.module("../../integrations/linear/client", () => ({
   emitAction,
   emitError,
   emitResponse,
@@ -65,9 +65,18 @@ mock.module("../../clients/github", () => ({
   getUserIdByLogin: mock(() => Promise.resolve(null)),
   requestReviewers: mock(() => Promise.resolve()),
   parsePrUrl: () => null,
+  githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),
 }));
 
-const { InboxService, WORKSPACE_MISSING_MESSAGE } = await import("../inbox.service");
+const { InboxService } = await import("../inbox.service");
+const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound");
+const { LinearIntegration } = await import("../../integrations/linear");
+const { GithubIntegration } = await import("../../integrations/github");
+const { ApiIntegration } = await import("../../integrations/api");
+const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
+const { BackgroundWork } = await import("../backgroundWork");
+const { ReplyHolds } = await import("../replyHolds");
+const { LinearTokenError } = await import("../../integrations/linear/oauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -124,11 +133,10 @@ describe("InboxService", () => {
   let listNonTerminalByTask: ReturnType<typeof mock>;
   let markDelivered: ReturnType<typeof mock>;
   let markFailed: ReturnType<typeof mock>;
-  let appendInbox: ReturnType<typeof mock>;
-  let countCiResultsByTask: ReturnType<typeof mock>;
   let writeHarnessFile: ReturnType<typeof mock>;
   let killSandbox: ReturnType<typeof mock>;
   let getById: ReturnType<typeof mock>;
+  let linear: InstanceType<typeof LinearIntegration>;
   let service: InstanceType<typeof InboxService>;
 
   beforeEach(() => {
@@ -152,8 +160,6 @@ describe("InboxService", () => {
     listNonTerminalByTask = mock(() => Promise.resolve([] as InboxRow[]));
     markDelivered = mock(() => Promise.resolve());
     markFailed = mock(() => Promise.resolve([{ id: "x" }]));
-    appendInbox = mock(() => Promise.resolve({ id: "inbox-new" }));
-    countCiResultsByTask = mock(() => Promise.resolve(0));
     getById = mock((id: string) => Promise.resolve(ghCommentRow(id)));
     inboxRepo = {
       listPendingByTask,
@@ -161,8 +167,6 @@ describe("InboxService", () => {
       getById,
       markDelivered,
       markFailed,
-      appendInbox,
-      countCiResultsByTask,
     } as unknown as InboxRepository;
 
     writeHarnessFile = mock(() => Promise.resolve());
@@ -176,7 +180,28 @@ describe("InboxService", () => {
       getAuthorizedLinearClient: mock(() => Promise.resolve({})),
     } as unknown as Pick<LinearTokenProvider, "getAuthorizedLinearClient">;
 
-    service = new InboxService(inboxRepo, sandboxManager, linearTokenProvider);
+    linear = new LinearIntegration(
+      linearTokenProvider,
+      { status: async () => ({}) as never },
+      NO_WEBHOOK,
+    );
+    const defs = fakeDefinitions({
+      linear,
+      api: new ApiIntegration(),
+      github: new GithubIntegration(
+        { botLogin: "harness" },
+        { status: () => ({}) as never },
+        NO_WEBHOOK,
+      ),
+    });
+    const registry = new IntegrationRegistry(defs, parseIntegrationConfigs(defs, {}), {
+      taskRepo: {} as never,
+      inboxRepo,
+      sandboxManager,
+      background: new BackgroundWork(),
+      holds: new ReplyHolds(),
+    });
+    service = new InboxService(inboxRepo, sandboxManager, registry);
   });
 
   describe("sweepUndelivered", () => {
@@ -226,13 +251,48 @@ describe("InboxService", () => {
       await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
 
       expect(postIssueComment).toHaveBeenCalledTimes(1);
-      expect(addIssueCommentReaction).toHaveBeenCalledWith("o", "r", 555, "confused");
+      expect(addIssueCommentReaction).toHaveBeenCalledWith(
+        "o",
+        "r",
+        555,
+        "confused",
+        expect.any(AbortSignal),
+      );
       expect(markFailed).toHaveBeenCalledWith({
         inboxId: "a",
         ownerId: "pod-test",
         reason: "workspace_missing",
         userMessage: WORKSPACE_MISSING_MESSAGE,
       });
+    });
+
+    it("finishes a dead-lettered assignment's round: outcome failed, first transition, no archive", async () => {
+      const onRoundFinished = spyOn(linear, "onRoundFinished");
+      const assignment = {
+        ...ghCommentRow("as"),
+        source: "linear",
+        kind: "assignment",
+        reply_targets: [{ id: "sess-1", spec: { kind: "linear_session" } }],
+      } as InboxRow;
+      listNonTerminalByTask.mockResolvedValue([assignment, ghCommentRow("c")]);
+      getById.mockImplementation((id: string) =>
+        Promise.resolve(id === "as" ? assignment : ghCommentRow(id)),
+      );
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+      await new Promise<void>((r) => setTimeout(r, 0));
+
+      expect(onRoundFinished).toHaveBeenCalledTimes(1);
+      const [ctx, , round, outcome] = onRoundFinished.mock.calls[0] as unknown as [
+        { firstTransition: boolean; archive(): Promise<Uint8Array | null> },
+        Task,
+        InboxRow,
+        string,
+      ];
+      expect(round.id).toBe("as");
+      expect(outcome).toBe("failed");
+      expect(ctx.firstTransition).toBe(true);
+      expect(await ctx.archive()).toBeNull();
     });
 
     it("API rows: no Linear or GitHub post, row failed with the user message", async () => {
@@ -298,391 +358,174 @@ describe("InboxService", () => {
       expect(emitError).not.toHaveBeenCalled();
       expect(markFailed).not.toHaveBeenCalled();
     });
-  });
 
-  describe("enqueueComment", () => {
-    it("appends a kind='comment' row and fires a 👀 reaction", async () => {
-      await service.enqueueComment({
-        task: makeTask(),
-        commentId: 555,
-        body: "@harness fix this",
-        spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: 555 },
-        createdAt: "2026-04-23T10:00:00Z",
-      });
-
-      const arg = appendInbox.mock.calls[0]?.[0] as {
-        message: {
-          source: string;
-          kind: string;
-          external_id: string;
-          payload: { target_id: string; task_key: string; created_at: string };
-        };
-        replyTargets: Array<{ id: string }>;
-      };
-      expect(arg.message.source).toBe("github");
-      expect(arg.message.kind).toBe("comment");
-      expect(arg.message.external_id).toBe("555");
-      expect(arg.message.payload.target_id).toBe("555");
-      expect(arg.message.payload).toMatchObject({
-        task_id: "task-1",
-        task_key: "XYZ-1",
-      });
-      // The comment's created_at is carried into the payload for temporal scoping.
-      expect(arg.message.payload.created_at).toBe("2026-04-23T10:00:00Z");
-      expect(arg.replyTargets[0]?.id).toBe("555");
-    });
-  });
-
-  describe("enqueueReview", () => {
-    it("appends a kind='review' row with N+1 reply targets", async () => {
-      await service.enqueueReview({
-        task: makeTask(),
-        reviewId: 999,
-        reviewBody: "looks good overall",
-        inlineComments: [
-          { id: 11, path: "a.ts", line: 3, startLine: 1, body: "nit" },
-          { id: 12, path: "b.ts", line: 9, body: "rename" },
-        ],
-        owner: "o",
-        repo: "r",
-        prNumber: 7,
-        reviewerLogin: "reviewer",
-        createdAt: "2026-04-23T10:00:00Z",
-      });
-
-      const arg = appendInbox.mock.calls[0]?.[0] as {
-        message: {
-          kind: string;
-          payload: {
-            created_at: string;
-            reviewer_login?: string;
-            pr: { owner?: string; repo: string; prNumber?: number; pr_url: string };
-            inline_comments: Array<{
-              target_id: string;
-              path: string;
-              line: number;
-              start_line?: number;
-              body: string;
-            }>;
-          };
-        };
-        replyTargets: Array<{
-          id: string;
-          spec: {
-            kind: string;
-            startLine?: number;
-          };
-        }>;
-      };
-      expect(arg.message.kind).toBe("review");
-      // The review's submitted_at is carried into the payload for temporal scoping.
-      expect(arg.message.payload.created_at).toBe("2026-04-23T10:00:00Z");
-      expect(arg.message.payload.reviewer_login).toBe("reviewer");
-      expect(arg.message.payload.pr).toEqual({
-        owner: "o",
-        repo: "r",
-        prNumber: 7,
-        pr_url: "https://github.com/o/r/pull/7",
-      });
-      // 2 inline + 1 review_body
-      expect(arg.replyTargets).toHaveLength(3);
-      expect(arg.message.payload.inline_comments[0]).toMatchObject({
-        target_id: "11",
-        path: "a.ts",
-        line: 3,
-        start_line: 1,
-      });
-      expect(arg.message.payload.inline_comments[1]?.start_line).toBeUndefined();
-      expect(arg.replyTargets[0]).toMatchObject({
-        id: "11",
-        spec: { kind: "review_comment", startLine: 1 },
-      });
-      expect(arg.replyTargets[1]?.spec.startLine).toBeUndefined();
-    });
-  });
-
-  describe("enqueueLinearComment", () => {
-    it("activity UUID is the external_id; agent session id is the reply target + payload target_id", async () => {
-      await service.enqueueLinearComment({
-        task: makeTask(),
-        agentActivityId: "act-1",
-        agentSessionId: "sess-1",
-        body: "any update?",
-      });
-
-      const arg = appendInbox.mock.calls[0]?.[0] as {
-        message: {
-          source: string;
-          external_id: string;
-          payload: { task_key: string; target_id: string };
-        };
-        replyTargets: Array<{ id: string; spec: { kind: string } }>;
-      };
-      expect(arg.message.source).toBe("linear");
-      expect(arg.message.external_id).toBe("act-1");
-      expect(arg.message.payload).toMatchObject({
-        task_id: "task-1",
-        task_key: "XYZ-1",
-      });
-      // Replies route to the session, not the activity.
-      expect(arg.message.payload.target_id).toBe("sess-1");
-      expect(arg.replyTargets[0]?.id).toBe("sess-1");
-      expect(arg.replyTargets[0]?.spec.kind).toBe("linear_session");
-    });
-  });
-
-  describe("enqueueCiResult", () => {
-    it("appends a kind='ci_result' row with correct payload and reply target", async () => {
-      await service.enqueueCiResult({
-        task: makeTask(),
-        runId: 123456789,
-        runAttempt: 2,
-        workflowName: "CI",
-        workflowPath: ".github/workflows/ci.yml",
-        conclusion: "success",
-        runUrl: "https://github.com/o/r/actions/runs/123456789",
-        headSha: "abc123",
-        headBranch: "devbox/XYZ-1234-fix",
-        owner: "o",
-        repo: "r",
-        prNumber: 42,
-      });
-
-      const arg = appendInbox.mock.calls[0]?.[0] as {
-        message: {
-          source: string;
-          kind: string;
-          external_id: string;
-          payload: {
-            target_id: string;
-            workflow_name: string;
-            workflow_path: string;
-            conclusion: string;
-            run_url: string;
-            head_sha: string;
-            head_branch: string;
-            task_key: string;
-            pr: { repo: string; pr_url: string };
-          };
-        };
-        replyTargets: Array<{
-          id: string;
-          spec: { kind: string; owner: string; repo: string; prNumber: number; commentId: number };
-        }>;
-      };
-      expect(arg.message.source).toBe("github");
-      expect(arg.message.kind).toBe("ci_result");
-      expect(arg.message.external_id).toBe("workflow_run:123456789:2:42");
-      expect(arg.message.payload.target_id).toBe("123456789");
-      expect(arg.message.payload.workflow_name).toBe("CI");
-      expect(arg.message.payload.workflow_path).toBe(".github/workflows/ci.yml");
-      expect(arg.message.payload.conclusion).toBe("success");
-      expect(arg.message.payload.run_url).toBe("https://github.com/o/r/actions/runs/123456789");
-      expect(arg.message.payload.head_sha).toBe("abc123");
-      expect(arg.message.payload.head_branch).toBe("devbox/XYZ-1234-fix");
-      expect(arg.message.payload).toMatchObject({
-        task_id: "task-1",
-        task_key: "XYZ-1",
-      });
-      expect(arg.message.payload.pr).toEqual({
-        repo: "r",
-        pr_url: "https://github.com/o/r/pull/42",
-      });
-      expect(arg.replyTargets).toHaveLength(1);
-      expect(arg.replyTargets[0]).toMatchObject({
-        id: "123456789",
-        spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 42, commentId: 0 },
-      });
-    });
-
-    const ciParams = {
-      task: makeTask(),
-      runId: 123456789,
-      runAttempt: 2,
-      workflowName: "CI",
-      workflowPath: ".github/workflows/ci.yml",
-      conclusion: "failure",
-      runUrl: "https://github.com/o/r/actions/runs/123456789",
-      headSha: "abc123",
-      headBranch: "devbox/XYZ-1234-fix",
-      owner: "o",
-      repo: "r",
-      prNumber: 42,
+    // One open row per kind on a Linear task. getById echoes each row so the
+    // per-row status re-check passes.
+    const stageRows = (rows: InboxRow[]) => {
+      listNonTerminalByTask.mockResolvedValue(rows);
+      getById.mockImplementation((id: string) =>
+        Promise.resolve(rows.find((r) => r.id === id) ?? null),
+      );
     };
+    const linearRow = (id: string, sessionId: string, kind = "comment"): InboxRow =>
+      ({
+        ...ghCommentRow(id),
+        source: "linear",
+        kind,
+        reply_targets: [{ id: sessionId, spec: { kind: "linear_session" } }],
+      }) as InboxRow;
 
-    it("enqueues when under the loop-breaker threshold", async () => {
-      countCiResultsByTask.mockResolvedValue(19); // < 20
-      await service.enqueueCiResult(ciParams);
-      expect(appendInbox).toHaveBeenCalledTimes(1);
-    });
-
-    it("drops the CI failure once the loop-breaker threshold is reached", async () => {
-      countCiResultsByTask.mockResolvedValue(20); // >= 20
-      await service.enqueueCiResult(ciParams);
-      expect(appendInbox).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("enqueue paths carry task_id and task_key from the task row", () => {
-    const apiTask = makeTask({
-      id: "task-api",
-      source: "api",
-      key: "DBX-API-7",
-      externalUrl: "https://cp.example/api/tasks/DBX-API-7",
-    });
-    const identity = { task_id: "task-api", task_key: "DBX-API-7" };
-    const spec = {
-      kind: "issue_comment" as const,
-      owner: "o",
-      repo: "r",
-      prNumber: 7,
-      commentId: 555,
-    };
-
-    it("enqueueComment", async () => {
-      await service.enqueueComment({
-        task: apiTask,
-        commentId: 555,
-        body: "@harness fix",
-        spec,
-        createdAt: "2026-10-07T12:00:00Z",
-      });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-api",
-        message: {
-          source: "github",
-          kind: "comment",
-          external_id: "555",
-          payload: {
-            target_id: "555",
-            body: "@harness fix",
-            pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
-            created_at: "2026-10-07T12:00:00Z",
-            ...identity,
-          },
-        },
-        replyTargets: [{ id: "555", spec }],
-      });
-    });
-
-    it("enqueueReview", async () => {
-      await service.enqueueReview({
-        task: apiTask,
-        reviewId: 88,
-        reviewBody: "@harness",
-        inlineComments: [{ id: 11, path: "a.ts", line: 3, body: "nit" }],
-        owner: "o",
-        repo: "r",
-        prNumber: 7,
-        reviewerLogin: "rev",
-        createdAt: "2026-10-07T12:00:00Z",
-      });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-api",
-        message: {
-          source: "github",
-          kind: "review",
-          external_id: "88",
-          payload: {
-            review_body: { target_id: "88", body: "@harness" },
-            inline_comments: [
-              { target_id: "11", path: "a.ts", line: 3, start_line: undefined, body: "nit" },
-            ],
-            pr: { owner: "o", repo: "r", prNumber: 7, pr_url: "https://github.com/o/r/pull/7" },
-            reviewer_login: "rev",
-            created_at: "2026-10-07T12:00:00Z",
-            ...identity,
-          },
-        },
-        replyTargets: [
-          {
-            id: "11",
-            spec: {
-              kind: "review_comment",
-              owner: "o",
-              repo: "r",
-              prNumber: 7,
-              commentId: 11,
-              inReplyTo: 11,
-              path: "a.ts",
-              line: 3,
-              startLine: undefined,
+    it("notifies each row by kind: Linear session error, review-comment reply + 😕, review body as a PR comment, CI silent", async () => {
+      stageRows([
+        linearRow("lin", "sess-2"),
+        {
+          ...ghCommentRow("rc"),
+          reply_targets: [
+            {
+              id: "556",
+              spec: {
+                kind: "review_comment",
+                owner: "o",
+                repo: "r",
+                prNumber: 7,
+                commentId: 556,
+                inReplyTo: 556,
+                path: "a.ts",
+                line: 3,
+              },
             },
-          },
-          {
-            id: "88",
-            spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 7, reviewId: 88 },
-          },
-        ],
-      });
-    });
-
-    it("enqueueCiResult", async () => {
-      await service.enqueueCiResult({
-        task: apiTask,
-        runId: 9,
-        runAttempt: 1,
-        workflowName: "CI",
-        workflowPath: ".github/workflows/ci.yml",
-        conclusion: "failure",
-        runUrl: "https://github.com/o/r/actions/runs/9",
-        headSha: "abc",
-        headBranch: "devbox/DBX-API-7-x",
-        owner: "o",
-        repo: "r",
-        prNumber: 7,
-      });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-api",
-        message: {
-          source: "github",
+          ],
+        },
+        {
+          ...ghCommentRow("rev"),
+          kind: "review",
+          reply_targets: [
+            {
+              id: "11",
+              spec: {
+                kind: "review_comment",
+                owner: "o",
+                repo: "r",
+                prNumber: 8,
+                commentId: 11,
+                inReplyTo: 11,
+                path: "b.ts",
+                line: 9,
+              },
+            },
+            {
+              id: "88",
+              spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 8, reviewId: 88 },
+            },
+          ],
+        } as InboxRow,
+        {
+          ...ghCommentRow("ci"),
           kind: "ci_result",
-          external_id: "workflow_run:9:1:7",
-          payload: {
-            target_id: "9",
-            workflow_name: "CI",
-            workflow_path: ".github/workflows/ci.yml",
-            conclusion: "failure",
-            run_url: "https://github.com/o/r/actions/runs/9",
-            head_sha: "abc",
-            head_branch: "devbox/DBX-API-7-x",
-            pr: { repo: "r", pr_url: "https://github.com/o/r/pull/7" },
-            ...identity,
-          },
-        },
-        replyTargets: [
-          {
-            id: "9",
-            spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: 0 },
-          },
-        ],
-      });
+          reply_targets: [
+            {
+              id: "9001",
+              spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 9, commentId: 0 },
+            },
+          ],
+        } as InboxRow,
+      ]);
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+
+      expect(emitError).toHaveBeenCalledTimes(1);
+      expect(emitError).toHaveBeenCalledWith(
+        expect.anything(),
+        "sess-2",
+        WORKSPACE_MISSING_MESSAGE,
+      );
+      expect(postReviewCommentReply).toHaveBeenCalledTimes(1);
+      expect(postReviewCommentReply).toHaveBeenCalledWith(
+        "o",
+        "r",
+        7,
+        556,
+        WORKSPACE_MISSING_MESSAGE,
+        expect.any(AbortSignal),
+      );
+      expect(addReviewCommentReaction).toHaveBeenCalledTimes(1);
+      expect(addReviewCommentReaction).toHaveBeenCalledWith(
+        "o",
+        "r",
+        556,
+        "confused",
+        expect.any(AbortSignal),
+      );
+      // Only the review body posts; its inline comments and the CI row get nothing.
+      expect(postIssueComment).toHaveBeenCalledTimes(1);
+      expect(postIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        8,
+        WORKSPACE_MISSING_MESSAGE,
+        expect.any(AbortSignal),
+      );
+      expect(addIssueCommentReaction).not.toHaveBeenCalled();
+      expect(markFailed.mock.calls.map((c) => (c[0] as { inboxId: string }).inboxId)).toEqual([
+        "lin",
+        "rc",
+        "rev",
+        "ci",
+      ]);
     });
 
-    it("enqueueLinearComment", async () => {
-      await service.enqueueLinearComment({
-        task: makeTask({ id: "task-1", key: "XYZ-1" }),
-        agentActivityId: "act-1",
-        agentSessionId: "sess-2",
-        body: "follow-up",
+    it("posts per row, not per target: two Linear rows on one session get two errors", async () => {
+      // failTask dedupes by target id; this path does not.
+      stageRows([linearRow("a", "sess-1", "assignment"), linearRow("b", "sess-1")]);
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+
+      expect(emitError).toHaveBeenCalledTimes(2);
+      expect(markFailed).toHaveBeenCalledTimes(2);
+    });
+
+    it("marks the row before posting, and posts nothing when markFailed transitions nothing", async () => {
+      const order: string[] = [];
+      postIssueComment.mockImplementation(() => {
+        order.push("post");
+        return Promise.resolve({ id: 1, url: "u" });
       });
-      expect(appendInbox).toHaveBeenCalledWith({
-        taskId: "task-1",
-        message: {
-          source: "linear",
-          kind: "comment",
-          external_id: "act-1",
-          payload: {
-            target_id: "sess-2",
-            body: "follow-up",
-            pr: null,
-            created_at: "",
-            task_id: "task-1",
-            task_key: "XYZ-1",
-          },
-        },
-        replyTargets: [{ id: "sess-2", spec: { kind: "linear_session" } }],
+      addIssueCommentReaction.mockImplementation(() => {
+        order.push("react");
+        return Promise.resolve();
       });
+      // Row b went terminal under us (a racing restart or a late `completed`).
+      markFailed.mockImplementation(({ inboxId }: { inboxId: string }) => {
+        order.push(`mark ${inboxId}`);
+        return Promise.resolve(inboxId === "a" ? [{ id: "a" }] : []);
+      });
+      stageRows([ghCommentRow("a"), ghCommentRow("b")]);
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+
+      expect(order).toEqual(["mark a", "post", "react", "mark b"]);
+    });
+
+    it("a Linear token failure drops only that row's notice: every row is marked failed, later rows still post", async () => {
+      stageRows([linearRow("a", "sess-1"), ghCommentRow("b")]);
+      (linearTokenProvider.getAuthorizedLinearClient as ReturnType<typeof mock>).mockRejectedValue(
+        new LinearTokenError("Linear token request failed: Unable to connect"),
+      );
+
+      await service.deadLetterWorkspaceMissing(makeTask({ sandboxId: null }));
+
+      expect(emitError).not.toHaveBeenCalled();
+      expect(markFailed.mock.calls.map((c) => (c[0] as { inboxId: string }).inboxId)).toEqual([
+        "a",
+        "b",
+      ]);
+      expect(postIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        7,
+        WORKSPACE_MISSING_MESSAGE,
+        expect.any(AbortSignal),
+      );
     });
   });
 });

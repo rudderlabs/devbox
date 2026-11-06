@@ -1,14 +1,14 @@
 // devbox ls: list tasks, newest first.
 import { Option } from "commander";
-import type { ApiTask, ApiTaskSource, ApiTaskState } from "../../../control-plane/src/types/api";
+import type { ApiTask, ApiTaskState } from "../../../control-plane/src/types/api";
 import type { CoreOps } from "../../core/ops";
 import type { CommandModule, CommonArgs } from "../command";
-import { age, oneLine, paint, STATE_TONE, type Tone } from "../format";
+import { age, oneLine, paint, STATE_TONE, type Tone, toJson } from "../format";
 import { colorEnabled, type Io } from "../io";
 import { common, commonArgs, integer, type Opts } from "../options";
 
 export type LsArgs = CommonArgs & {
-  source?: ApiTaskSource;
+  source?: string;
   mine: boolean;
   state?: ApiTaskState;
   limit?: number;
@@ -28,7 +28,7 @@ export function render(
       t.state,
       oneLine(t.title, 40),
       t.description === null ? "-" : oneLine(t.description, 40),
-      t.created_by?.name ?? "-",
+      t.created_by ? oneLine(t.created_by.name, 40) : "-",
       age(t.created_at, now),
     ]),
   ];
@@ -60,7 +60,7 @@ export async function run(args: LsArgs, ops: CoreOps, io: Io): Promise<number> {
     state: args.state,
     limit: args.limit,
   });
-  if (args.json) io.out(JSON.stringify(tasks, null, 2));
+  if (args.json) io.out(toJson(tasks, 2));
   else
     io.out(tasks.length === 0 ? "No tasks." : render(tasks, io.now(), { color: colorEnabled(io) }));
   return 0;
@@ -72,9 +72,8 @@ export const ls: CommandModule = {
       program
         .command("ls")
         .description("List tasks, newest first")
-        .addOption(
-          new Option("--source <source>", "only tasks from this source").choices(["api", "linear"]),
-        )
+        // The server knows the sources and answers 400 for any other.
+        .option("--source <source>", "only tasks from this source")
         .option("--mine", "only tasks created with your token")
         .addOption(
           new Option("--state <state>", "only tasks in this state").choices([
