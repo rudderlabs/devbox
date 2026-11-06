@@ -279,6 +279,14 @@ describe("Jira webhook: comment", () => {
     expect(taskCalls).toEqual([]);
   });
 
+  it("drops an app's comment that doesn't mention the bot without a log line", async () => {
+    const { signed, taskCalls } = setup();
+    const res = await signed(commentEvent("build passed", { author: user(HUMAN, "app") }));
+    expect(await res.json()).toEqual({ status: "ignored" });
+    expect(taskCalls).toEqual([]);
+    expect(logged(info)).toEqual([]);
+  });
+
   it("drops the bot's own comment without a log line, even one that names it", async () => {
     const { signed, taskCalls, jiraCalls } = setup();
     const res = await signed(commentEvent("@devbox here is the PR", { author: user(BOT, "app") }));
@@ -384,13 +392,15 @@ describe("Jira webhook: logs", () => {
     expect(all).not.toContain(EMAIL);
   });
 
-  it("answers 500 to an internal failure and logs only its class and Postgres code", async () => {
+  it("answers 500 to an internal failure and logs only its class and SQLSTATE", async () => {
     const error = spyOn(logger, "error").mockImplementation(() => logger);
     try {
-      // A database error's message carries the query's parameters.
+      // A database error's message carries the query's parameters. Bun's
+      // PostgresError carries the SQLSTATE in `errno` and a constant in `code`.
       const fail = async () => {
         const cause = Object.assign(new Error("unsupported Unicode escape sequence"), {
-          code: "22P05",
+          code: "ERR_POSTGRES_SERVER_ERROR",
+          errno: "22P05",
         });
         throw new DrizzleQueryError("insert into inbox ...", ["please fix the footer"], cause);
       };

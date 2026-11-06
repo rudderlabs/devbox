@@ -95,9 +95,12 @@ export class JiraWebhookController {
       if (comment) return await this.onComment(c, comment);
       return c.json({ status: "ignored" }, 200);
     } catch (err) {
-      // The class and the Postgres code only: a database error's message
+      // The class and the Postgres SQLSTATE only: a database error's message
       // carries the query's parameters (the issue's text, the comment body).
-      const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+      // drizzle wraps the driver's error in `cause`; Bun's driver puts the
+      // SQLSTATE in `errno` (`code` is its own constant).
+      const pg = ((err as { cause?: unknown } | null)?.cause ?? err) as { errno?: unknown } | null;
+      const code = pg?.errno;
       this.log.error("jira webhook failed", {
         error: errorClass(err),
         ...(typeof code === "string" ? { code } : {}),
@@ -164,10 +167,12 @@ export class JiraWebhookController {
     // The bot's own replies (which may name it) and the many comments that
     // don't mention it are not worth a log line. Its own go first: a reply
     // that names the bot must never count as a mention.
+    // Apps' comments that don't mention it (automation rules, other
+    // integrations) are as quiet as people's.
     if (comment.author.accountId === cfg.botAccountId) return c.json({ status: "ignored" }, 200);
+    if (!comment.mentionsBot) return c.json({ status: "ignored" }, 200);
     const skip = this.skipReason(comment.author);
     if (skip) return this.ignored(c, skip, meta);
-    if (!comment.mentionsBot) return c.json({ status: "ignored" }, 200);
     if (comment.restricted) return this.ignored(c, "restricted_comment", meta);
 
     if (!isTrusted(comment.author, cfg.botAccountId)) {
