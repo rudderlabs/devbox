@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { LinearClient } from "@linear/sdk";
 import type { ReplyTarget } from "../../repositories/inbox.repository";
+import { NO_WEBHOOK } from "./fakeIntegrations";
 
 // A token file that does not exist: the GitHub client has no token to send.
 mock.module("../../config", () => ({
-  config: { podId: "pod-test", github: { tokenSettings: { file: "/nonexistent/devbox/token" } } },
+  config: { podId: "pod-test", codeHost: { tokenSettings: { file: "/nonexistent/devbox/token" } } },
 }));
 
-const { HttpError, TokenFetchError, parseRetryAfter, retryable, withTimeout } = await import(
-  "../http"
-);
+const { HttpError, parseRetryAfter, retryable, withTimeout } = await import("../http");
 const { RetryableError } = await import("../outbound");
 const { LinearIntegration } = await import("../linear");
-const { LinearTokenError } = await import("../../clients/linearOauth");
+const { LinearTokenError, requestClientCredentialsToken } = await import("../linear/oauth");
+const { LinearTokenProvider } = await import("../linear/tokenProvider");
 // A fresh instance (see github.test.ts): never the possibly-mocked barrel.
 const { postIssueComment } = (await import(
   "../../clients/githubApi.ts" + "?http-test"
@@ -122,13 +122,6 @@ describe("retryable: typed errors", () => {
     expect(retryable(err)).toBeInstanceOf(RetryableError);
   });
 
-  it("a token-fetch failure is retryable, Linear's included", () => {
-    expect(retryable(new TokenFetchError("no token"))).toBeInstanceOf(RetryableError);
-    expect(retryable(new LinearTokenError("Linear token request failed"))).toBeInstanceOf(
-      RetryableError,
-    );
-  });
-
   it("anything else is not retryable", () => {
     expect(retryable(new Error("boom"))).toBeUndefined();
     expect(retryable("boom")).toBeUndefined();
@@ -177,13 +170,134 @@ describe("GitHub client", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("a missing token is a TokenFetchError and sends nothing", async () => {
+  it("a missing GitHub token is not retryable and sends nothing", async () => {
     const fetchStub = mock(() => Promise.resolve(new Response("{}")));
     globalThis.fetch = fetchStub as unknown as typeof fetch;
     const err = await postIssueComment("o", "r", 1, "hi").catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(TokenFetchError);
-    expect(retryable(err)).toBeInstanceOf(RetryableError);
+    expect((err as Error).message).toStartWith("cannot read GITHUB_TOKEN_FILE");
+    expect(retryable(err)).toBeUndefined();
     expect(fetchStub).not.toHaveBeenCalled();
+  });
+});
+
+// A failed Linear token request sends nothing. It holds (RetryableError) only
+// when a later request may succeed; an answer that needs an operator is thrown
+// as is, and the caller drops the send.
+describe("Linear deliver: token failures", () => {
+  const target: ReplyTarget = { id: "sess-1", spec: { kind: "linear_session" } };
+  const reply = { type: "reply", body: "hi" } as const;
+  const status = { status: async () => ({}) as never };
+  const deliverWith = (provider: ConstructorParameters<typeof LinearIntegration>[0]) =>
+    new LinearIntegration(provider, status, NO_WEBHOOK)
+      .deliver({ signal: new AbortController().signal, log: logger }, target, reply)
+      .then(() => "sent")
+      .catch((e: unknown) => e);
+
+  // What requestClientCredentialsToken throws when the token endpoint answers
+  // with `answer`.
+  const tokenError = (answer: () => Promise<Response>) =>
+    requestClientCredentialsToken(
+      { clientId: "id", clientSecret: "secret" },
+      answer as unknown as typeof fetch,
+    ).then(
+      () => {
+        throw new Error("the token request succeeded");
+      },
+      (e: unknown) => e,
+    );
+  const answers = (code: number, error?: string) => () =>
+    Promise.resolve(Response.json(error ? { error } : {}, { status: code }));
+
+  const cases: Array<[string, () => Promise<Response>, "hold" | "drop"]> = [
+    [
+      "connection refused",
+      () =>
+        Promise.reject(Object.assign(new TypeError("Unable to connect"), { code: "ECONNREFUSED" })),
+      "hold",
+    ],
+    [
+      "the request timeout",
+      () => Promise.reject(new DOMException("The operation timed out.", "TimeoutError")),
+      "hold",
+    ],
+    [
+      "a 200 whose body is cut off",
+      () =>
+        Promise.resolve(
+          new Response('{"access_token":"tok', {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      "hold",
+    ],
+    ["408", answers(408), "hold"],
+    ["429", answers(429), "hold"],
+    ["500 server_error", answers(500, "server_error"), "hold"],
+    ["502", answers(502), "hold"],
+    ["503", answers(503), "hold"],
+    ["400 invalid_client", answers(400, "invalid_client"), "drop"],
+    ["400 invalid_grant", answers(400, "invalid_grant"), "drop"],
+    ["400 unauthorized_client", answers(400, "unauthorized_client"), "drop"],
+    ["400 invalid_scope", answers(400, "invalid_scope"), "drop"],
+    ["401", answers(401), "drop"],
+    ["403", answers(403), "drop"],
+    ["200 without a token", answers(200), "drop"],
+  ];
+  for (const [name, answer, expected] of cases) {
+    it(`${name}: ${expected}`, async () => {
+      const err = await tokenError(answer);
+      expect(err).toBeInstanceOf(LinearTokenError);
+      const out = await deliverWith({ getAuthorizedLinearClient: () => Promise.reject(err) });
+      if (expected === "hold") {
+        expect(out).toBeInstanceOf(RetryableError);
+        expect((out as Error).message).toBe(`Linear token fetch failed: ${(err as Error).message}`);
+      } else {
+        expect(out).toBe(err);
+      }
+    });
+  }
+
+  it("a token renewal after a 401 holds or drops by the same rule", async () => {
+    const s = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () =>
+        Response.json(
+          {
+            errors: [
+              { message: "Authentication required", extensions: { type: "authentication error" } },
+            ],
+          },
+          { status: 401 },
+        ),
+    });
+    try {
+      const renewalFailingWith = (renewal: InstanceType<typeof LinearTokenError>) => {
+        let calls = 0;
+        return new LinearTokenProvider({
+          creds: { clientId: "id", clientSecret: "secret" },
+          requestToken: async () => {
+            if (calls++ > 0) throw renewal;
+            return {
+              accessToken: "t1",
+              expiresAt: new Date(Date.now() + 30 * 86_400_000),
+              scope: "",
+            };
+          },
+          apiUrl: `http://127.0.0.1:${s.port}/graphql`,
+        });
+      };
+      const revoked = new LinearTokenError("revoked", { status: 400, code: "invalid_client" });
+      const dropped = await deliverWith(renewalFailingWith(revoked));
+      expect(dropped).not.toBeInstanceOf(RetryableError);
+      expect((dropped as { raw?: unknown }).raw).toBe(revoked);
+
+      const down = new LinearTokenError("down", { status: 503 });
+      expect(await deliverWith(renewalFailingWith(down))).toBeInstanceOf(RetryableError);
+    } finally {
+      s.stop(true);
+    }
   });
 });
 
@@ -198,8 +312,8 @@ describe("Linear deliver: SDK failures", () => {
         getAuthorizedLinearClient: (signal?: AbortSignal) =>
           Promise.resolve(new LinearClient({ accessToken: "t", apiUrl, signal })),
       },
-      true,
-      { status: async () => ({ configured: false }) },
+      { status: async () => ({}) as never },
+      NO_WEBHOOK,
     );
   const deliverTo = (apiUrl: string, signal = new AbortController().signal) =>
     integrationFor(apiUrl)

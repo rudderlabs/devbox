@@ -6,59 +6,67 @@ import {
   postDiscussionNote,
   postMrNote,
 } from "../../clients/gitlab";
-import type { GitlabTokenState } from "../../clients/gitlabToken";
-import type { GitlabWebhookController } from "../../controllers/gitlabWebhook.controller";
-import type { InboxRow, ReplyTarget, ReplyTargetSpec } from "../../repositories/inbox.repository";
-import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
-import type { Integration } from "../types";
+import type { Integration, IntegrationDefinition, ReplyTarget, Round } from "../types";
+import { type GitlabConfig, parseGitlabConfig } from "./config";
+import { type GitlabSpec, isGitlabSpec } from "./rounds";
+import { type GitlabStatus, GitlabStatusService } from "./status";
+import { GitlabWebhookController } from "./webhook";
 
-type GitlabSpec = Extract<ReplyTargetSpec, { kind: "mr_note" | "mr_diff_note" }>;
-
-export type GitlabStatus = {
-  token: GitlabTokenState;
-  webhooks: { enabled: boolean; lastWebhookAt: string | null; ciResults: boolean };
+// GitLab creates no tasks: its rounds come only from its webhooks, so it is
+// enabled exactly when they are, and disabling them skips open rounds' replies.
+// Its status always reports the control plane's own GitLab token.
+export const gitlab: IntegrationDefinition<GitlabConfig> = {
+  name: "gitlab",
+  createsTasks: false,
+  parseConfig: parseGitlabConfig,
+  create(core, cfg) {
+    const controller = new GitlabWebhookController(core.tasks, cfg, core.log);
+    const status = new GitlabStatusService(gitlabTokenState, {
+      enabled: true,
+      ciResults: cfg.ciResultEnabled,
+      lastWebhookAt: () => controller.lastWebhookAt(),
+    });
+    return new GitlabIntegration(cfg, status, controller);
+  },
+  disabledStatus: () =>
+    new GitlabStatusService(gitlabTokenState, {
+      enabled: false,
+      ciResults: false,
+      lastWebhookAt: () => null,
+    }).status(),
 };
 
 // GitLab rounds (notes and CI results) post on the merge request. A merge
 // request shows no live progress and may be public: a failure's raw detail
-// never goes there. GitLab creates no tasks: its rounds come only from its
-// webhooks, so it is enabled exactly when they are.
-export class GitlabIntegration implements Integration<GitlabStatus> {
-  readonly name = "gitlab";
-  // Today's webhook controller; app.ts attaches it afterwards (only when enabled).
-  controller?: Pick<GitlabWebhookController, "handleWebhook" | "lastWebhookAt">;
+// never goes there.
+export class GitlabIntegration implements Integration {
+  private readonly botUsername: string;
 
   constructor(
-    // GITLAB_WEBHOOKS_ENABLED.
-    readonly enabled: boolean,
-    private readonly settings: { ciResults: boolean; botUsername: string | undefined },
-  ) {}
+    cfg: Pick<GitlabConfig, "botUsername">,
+    private statusService: Pick<GitlabStatusService, "status">,
+    private controller: Pick<GitlabWebhookController, "handleWebhook">,
+  ) {
+    this.botUsername = cfg.botUsername;
+  }
 
-  async webhook(c: Context): Promise<Response> {
-    if (!this.controller) return c.notFound();
+  // Today's responses: 401 for a bad signature, 403 for untrusted actors, 503
+  // when the trusted set can't be fetched. The controller holds its TaskService.
+  webhook(c: Context): Promise<Response> {
     return this.controller.handleWebhook(c);
   }
 
   async status(): Promise<GitlabStatus> {
-    return {
-      token: gitlabTokenState(),
-      webhooks: this.enabled
-        ? {
-            enabled: true,
-            lastWebhookAt: this.controller?.lastWebhookAt() ?? null,
-            ciResults: this.settings.ciResults,
-          }
-        : { enabled: false, lastWebhookAt: null, ciResults: false },
-    };
+    return this.statusService.status();
   }
 
   async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
+    // Anything else isn't a GitLab target (a malformed or foreign row): the
+    // error is logged and the send dropped.
     const spec = target.spec;
-    if (spec.kind !== "mr_note" && spec.kind !== "mr_diff_note") {
-      throw new Error(`gitlab cannot deliver to a ${spec.kind} target`);
-    }
+    if (!isGitlabSpec(spec)) throw new Error("not a GitLab merge request target");
     switch (message.type) {
       case "reply":
         await post(ctx, spec, message.body);
@@ -66,7 +74,7 @@ export class GitlabIntegration implements Integration<GitlabStatus> {
       case "progress":
         return;
       case "failure":
-        await this.deliverFailure(ctx, spec, message);
+        await deliverFailure(ctx, spec, message, this.botUsername);
         return;
       default: {
         const _exhaustive: never = message;
@@ -74,43 +82,48 @@ export class GitlabIntegration implements Integration<GitlabStatus> {
       }
     }
   }
+}
 
-  private async deliverFailure(
-    ctx: SendCtx,
-    spec: GitlabSpec,
-    message: Extract<Outbound, { type: "failure" }>,
-  ): Promise<void> {
-    const { round } = message;
-    switch (message.cause) {
-      case "task_failed":
-        // failTask's message is control-plane-generated and scrubbed: public-safe.
-        if (message.summary) await post(ctx, spec, message.summary);
-        return;
-      case "round_failed": {
-        // A failed CI-fix round stays silent.
-        if (round.kind === "ci_result") return;
-        const bot = this.settings.botUsername;
-        if (!bot) return;
-        await post(
-          ctx,
-          spec,
-          `⚠️ Something went wrong while working on this. Mention @${bot} in a new comment to retry.`,
-        );
-        return;
-      }
-      case "workspace_missing":
-        await workspaceMissing(ctx, spec, round);
-        return;
+async function deliverFailure(
+  ctx: SendCtx,
+  spec: GitlabSpec,
+  message: Extract<Outbound, { type: "failure" }>,
+  botUsername: string,
+): Promise<void> {
+  const { round } = message;
+  switch (message.cause) {
+    case "task_failed":
+      // failTask's message is control-plane-generated and scrubbed: public-safe.
+      if (message.summary) await post(ctx, spec, message.summary);
+      return;
+    case "round_failed": {
+      // A failed CI-fix round stays silent.
+      if (round.kind === "ci_result") return;
+      // The retry hint is an @-mention, which the webhooks turn into a round.
+      await post(
+        ctx,
+        spec,
+        `⚠️ Something went wrong while working on this. Mention @${botUsername} in a new comment to retry.`,
+      );
+      return;
     }
+    case "workspace_missing":
+      if (message.summary) await workspaceMissing(ctx, spec, round, message.summary);
+      return;
   }
 }
 
 // One notice per round: a note gets a reply plus 😕. A CI result is
 // informational and dead-lettered silently.
-async function workspaceMissing(ctx: SendCtx, spec: GitlabSpec, round: InboxRow): Promise<void> {
+async function workspaceMissing(
+  ctx: SendCtx,
+  spec: GitlabSpec,
+  round: Round,
+  text: string,
+): Promise<void> {
   if (round.kind !== "comment") return;
   try {
-    await post(ctx, spec, WORKSPACE_MISSING_MESSAGE);
+    await post(ctx, spec, text);
   } finally {
     // The reaction is independent of the reply: try it even if the reply failed.
     if (spec.noteId > 0) {

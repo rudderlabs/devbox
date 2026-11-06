@@ -1,8 +1,8 @@
 // GitHub REST wrappers + PR-URL parsing. Plain function exports, mirrors
-// clients/linear.ts. This is the IMPLEMENTATION module; production code and
-// tests import it through the ../clients/github barrel. github.test.ts imports
-// it directly because this specifier is never mock.module'd — see github.ts and
-// control-plane/README.md (Conventions) for why that matters.
+// integrations/linear/client.ts. This is the IMPLEMENTATION module; production
+// code and tests import it through the ../clients/github barrel. github.test.ts
+// imports it directly because this specifier is never mock.module'd — see
+// github.ts and control-plane/README.md (Conventions) for why that matters.
 //
 // Auth: a bearer token from the GitHub token provider (./githubToken):
 // GITHUB_TOKEN_FILE re-read on a TTL, or GITHUB_TOKEN. The control plane is
@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { config } from "../config";
 import { githubApiBaseUrl } from "../githubToken/mint";
-import { HttpError, parseRetryAfter, rateLimitWaitMs, TokenFetchError } from "../integrations/http";
+import { HttpError, parseRetryAfter, rateLimitWaitMs } from "../integrations/http";
 import { logger } from "../logger";
 import {
   type GithubTokenProvider,
@@ -31,8 +31,8 @@ let githubToken: GithubTokenProvider | undefined;
 function tokenProvider(): GithubTokenProvider {
   if (!githubToken) {
     // Some test suites module-mock config; keep this client resilient by
-    // tolerating a missing github section in the mocked shape.
-    const settings = (config as { github?: { tokenSettings?: GithubTokenSettings } }).github
+    // tolerating a missing codeHost section in the mocked shape.
+    const settings = (config as { codeHost?: { tokenSettings?: GithubTokenSettings } }).codeHost
       ?.tokenSettings ?? { token: process.env.GITHUB_TOKEN ?? "proxy-github-dummy-token" };
     githubToken = githubTokenProvider(settings, {
       readFile: (path) => readFileSync(path, "utf8"),
@@ -43,23 +43,20 @@ function tokenProvider(): GithubTokenProvider {
   return githubToken;
 }
 
-// No token means nothing was sent, so a send may be retried (TokenFetchError).
-function token(): string {
-  try {
-    return tokenProvider()();
-  } catch (err) {
-    throw new TokenFetchError(err instanceof Error ? err.message : String(err));
-  }
-}
-
 // The token provider's state, for GET /api/integrations/github.
 export function githubTokenState(): GithubTokenState {
   return tokenProvider().state();
 }
 
+// Throws, sending nothing, while there is no token: the token file has never
+// been readable or is still empty. Usually the minter can't use the App's key,
+// which only an operator can fix, so callers drop the send instead of holding
+// it. The file is also empty for the minute or so after a new install, before
+// the first token is minted; on a new database nothing is sent then, since no
+// task can have opened a pull request yet.
 function githubHeaders(): Record<string, string> {
   return {
-    Authorization: `Bearer ${token()}`,
+    Authorization: `Bearer ${tokenProvider()()}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
     "Content-Type": "application/json",
@@ -357,8 +354,8 @@ export async function getUserIdByLogin(login: string): Promise<number | null> {
 }
 
 // Parse a github.com PR URL → {owner, repo, prNumber}; null for a non-GitHub
-// or malformed URL. Used by the EventDispatcher pr_opened case to target the
-// onboarding comment.
+// or malformed URL. The code host uses it for a new PR's coordinates (its
+// onboarding comment and assignee mirror).
 //   https://github.com/acme/widgets/pull/42
 //     → { owner: "acme", repo: "widgets", prNumber: 42 }
 export function parsePrUrl(

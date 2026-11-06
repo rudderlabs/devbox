@@ -1,9 +1,9 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "../db";
 import type { Task } from "../db/schema";
-import type { TaskRef } from "../integrations/intake";
-import type { Person, TaskSource } from "../integrations/types";
+import type { Person } from "../integrations/types";
 import { logger } from "../logger";
+import type { TaskRef } from "../services/task.service";
 import type { HarnessEvent } from "../types/harnessEvent";
 import type { AssignmentPayload } from "../types/inboxMessage";
 import {
@@ -13,7 +13,7 @@ import {
   taskIdentity,
 } from "./inbox.repository";
 import {
-  insertCpEventIfApi,
+  insertCpEvent,
   insertDaemonEvent,
   type SqlExecutor,
   type Tx,
@@ -24,16 +24,17 @@ function asRows<T>(result: unknown): T[] {
 }
 
 export class TaskRepository {
-  // TaskIntake.assign's transaction. Inserts the task, or finds it by
+  // TaskService.assign's transaction. Inserts the task, or finds it by
   // (source, external_id) and locks it, then compares the stored delegation
   // (the assignment row's reply target) with the incoming one: when both carry
   // an order, one not above the stored order is a duplicate; otherwise the
   // same id is. A duplicate changes nothing; anything else restarts the task.
-  // A new task gets its assignment row and, for API tasks, task_created.
+  // A new task gets its assignment row and task_created; a restart writes
+  // task_restarted.
   // Returns the preempted sandbox for the caller to kill after commit, and on
   // a restart the replaced delegation's target id.
   async assign(p: {
-    source: TaskSource;
+    source: string;
     externalId?: string; // required with a hint key; a sequence key is its own
     key: { hint: string } | { sequencePrefix: string };
     title: string;
@@ -51,12 +52,14 @@ export class TaskRepository {
     }
   > {
     return db.transaction(async (tx) => {
-      // In a savepoint so a key collision leaves the transaction usable: a
-      // concurrent insert can take the key between the check and the insert,
-      // and the retry then sees it.
+      // In a savepoint so a key collision leaves the transaction usable. A
+      // sequence key another task already holds (in any case) is retried once
+      // with the next number; a hint that collides fails the assign.
       const insert = () => tx.transaction((sp) => this.insertTask(sp, p));
       const inserted = await insert().catch((err) => {
-        if (!isUniqueViolation(err, "tasks_key_lower_uniq")) throw err;
+        if (!("sequencePrefix" in p.key) || !isUniqueViolation(err, "tasks_key_lower_uniq")) {
+          throw err;
+        }
         return insert();
       });
 
@@ -80,7 +83,7 @@ export class TaskRepository {
             RETURNING id;`),
         );
         if (!round) throw new Error("assign: inbox insert returned no row");
-        await insertCpEventIfApi(tx, {
+        await insertCpEvent(tx, {
           taskId: t.id,
           type: "task_created",
           inboxId: round.id,
@@ -122,7 +125,8 @@ export class TaskRepository {
             target_id: next.id,
           },
           inboxReplyTargets: [next],
-          delegation: { flags: p.flags, requester: p.requester },
+          flags: p.flags,
+          requester: p.requester ?? null,
         },
         tx,
       );
@@ -130,21 +134,15 @@ export class TaskRepository {
     });
   }
 
-  // assign's insert. Picks the key: a hint is used as is unless another task
-  // holds it (case-insensitively), then `${SOURCE}-${hint}`; a sequence key is
-  // the prefix plus api_task_key_seq. Returns null when (source, external_id)
-  // already exists.
+  // assign's insert. The key is the hint as is, or the prefix plus
+  // api_task_key_seq. Returns null when (source, external_id) already exists.
   private async insertTask(
     ex: SqlExecutor,
     p: Parameters<TaskRepository["assign"]>[0],
   ): Promise<(TaskRef & { externalId: string; url: string }) | null> {
     const picked =
       "hint" in p.key
-        ? sql`CASE WHEN EXISTS (
-                SELECT 1 FROM tasks
-                 WHERE lower(key) = lower(${p.key.hint})
-                   AND NOT (source = ${p.source} AND external_id = ${p.externalId ?? null})
-              ) THEN ${`${p.source.toUpperCase()}-${p.key.hint}`}::text ELSE ${p.key.hint}::text END`
+        ? sql`${p.key.hint}::text`
         : sql`${p.key.sequencePrefix}::text || nextval('api_task_key_seq')::text`;
     const [pick] = asRows<TaskRef>(
       await ex.execute(sql`SELECT uuidv7()::text AS id, ${picked} AS key`),
@@ -164,12 +162,14 @@ export class TaskRepository {
     return row ? { ...pick, externalId, url } : null;
   }
 
-  // Restart: assign's newer delegation, or TaskIntake.restart (API). PREEMPTS
+  // Restart: assign's newer delegation, or TaskService.restart. PREEMPTS
   // any in-flight run and restarts from scratch, in one tx (the caller's, when
   // given: assign already holds the task row lock):
   //   1. Reset the task to a clean slate — pvc_name / sandbox_id / owner_id /
-  //      heartbeat_at cleared, cursor reset. The old owner pod self-evicts on
-  //      its next owner-guarded write (owner_id gone).
+  //      heartbeat_at cleared, cursor reset — and apply the new definition:
+  //      the payload's title and URL, the flags, and the requester when one
+  //      is passed. The old owner pod self-evicts on its next owner-guarded
+  //      write (owner_id gone).
   //   2. Re-pend the task's single `assignment` inbox row (one per task, created
   //      by assign) with a fresh id plus the new event's payload +
   //      reply_targets. The inbox id is the daemon-visible run
@@ -179,9 +179,8 @@ export class TaskRepository {
   //      comment / review rows) so it no longer pins the idle reaper or gets
   //      re-delivered.
   //      Not owner-guarded — it forcibly supersedes whatever pod ran the old round.
-  //   4. With `api`: also set the new title and experimental flags in step 1,
-  //      and write `task_restarted` to the log. With `delegation`: also set the
-  //      payload's title and URL and the new flags and requester in step 1.
+  //   4. Write `task_restarted` to the log: the new definition and the rows
+  //      step 3 dead-lettered.
   //
   // Returns `prevSandboxId` — the preempted sandbox the caller must kill;
   // `assignmentId` — the re-pended assignment row's new id (null if the task
@@ -192,8 +191,10 @@ export class TaskRepository {
       taskId: string;
       inboxPayload: AssignmentContent;
       inboxReplyTargets: ReplyTarget[];
-      api?: { title: string; description: string | null; experimentalFlags: string[] };
-      delegation?: { flags: string[]; requester?: Person };
+      flags: string[];
+      // A re-delegation's requester, null when it names none. Absent keeps
+      // the stored one.
+      requester?: Person | null;
     },
     tx?: Tx,
   ): Promise<{
@@ -202,22 +203,15 @@ export class TaskRepository {
     supersededRoundIds: string[];
   }> {
     if (!tx) return db.transaction((t) => this.restartTaskWithInbox(params, t));
-    const { api, delegation } = params;
-    const payloadJson = JSON.stringify(params.inboxPayload);
-    // An API restart or a re-delegation also applies the new title and flags
-    // (a re-delegation its URL and requester too, dropping a stale one). The
-    // description lives on the assignment payload (step 2).
-    const flags = api?.experimentalFlags ?? delegation?.flags;
+    const { inboxPayload, flags, requester } = params;
+    const payloadJson = JSON.stringify(inboxPayload);
+    // The description lives on the assignment payload (step 2). A passed
+    // requester, even null, replaces the stored one.
     const definition = JSON.stringify({
       experimentalFlags: flags,
-      requester: delegation?.requester,
+      requester: requester ?? undefined,
     });
-    const definitionSet =
-      flags === undefined
-        ? sql`, metadata = metadata - 'retryCount'`
-        : sql`, title = ${params.inboxPayload.title},
-              metadata = (metadata - 'retryCount' - 'requester') || ${definition}::text::jsonb
-              ${delegation ? sql`, external_url = ${params.inboxPayload.external_url}` : sql``}`;
+    const dropRequester = requester === undefined ? sql`` : sql` - 'requester'`;
     const replyTargetsJson = JSON.stringify(params.inboxReplyTargets ?? []);
 
     // 1. Reset the task to a clean slate. PG18 `RETURNING old.sandbox_id` is
@@ -229,11 +223,12 @@ export class TaskRepository {
              owner_id = NULL,
              heartbeat_at = NULL,
              last_observed_event_seq = 0,
-             pr_urls = '[]'::jsonb
-             -- Clean slate also resets the sandbox-retry budget (retryCount
-             -- is dropped in the metadata fragment) — a genuine
-             -- re-delegation is a fresh attempt, not a continuation.
-             ${definitionSet},
+             pr_urls = '[]'::jsonb,
+             title = ${inboxPayload.title},
+             external_url = ${inboxPayload.external_url},
+             -- Clean slate also resets the sandbox-retry budget — a restart
+             -- is a fresh attempt, not a continuation.
+             metadata = (metadata - 'retryCount'${dropRequester}) || ${definition}::text::jsonb,
              updated_at = now()
        WHERE id = ${params.taskId}
       RETURNING old.sandbox_id AS prev_sandbox_id;
@@ -279,19 +274,18 @@ export class TaskRepository {
     `);
     const supersededRoundIds = (Array.isArray(supRows) ? supRows : []).map((r) => r.id);
 
-    if (params.api) {
-      await insertCpEventIfApi(tx, {
-        taskId: params.taskId,
-        type: "task_restarted",
-        inboxId: assignmentId,
-        data: {
-          title: params.api.title,
-          description: params.api.description,
-          experimental_flags: params.api.experimentalFlags,
-          superseded_round_ids: supersededRoundIds,
-        },
-      });
-    }
+    // 4. The tasks row is locked since step 1.
+    await insertCpEvent(tx, {
+      taskId: params.taskId,
+      type: "task_restarted",
+      inboxId: assignmentId,
+      data: {
+        title: inboxPayload.title,
+        description: inboxPayload.description,
+        experimental_flags: flags,
+        superseded_round_ids: supersededRoundIds,
+      },
+    });
     return { prevSandboxId: taskRow.prev_sandbox_id, assignmentId, supersededRoundIds };
   }
 
@@ -508,7 +502,7 @@ export class TaskRepository {
         .returning({ id: schema.tasks.id });
       // A successful fresh provision emits sandbox_started.
       if (rows.length === 1) {
-        await insertCpEventIfApi(tx, {
+        await insertCpEvent(tx, {
           taskId: params.taskId,
           type: "sandbox_started",
           inboxId: null,
@@ -538,8 +532,8 @@ export class TaskRepository {
       .returning({ id: schema.tasks.id });
   }
 
-  // Owner-guarded + monotonic-guarded cursor advance, and — for API tasks — the
-  // task_events insert, in one transaction. That makes the log
+  // Owner-guarded + monotonic-guarded cursor advance and the task_events
+  // insert, in one transaction. That makes the log
   // exactly-once without a unique key: a crash before commit leaves neither;
   // a replay of a passed event, a pod without the lease, and the old owner
   // after a restart (owner_id cleared) all change 0 rows and log nothing.
@@ -553,16 +547,16 @@ export class TaskRepository {
   }): Promise<{ id: string }[]> {
     const { event } = params;
     return db.transaction(async (tx) => {
-      const result = await tx.execute<{ id: string; source: string }>(sql`
+      const result = await tx.execute<{ id: string }>(sql`
         UPDATE tasks
            SET last_observed_event_seq = ${event.seq}, heartbeat_at = now(), updated_at = now()
          WHERE id = ${params.taskId}
            AND owner_id = ${params.ownerId}
            AND last_observed_event_seq < ${event.seq}
-        RETURNING id, source;
+        RETURNING id;
       `);
       const advanced = Array.isArray(result) ? result : [];
-      if (advanced.length === 1 && advanced[0]?.source === "api") {
+      if (advanced.length === 1) {
         await insertDaemonEvent(tx, { taskId: params.taskId, event });
       }
       return advanced.map((r) => ({ id: r.id }));
@@ -636,7 +630,7 @@ export class TaskRepository {
 
   // tasks.external_id is the platform's id (the Linear issue UUID, the API
   // task key).
-  async findByExternalId(source: TaskSource, externalId: string): Promise<Task | null> {
+  async findByExternalId(source: string, externalId: string): Promise<Task | null> {
     const rows = await db
       .select()
       .from(schema.tasks)
@@ -677,7 +671,7 @@ export class TaskRepository {
         .returning({ id: schema.tasks.id });
       // Only caller: runTask's recreate-from-PVC path, so a non-null id is a resume.
       if (rows.length === 1 && params.sandboxId !== null) {
-        await insertCpEventIfApi(tx, {
+        await insertCpEvent(tx, {
           taskId: params.taskId,
           type: "sandbox_started",
           inboxId: null,
@@ -756,7 +750,7 @@ export class TaskRepository {
 // Raw row shape from db.execute (snake_case).
 type RawTaskRow = {
   id: string;
-  source: TaskSource;
+  source: string;
   external_id: string;
   key: string;
   created_by: string | null;

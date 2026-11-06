@@ -9,7 +9,7 @@
 
 import { readFileSync } from "node:fs";
 import { config } from "../config";
-import { HttpError, parseRetryAfter, rateLimitWaitMs, TokenFetchError } from "../integrations/http";
+import { HttpError, parseRetryAfter, rateLimitWaitMs } from "../integrations/http";
 import { logger } from "../logger";
 import {
   type GitlabTokenProvider,
@@ -34,13 +34,11 @@ function tokenProvider(): GitlabTokenProvider {
   return provider;
 }
 
+// Throws, sending nothing, while there is no token (neither setting, or a
+// token file that has never been readable). Only an operator can fix that, so
+// callers drop the send instead of holding it, as with GitHub's token.
 function token(): string {
-  try {
-    return tokenProvider()();
-  } catch (err) {
-    // Nothing was sent: the caller holds and retries the send.
-    throw new TokenFetchError(err instanceof Error ? err.message : String(err));
-  }
+  return tokenProvider()();
 }
 
 export function gitlabTokenState(): GitlabTokenState {
