@@ -230,6 +230,17 @@ describe("GitLab status", () => {
   });
 });
 
+describe("the GitLab integration", () => {
+  it("names its bot as the login @-mentions on merge requests go to", () => {
+    const integration = new GitlabIntegration(
+      { botUsername: "devbox-bot" },
+      { status: () => ({}) as never },
+      { handleWebhook: async () => new Response() },
+    );
+    expect(integration.prMentionLogin).toBe("devbox-bot");
+  });
+});
+
 describe("the GitLab definition", () => {
   it("is off without GITLAB_WEBHOOKS_ENABLED and creates no tasks", () => {
     expect(definition.name).toBe("gitlab");

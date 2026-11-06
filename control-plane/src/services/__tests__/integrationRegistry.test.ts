@@ -136,14 +136,16 @@ describe("IntegrationRegistry", () => {
     expect(await (await (hooks[0] as (typeof hooks)[0]).webhook({} as never)).text()).toBe("a");
   });
 
-  it("prMentionLogin is the login of an enabled integration that takes @-mentions", () => {
+  it("prMentionLogin is the login of a host's own integration, while it is enabled and takes @-mentions", () => {
     const mentions = definition("b", {
       create: () => ({ ...integration(), prMentionLogin: "bot" }),
     });
-    expect(registry([definition("a"), mentions], { a: "on", b: "on" }).prMentionLogin()).toBe(
-      "bot",
-    );
-    expect(registry([definition("a"), mentions], { a: "on" }).prMentionLogin()).toBeUndefined();
+    const both = registry([definition("a"), mentions], { a: "on", b: "on" });
+    expect(both.prMentionLogin("b")).toBe("bot");
+    // Another host's PRs are not b's to answer.
+    expect(both.prMentionLogin("a")).toBeUndefined();
+    expect(both.prMentionLogin("c")).toBeUndefined();
+    expect(registry([definition("a"), mentions], { a: "on" }).prMentionLogin("b")).toBeUndefined();
   });
 
   it("status adds held sends; disabled ones answer disabledStatus(); unknown names have none", async () => {
@@ -277,7 +279,7 @@ const row = (id: string, kind = "assignment", source = "linear") =>
   }) as unknown as Round;
 const target: ReplyTarget = { id: "sess-1", spec: { kind: "linear_session" } };
 const reply = { type: "reply", body: "hi" } as const;
-const pr = { url: "u", repo: "r", branch: "b", github: null };
+const pr = { url: "u", repo: "r", branch: "b", host: null };
 const noop: Integration = integration();
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const HOOKS = ["onTaskStarted", "onPrOpened", "onRoundFinished", "assignee"] as const;

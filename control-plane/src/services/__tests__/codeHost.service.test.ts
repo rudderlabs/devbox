@@ -25,12 +25,24 @@ mock.module("../../clients/github", () => ({
   githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),
 }));
 
+// GitLab's client, as far as the code host uses it: one instance, at
+// gitlab.example.com.
+const postMrNote = mock(() => Promise.resolve({ id: 1 }));
+mock.module("../../clients/gitlab", () => ({
+  postMrNote,
+  parseMrUrl: (url: string) => {
+    const m = url.match(/^https:\/\/gitlab\.example\.com\/(.+?)\/-\/merge_requests\/(\d+)/);
+    return m ? { project: m[1], mrIid: Number(m[2]) } : null;
+  },
+}));
+
 const { CodeHost } = await import("../codeHost.service");
 const { BackgroundWork } = await import("../backgroundWork");
 const { logger } = await import("../../logger");
 
 const task = { id: "task-1", key: "XYZ-1", source: "linear" } as Task;
 const PR_URL = "https://github.com/o/r/pull/1";
+const MR_URL = "https://gitlab.example.com/platform/backend/api/-/merge_requests/3";
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("CodeHost", () => {
@@ -47,6 +59,13 @@ describe("CodeHost", () => {
       { for: () => ({ assignee }) as never, prMentionLogin: () => mentionLogin },
       background,
       sendTimeoutMs,
+    );
+  // A code host whose integrations take @-mentions per host, as the registry
+  // answers them.
+  const codeHostWith = (logins: Record<string, string>) =>
+    new CodeHost(
+      { for: () => ({ assignee }) as never, prMentionLogin: (host) => logins[host] },
+      background,
     );
   const person = (githubAccount?: string | null): Person => ({
     id: "usr-1",
@@ -67,7 +86,8 @@ describe("CodeHost", () => {
   const logged = { event: "pr_assignee.result", taskId: "task-1", prUrl: PR_URL };
 
   beforeEach(() => {
-    for (const m of [postIssueComment, addPrAssignees, getUserById]) m.mockReset();
+    for (const m of [postIssueComment, addPrAssignees, getUserById, postMrNote]) m.mockReset();
+    postMrNote.mockResolvedValue({ id: 1 });
     postIssueComment.mockResolvedValue({ id: 1, url: "u" });
     addPrAssignees.mockResolvedValue({ assigned: [] });
     getUserById.mockResolvedValue({ login: "", id: 0 });
@@ -83,17 +103,89 @@ describe("CodeHost", () => {
     error.mockRestore();
   });
 
-  it("prRef carries the PR's GitHub coordinates, or null for another host", () => {
+  it("prRef names the code host the URL belongs to, or null when none knows it", () => {
     const host = codeHost();
     expect(host.prRef({ pr_url: PR_URL, repo: "r", branch: "b" })).toEqual({
       url: PR_URL,
       repo: "r",
       branch: "b",
-      github: { owner: "o", repo: "r", prNumber: 1 },
+      host: "github",
     });
+    expect(host.prRef({ pr_url: MR_URL, repo: "api", branch: "b" }).host).toBe("gitlab");
+    // Not the configured GitLab instance, and not a github.com pull request.
     expect(
-      host.prRef({ pr_url: "https://gitlab.com/o/r/pull/1", repo: "r", branch: "b" }).github,
+      host.prRef({ pr_url: "https://gitlab.com/o/r/-/merge_requests/1", repo: "r", branch: "b" })
+        .host,
     ).toBeNull();
+  });
+
+  it("a PR on a URL no code host knows gets no comment and no assignee lookup", async () => {
+    const host = codeHost();
+    await host.prOpened(
+      task,
+      host.prRef({ pr_url: "https://example.com/o/r/pull/1", repo: "r", branch: "b" }),
+    );
+    await background.drain(sleep(500));
+    expect(postIssueComment).not.toHaveBeenCalled();
+    expect(postMrNote).not.toHaveBeenCalled();
+    expect(assignee).not.toHaveBeenCalled();
+  });
+
+  describe("a GitLab merge request", () => {
+    const mrOpened = async (host: InstanceType<typeof CodeHost>) => {
+      await host.prOpened(task, host.prRef({ pr_url: MR_URL, repo: "api", branch: "b" }));
+      await background.drain(sleep(500));
+    };
+
+    it("gets the onboarding note, naming GitLab's bot and not GitHub's", async () => {
+      await mrOpened(codeHostWith({ github: "gh-bot", gitlab: "devbox-bot" }));
+      expect(postMrNote).toHaveBeenCalledTimes(1);
+      const [project, mrIid, body, signal] = postMrNote.mock.calls[0] as unknown as [
+        string,
+        number,
+        string,
+        AbortSignal,
+      ];
+      // The project by its path: a merge request URL carries no numeric id.
+      expect([project, mrIid]).toEqual(["platform/backend/api", 3]);
+      expect(body).toContain("I'm **devbox-bot**");
+      expect(body).toContain("merge request from task `XYZ-1`");
+      expect(body).toContain("`@devbox-bot`");
+      expect(body).not.toContain("gh-bot");
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(postIssueComment).not.toHaveBeenCalled();
+    });
+
+    it("gets no note while GitLab's webhooks are off, even with GitHub's on", async () => {
+      await mrOpened(codeHostWith({ github: "gh-bot" }));
+      expect(postMrNote).not.toHaveBeenCalled();
+      expect(postIssueComment).not.toHaveBeenCalled();
+    });
+
+    it("gets no assignee: nothing links a person to a GitLab account, so nobody is looked up", async () => {
+      assignee.mockResolvedValue(person("octocat"));
+      await mrOpened(codeHostWith({ gitlab: "devbox-bot" }));
+      expect(assignee).not.toHaveBeenCalled();
+      expect(addPrAssignees).not.toHaveBeenCalled();
+      expect(results()).toEqual([]);
+    });
+
+    it("a failed note is logged and never thrown", async () => {
+      postMrNote.mockRejectedValue(new Error("gitlab down"));
+      await mrOpened(codeHostWith({ gitlab: "devbox-bot" }));
+      expect(error).toHaveBeenCalledWith(
+        "onboarding comment post failed",
+        expect.objectContaining({ message: "gitlab down" }),
+      );
+    });
+  });
+
+  it("a GitHub PR's comment names GitHub's bot when both hosts take @-mentions", async () => {
+    await prOpened(codeHostWith({ github: "gh-bot", gitlab: "devbox-bot" }));
+    expect(postMrNote).not.toHaveBeenCalled();
+    const body = (postIssueComment.mock.calls[0] as unknown as unknown[])[3] as string;
+    expect(body).toContain("`@gh-bot`");
+    expect(body).not.toContain("devbox-bot");
   });
 
   it("a hung onboarding comment is cut at the send timeout; the mirror still runs", async () => {

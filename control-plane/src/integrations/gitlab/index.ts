@@ -42,14 +42,15 @@ export const gitlab: IntegrationDefinition<GitlabConfig> = {
 // request shows no live progress and may be public: a failure's raw detail
 // never goes there.
 export class GitlabIntegration implements Integration {
-  private readonly botUsername: string;
+  // Its webhooks turn @-mentions of the bot into rounds.
+  readonly prMentionLogin: string;
 
   constructor(
     cfg: Pick<GitlabConfig, "botUsername">,
     private statusService: Pick<GitlabStatusService, "status">,
     private controller: Pick<GitlabWebhookController, "handleWebhook">,
   ) {
-    this.botUsername = cfg.botUsername;
+    this.prMentionLogin = cfg.botUsername;
   }
 
   // Today's responses: 401 for a bad signature, 403 for untrusted actors, 503
@@ -74,7 +75,7 @@ export class GitlabIntegration implements Integration {
       case "progress":
         return;
       case "failure":
-        await deliverFailure(ctx, spec, message, this.botUsername);
+        await deliverFailure(ctx, spec, message, this.prMentionLogin);
         return;
       default: {
         const _exhaustive: never = message;

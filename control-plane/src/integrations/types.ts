@@ -60,8 +60,8 @@ export interface Integration {
   assignee?(ctx: HookCtx, task: Task): Promise<Person | null>; // throws when the lookup itself fails
 
   // The login that @-mentions on devbox's PRs go to, set by the integration
-  // that turns them into rounds. The code host posts its onboarding comment,
-  // which names it, only while one is set.
+  // that turns them into rounds. The code host of the same name posts its
+  // onboarding comment, which names it, only while one is set.
   prMentionLogin?: string;
 
   // Health. Core serves GET /api/integrations/<name> (behind API auth, only
@@ -79,14 +79,15 @@ export type Person = {
   email?: string;
   // The GitHub account the platform links to this person: a numeric account
   // id or a login. null: the platform links accounts but this person hasn't.
-  // Absent: the platform can't link accounts. The code host resolves it.
+  // Absent: the platform can't link accounts. GitHub's code host resolves it.
   githubAccount?: string | null;
 };
 export type PrRef = {
   url: string;
   repo: string;
   branch: string;
-  // Parsed from the URL by the code host; null when it isn't a github.com PR.
-  github: { owner: string; repo: string; prNumber: number } | null;
+  // The code host the URL belongs to ("github", "gitlab"); null when it is no
+  // code host's pull request.
+  host: string | null;
 };
 export type Outcome = "completed" | "partial_failure" | "no_action" | "failed";

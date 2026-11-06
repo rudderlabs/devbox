@@ -135,6 +135,12 @@ With `integrations.gitlab.enabled`, the control plane serves
   failing cannot loop forever; `GITLAB_CI_RESULT_MAX_PER_TASK` changes that
   ([configuration.md](configuration.md#control-plane-settings)).
 
+With the webhooks on, the agent introduces itself on each merge request it
+opens: one note that names the bot and says how to mention it. The merge
+request gets no assignee yet. On GitHub the pull request is assigned to the
+person a Linear issue belongs to, through the GitHub account Linear links to
+them, and nothing links a person to a GitLab account.
+
 Only notes from trusted users count: members of `gitlab.trustedGroups`
 (inherited members included) and `gitlab.trustedUsers`, by immutable numeric
 id. The bot's own notes are ignored, and so is everything on merge requests it

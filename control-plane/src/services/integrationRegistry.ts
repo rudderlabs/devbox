@@ -163,10 +163,10 @@ export class IntegrationRegistry {
     };
   }
 
-  // The login @-mentions on devbox's PRs go to, while an enabled integration
-  // takes them.
-  prMentionLogin(): string | undefined {
-    return [...this.live.values()].find((i) => i.prMentionLogin)?.prMentionLogin;
+  // The login @-mentions on devbox's PRs on `host` go to, while the host's
+  // integration (the one of the same name) is enabled and takes them.
+  prMentionLogin(host: string): string | undefined {
+    return this.live.get(host)?.prMentionLogin;
   }
 
   // The enabled integrations that take webhooks.
