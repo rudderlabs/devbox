@@ -98,27 +98,35 @@ and `gitlab` rounds (`harness/src/harness/followup.py`).
   disabled integration, bounds each `deliver` and hook call with a timeout and
   an abort signal, and logs a failure. `onTaskStarted` runs before every
   fresh-provision attempt, so it must be safe to repeat.
-- **The code host.** The control plane handles new pull requests itself
-  (`control-plane/src/services/codeHost.service.ts`), through one adapter per
-  host in `control-plane/src/codeHosts/`: GitHub, and GitLab, where the pull
-  request is a merge request. The adapter is picked by the pull request's URL,
-  and a URL no adapter owns gets nothing. A new host is one more file there
-  and one entry in `codeHosts/index.ts`. On each new pull request the control
-  plane posts a comment explaining @-mentions, but only while the host's own
-  integration, the one with the adapter's name, is enabled and sets
-  `prMentionLogin` (the GitHub and GitLab integrations set their bot's login).
-  It also assigns the pull request to the person the task's integration
-  returns from `assignee()`, where the adapter can: GitHub's does it through
-  that person's `githubAccount`, and GitLab's has no `assign`, because nothing
-  links a person to a GitLab account yet. An integration whose platform links
-  GitHub accounts returns the link as it is, an account id or a login, or
-  `null` when the person hasn't linked one; one that can't link accounts
-  leaves it out. An all-digit `githubAccount` is taken as an account id and
-  anything else as a login. The comment is posted, and the assignee started,
-  before the control plane records the pull request on the task, so a restart
-  before the record repeats them, and the comment can appear twice. The
-  assignee is best-effort: it finishes in the background, and a crash while it
-  is still running is not retried.
+- **The code host.** A code host is where the agent opens pull requests:
+  GitHub, and GitLab, where the pull request is a merge request. On each new
+  one the control plane does two things
+  (`control-plane/src/services/codeHost.service.ts`), picked by the pull
+  request's URL; a URL no code host owns gets neither.
+  - It hands the pull request to the host's own integration, the one named
+    like the host, through `onHostedPrOpened`. Whatever is written on a pull
+    request is that integration's: the GitHub and GitLab integrations post a
+    comment that names their bot and explains @-mentions. An integration that
+    is off has no instance, so no comment is posted while its webhooks, which
+    are what take the mentions, are off.
+  - It assigns the pull request to the person the task's integration returns
+    from `assignee()`, through the host's adapter in
+    `control-plane/src/codeHosts/`. The adapter is core's, so this works with
+    the host's integration off too. GitHub's assigns through that person's
+    `githubAccount`; GitLab's has no `assign`, because nothing links a person
+    to a GitLab account yet. An integration whose platform links GitHub
+    accounts returns the link as it is, an account id or a login, or `null`
+    when the person hasn't linked one; one that can't link accounts leaves it
+    out. An all-digit `githubAccount` is taken as an account id and anything
+    else as a login.
+
+  A new host is one more adapter file and one entry in `codeHosts/index.ts`,
+  plus an integration of the same name for its comments and rounds. The
+  comment is posted, and the assignee started, before the control plane
+  records the pull request on the task, so a restart before the record repeats
+  them, and the comment can appear twice. The assignee is best-effort: it
+  finishes in the background, and a crash while it is still running is not
+  retried.
 - **Reply targets.** Each round carries reply targets that say where the
   harness's answers go, each with a `spec` in the integration's own shape. The
   control plane stores the spec and hands it back to the `deliver` of the

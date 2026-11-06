@@ -1,26 +1,26 @@
 import { type CodeHostAdapter, codeHosts } from "../codeHosts";
 import type { Task } from "../db/schema";
-import { SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
+import { SEND_TIMEOUT_MS } from "../integrations/http";
 import type { PrRef } from "../integrations/types";
 import { logger } from "../logger";
 import type { BackgroundWork } from "./backgroundWork";
 import type { IntegrationRegistry } from "./integrationRegistry";
 
 // The code hosts, as core sees them. The harness opens pull requests with the
-// sandbox's git token; the control plane then introduces itself on each new
-// one and assigns it to the task's person. What that takes on each host is its
-// adapter (src/codeHosts/); this class picks the adapter by the pull request's
-// URL. The GitHub and GitLab integrations are separate: they only turn
-// comments, reviews and CI results into rounds.
+// sandbox's git token. On each new one, the host's own integration introduces
+// itself (its onHostedPrOpened: whatever is written on a pull request is the
+// integration's), and core assigns the pull request to the task's person
+// through the host's adapter (src/codeHosts/), which works with the
+// integration off too. This class picks both by the pull request's URL.
 export class CodeHost {
   constructor(
-    // assignee(): the task's own integration's person. prMentionLogin(host):
-    // set while the host's integration turns @-mentions on PRs into rounds.
-    private registry: Pick<IntegrationRegistry, "for" | "prMentionLogin">,
+    // for(host).onHostedPrOpened(): the host's integration, skipped while it
+    // is off. for(task.source).assignee(): the task's own integration's person.
+    private registry: Pick<IntegrationRegistry, "for">,
     private background: Pick<BackgroundWork, "track">,
-    // Bounds the onboarding comment, awaited inside the tick like a send, and
-    // an adapter's lookups before it assigns. Assigning the PR has no limit of
-    // its own: it runs in BackgroundWork, which shutdown drains until a deadline.
+    // Bounds an adapter's lookups before it assigns. Assigning the PR has no
+    // limit of its own: it runs in BackgroundWork, which shutdown drains until
+    // a deadline.
     private sendTimeoutMs = SEND_TIMEOUT_MS,
     private hosts: readonly CodeHostAdapter[] = codeHosts,
   ) {}
@@ -32,28 +32,20 @@ export class CodeHost {
     return { url: e.pr_url, repo: e.repo, branch: e.branch, host };
   }
 
-  // A pr_opened for a PR the task hasn't recorded yet: the onboarding comment
-  // (awaited and bounded), then the assignee mirror in BackgroundWork, since
-  // its upstream round trips must not stall the tick and nothing reads its
-  // result. A replay before the PR is recorded runs it again, so a PR can get
-  // the comment twice. Best-effort: never throws.
+  // A pr_opened for a PR the task hasn't recorded yet. The host's integration
+  // gets it first (awaited, and bounded by the registry): it posts the
+  // onboarding comment, which explains @-mentions, so only an enabled
+  // integration, one that takes them, does. Then the assignee mirror, in
+  // BackgroundWork, since its upstream round trips must not stall the tick
+  // and nothing reads its result. A replay before the PR is recorded runs
+  // both again, so a PR can get the comment twice. Best-effort: never throws.
   async prOpened(task: Task, pr: PrRef): Promise<void> {
     const host = this.hosts.find((h) => h.name === pr.host);
     if (!host) return; // a URL no code host knows — skip
-    await this.postOnboardingComment(task, pr, host);
+    await this.registry.for(host.name).onHostedPrOpened(task, pr);
     if (host.assign) {
       this.background.track(task.id, "assignee", this.mirrorAssignee(task, pr, host));
     }
-  }
-
-  private async postOnboardingComment(task: Task, pr: PrRef, host: CodeHostAdapter): Promise<void> {
-    // The comment explains @-mentions, which only work while the host's
-    // integration takes them (its webhooks are on).
-    const botLogin = this.registry.prMentionLogin(host.name);
-    if (!botLogin) return;
-    await withTimeout(this.sendTimeoutMs, (signal) =>
-      host.comment(pr.url, host.onboardingBody(botLogin, task.key), signal),
-    ).catch((err) => logErr("onboarding comment post failed", err));
   }
 
   // Assigns the PR to the task's person, through the account their platform
@@ -77,12 +69,4 @@ export class CodeHost {
     }
     await host.assign?.(pr.url, person, { taskId: task.id, timeoutMs: this.sendTimeoutMs });
   }
-}
-
-// Untrusted values (e.g. sandbox-written pr_url) belong in `meta`, never in
-// `msg`: metadata is JSON-stringified by the logger while the message is
-// emitted raw, so a newline in an interpolated message would forge log lines.
-function logErr(msg: string, err: unknown, meta: Record<string, unknown> = {}): void {
-  const e = err instanceof Error ? err : new Error(String(err));
-  logger.error(msg, { ...meta, message: e.message, stack: e.stack });
 }

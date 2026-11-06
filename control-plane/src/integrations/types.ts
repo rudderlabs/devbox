@@ -58,11 +58,12 @@ export interface Integration {
     outcome: Outcome | null,
   ): Promise<void>;
   assignee?(ctx: HookCtx, task: Task): Promise<Person | null>; // throws when the lookup itself fails
-
-  // The login that @-mentions on devbox's PRs go to, set by the integration
-  // that turns them into rounds. The code host of the same name posts its
-  // onboarding comment, which names it, only while one is set.
-  prMentionLogin?: string;
+  // For a code host's own integration (the one named like the host): the
+  // agent opened a pull request there. Where the integration introduces
+  // itself on the PR and says how to reach it. Called once per new PR, before
+  // the PR is recorded on the task, so a crash before the record repeats it.
+  // Best-effort: nothing waits on its result.
+  onHostedPrOpened?(ctx: HookCtx, task: Task, pr: PrRef): Promise<void>;
 
   // Health. Core serves GET /api/integrations/<name> (behind API auth, only
   // when the API is enabled) with this body plus the integration's held sends.

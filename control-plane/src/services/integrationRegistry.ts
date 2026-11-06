@@ -24,6 +24,8 @@ export const TIMEOUT_MS = {
   deliver: SEND_TIMEOUT_MS,
   onTaskStarted: 20_000,
   onPrOpened: 30_000,
+  // Awaited inside the tick, like a send.
+  onHostedPrOpened: SEND_TIMEOUT_MS,
   onRoundFinished: 120_000,
   assignee: 15_000,
 };
@@ -65,6 +67,9 @@ export type WrappedIntegration = {
   onTaskStarted(task: Task, runId: string, target: ReplyTarget): Promise<void>;
   // pr_opened, after appendPrUrl; the dispatcher holds a RetryableError.
   onPrOpened(task: Task, runId: string | null, pr: PrRef, firstTime: boolean): Promise<void>;
+  // A new pull request on this integration's own code host, before
+  // appendPrUrl. A failure is logged; the caller goes on.
+  onHostedPrOpened(task: Task, pr: PrRef): Promise<void>;
   // In BackgroundWork, so it never blocks the caller.
   onRoundFinished(
     task: Task,
@@ -90,7 +95,7 @@ export class IntegrationRegistry {
   // running.
   readonly taskSources: string[];
   // The enabled integrations by name. Core reaches them only through for(),
-  // webhooks(), status() and prMentionLogin().
+  // webhooks() and status().
   private readonly live = new Map<string, Integration>();
   private readonly definitions = new Map<string, IntegrationDefinition>();
   private readonly taskServices = new Map<string, TaskService>();
@@ -150,6 +155,11 @@ export class IntegrationRegistry {
           i.onPrOpened?.({ ...ctx, firstTime }, task, pr),
         );
       },
+      onHostedPrOpened: async (task, pr) => {
+        await this.hook(name, "onHostedPrOpened", task, null, (ctx, i) =>
+          i.onHostedPrOpened?.(ctx, task, pr),
+        );
+      },
       onRoundFinished: (task, round, runId, outcome, firstTransition, archive = async () => null) =>
         this.background.track(
           task.id,
@@ -161,12 +171,6 @@ export class IntegrationRegistry {
       assignee: (task, meta) =>
         this.hook(name, "assignee", task, null, (ctx, i) => i.assignee?.(ctx, task), meta),
     };
-  }
-
-  // The login @-mentions on devbox's PRs on `host` go to, while the host's
-  // integration (the one of the same name) is enabled and takes them.
-  prMentionLogin(host: string): string | undefined {
-    return this.live.get(host)?.prMentionLogin;
   }
 
   // The enabled integrations that take webhooks.

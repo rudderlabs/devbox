@@ -11,7 +11,14 @@ import {
 import type { Task } from "../../db/schema";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
-import type { HookCtx, Integration, IntegrationDefinition, ReplyTarget, Round } from "../types";
+import type {
+  HookCtx,
+  Integration,
+  IntegrationDefinition,
+  PrRef,
+  ReplyTarget,
+  Round,
+} from "../types";
 import { type GithubConfig, parseGithubConfig } from "./config";
 import { type GithubSpec, isGithubSpec } from "./rounds";
 import { type GithubStatus, GithubStatusService } from "./status";
@@ -45,14 +52,14 @@ export const github: IntegrationDefinition<GithubConfig> = {
 // live progress, and it is public: a failure's raw detail never goes there.
 export class GithubIntegration implements Integration {
   // Its webhooks turn @-mentions of the bot into rounds.
-  readonly prMentionLogin: string;
+  private readonly botLogin: string;
 
   constructor(
     cfg: Pick<GithubConfig, "botLogin">,
     private statusService: Pick<GithubStatusService, "status">,
     private controller: Pick<GitHubWebhookController, "handleWebhook">,
   ) {
-    this.prMentionLogin = cfg.botLogin;
+    this.botLogin = cfg.botLogin;
   }
 
   // Today's responses: 403 for untrusted actors, 503 when the trusted set
@@ -77,13 +84,29 @@ export class GithubIntegration implements Integration {
       case "progress":
         return;
       case "failure":
-        await deliverFailure(ctx, spec, message, this.prMentionLogin);
+        await deliverFailure(ctx, spec, message, this.botLogin);
         return;
       default: {
         const _exhaustive: never = message;
         void _exhaustive;
       }
     }
+  }
+
+  // The agent opened a pull request on github.com: the onboarding comment.
+  // Comment interactivity is invisible unless users know it exists. This runs
+  // only while GitHub is on, which is while its webhooks take @-mentions. A
+  // failure is the registry's to log.
+  async onHostedPrOpened(ctx: HookCtx, task: Task, pr: PrRef): Promise<void> {
+    const gh = parsePrUrl(pr.url);
+    if (!gh) return;
+    await postIssueComment(
+      gh.owner,
+      gh.repo,
+      gh.prNumber,
+      onboardingCommentBody(this.botLogin, task.key),
+      ctx.signal,
+    );
   }
 
   // A finished review re-requests review from its reviewer, once (a replayed
@@ -97,6 +120,18 @@ export class GithubIntegration implements Integration {
       await requestReviewFromOriginalReviewer(ctx, round, task);
     }
   }
+}
+
+// Built per-call from the login @-mentions go to, so the displayed name and
+// the `@mention` example always match the actual GitHub App identity
+// (GITHUB_BOT_LOGIN).
+function onboardingCommentBody(botLogin: string, taskKey: string): string {
+  return [
+    `👋 I'm **${botLogin}**. I opened this PR from task \`${taskKey}\`.`,
+    "",
+    `Mention \`@${botLogin}\` and I'll act on it — on a top-level PR comment,`,
+    "in a review summary, or on an inline comment on the diff. Without a mention I won't see it.",
+  ].join("\n");
 }
 
 async function requestReviewFromOriginalReviewer(

@@ -1,4 +1,4 @@
-import { addPrAssignees, getUserById, parsePrUrl, postIssueComment } from "../clients/github";
+import { addPrAssignees, getUserById, parsePrUrl } from "../clients/github";
 import { withTimeout } from "../integrations/http";
 import type { Person } from "../integrations/types";
 import { logger } from "../logger";
@@ -9,24 +9,6 @@ export const githubHost: CodeHostAdapter = {
   name: "github",
 
   owns: (url) => parsePrUrl(url) !== null,
-
-  // Comment interactivity is invisible unless users know it exists. Built
-  // per-call from the login @-mentions go to, so the displayed name and the
-  // `@mention` example always match the actual GitHub App identity
-  // (GITHUB_BOT_LOGIN).
-  onboardingBody: (botLogin, taskKey) =>
-    [
-      `👋 I'm **${botLogin}**. I opened this PR from task \`${taskKey}\`.`,
-      "",
-      `Mention \`@${botLogin}\` and I'll act on it — on a top-level PR comment,`,
-      "in a review summary, or on an inline comment on the diff. Without a mention I won't see it.",
-    ].join("\n"),
-
-  async comment(url, body, signal) {
-    const pr = parsePrUrl(url);
-    if (!pr) throw new Error("not a github.com pull request URL");
-    await postIssueComment(pr.owner, pr.repo, pr.prNumber, body, signal);
-  },
 
   // Through the GitHub account the person's platform links to them. Assignee
   // is the right primitive here: harness PRs open as DRAFTS and GitHub rejects

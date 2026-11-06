@@ -914,7 +914,7 @@ describe("EventDispatcher", () => {
       expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
     });
 
-    it("posts no onboarding comment while no integration sets prMentionLogin, but still mirrors the assignee", async () => {
+    it("posts no onboarding comment while GitHub's integration is off, but still mirrors the assignee", async () => {
       getIssueHumanAssignee.mockResolvedValue({
         id: "usr-1",
         name: "Ada Lovelace",

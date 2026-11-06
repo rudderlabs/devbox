@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Task } from "../../db/schema";
-import type { Person } from "../../integrations/types";
+import type { Person, PrRef } from "../../integrations/types";
 
 const postIssueComment = mock(() => Promise.resolve({ id: 1, url: "u" }));
 const addPrAssignees = mock(() => Promise.resolve({ assigned: [] as string[] }));
@@ -27,9 +27,7 @@ mock.module("../../clients/github", () => ({
 
 // GitLab's client, as far as the code host uses it: one instance, at
 // gitlab.example.com.
-const postMrNote = mock(() => Promise.resolve({ id: 1 }));
 mock.module("../../clients/gitlab", () => ({
-  postMrNote,
   parseMrUrl: (url: string) => {
     const m = url.match(/^https:\/\/gitlab\.example\.com\/(.+?)\/-\/merge_requests\/(\d+)/);
     return m ? { project: m[1], mrIid: Number(m[2]) } : null;
@@ -47,25 +45,26 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("CodeHost", () => {
   let assignee: ReturnType<typeof mock>;
+  // The host integrations' onHostedPrOpened, by integration name.
+  const hosted = mock((_name: string, _task: Task, _pr: PrRef) => Promise.resolve());
   let background: InstanceType<typeof BackgroundWork>;
   let info: ReturnType<typeof spyOn>;
   let warn: ReturnType<typeof spyOn>;
   let error: ReturnType<typeof spyOn>;
 
-  // A code host over a registry whose integrations take @-mentions for
-  // `mentionLogin` and report `assignee` as the task's person.
-  const codeHost = (mentionLogin: string | undefined = "bot", sendTimeoutMs?: number) =>
+  // A code host over a registry that records which host's integration a new
+  // PR was handed to, and reports `assignee` as the task's person.
+  const codeHost = (sendTimeoutMs?: number) =>
     new CodeHost(
-      { for: () => ({ assignee }) as never, prMentionLogin: () => mentionLogin },
+      {
+        for: (name: string) =>
+          ({
+            assignee,
+            onHostedPrOpened: (t: Task, pr: PrRef) => hosted(name, t, pr),
+          }) as never,
+      },
       background,
       sendTimeoutMs,
-    );
-  // A code host whose integrations take @-mentions per host, as the registry
-  // answers them.
-  const codeHostWith = (logins: Record<string, string>) =>
-    new CodeHost(
-      { for: () => ({ assignee }) as never, prMentionLogin: (host) => logins[host] },
-      background,
     );
   const person = (githubAccount?: string | null): Person => ({
     id: "usr-1",
@@ -86,8 +85,8 @@ describe("CodeHost", () => {
   const logged = { event: "pr_assignee.result", taskId: "task-1", prUrl: PR_URL };
 
   beforeEach(() => {
-    for (const m of [postIssueComment, addPrAssignees, getUserById, postMrNote]) m.mockReset();
-    postMrNote.mockResolvedValue({ id: 1 });
+    for (const m of [postIssueComment, addPrAssignees, getUserById, hosted]) m.mockReset();
+    hosted.mockResolvedValue(undefined);
     postIssueComment.mockResolvedValue({ id: 1, url: "u" });
     addPrAssignees.mockResolvedValue({ assigned: [] });
     getUserById.mockResolvedValue({ login: "", id: 0 });
@@ -119,82 +118,64 @@ describe("CodeHost", () => {
     ).toBeNull();
   });
 
-  it("a PR on a URL no code host knows gets no comment and no assignee lookup", async () => {
+  it("a PR on a URL no code host knows reaches no integration and looks nobody up", async () => {
     const host = codeHost();
     await host.prOpened(
       task,
       host.prRef({ pr_url: "https://example.com/o/r/pull/1", repo: "r", branch: "b" }),
     );
     await background.drain(sleep(500));
-    expect(postIssueComment).not.toHaveBeenCalled();
-    expect(postMrNote).not.toHaveBeenCalled();
+    expect(hosted).not.toHaveBeenCalled();
     expect(assignee).not.toHaveBeenCalled();
   });
 
+  it("hands a new PR to its own host's integration, which writes on it", async () => {
+    await prOpened();
+    expect(hosted).toHaveBeenCalledTimes(1);
+    expect(hosted).toHaveBeenCalledWith(
+      "github",
+      task,
+      expect.objectContaining({ url: PR_URL, host: "github" }),
+    );
+  });
+
+  it("the host's integration finishes before the assignee mirror starts", async () => {
+    const order: string[] = [];
+    hosted.mockImplementation(async () => {
+      await sleep(10);
+      order.push("integration");
+    });
+    assignee.mockImplementation(async () => {
+      order.push("assignee");
+      return person(null);
+    });
+    await prOpened();
+    expect(order).toEqual(["integration", "assignee"]);
+  });
+
   describe("a GitLab merge request", () => {
-    const mrOpened = async (host: InstanceType<typeof CodeHost>) => {
+    const mrOpened = async (host = codeHost()) => {
       await host.prOpened(task, host.prRef({ pr_url: MR_URL, repo: "api", branch: "b" }));
       await background.drain(sleep(500));
     };
 
-    it("gets the onboarding note, naming GitLab's bot and not GitHub's", async () => {
-      await mrOpened(codeHostWith({ github: "gh-bot", gitlab: "devbox-bot" }));
-      expect(postMrNote).toHaveBeenCalledTimes(1);
-      const [project, mrIid, body, signal] = postMrNote.mock.calls[0] as unknown as [
-        string,
-        number,
-        string,
-        AbortSignal,
-      ];
-      // The project by its path: a merge request URL carries no numeric id.
-      expect([project, mrIid]).toEqual(["platform/backend/api", 3]);
-      expect(body).toContain("I'm **devbox-bot**");
-      expect(body).toContain("merge request from task `XYZ-1`");
-      expect(body).toContain("`@devbox-bot`");
-      expect(body).not.toContain("gh-bot");
-      expect(signal).toBeInstanceOf(AbortSignal);
-      expect(postIssueComment).not.toHaveBeenCalled();
-    });
-
-    it("gets no note while GitLab's webhooks are off, even with GitHub's on", async () => {
-      await mrOpened(codeHostWith({ github: "gh-bot" }));
-      expect(postMrNote).not.toHaveBeenCalled();
-      expect(postIssueComment).not.toHaveBeenCalled();
+    it("goes to GitLab's integration, not GitHub's", async () => {
+      await mrOpened();
+      expect(hosted).toHaveBeenCalledTimes(1);
+      expect(hosted).toHaveBeenCalledWith(
+        "gitlab",
+        task,
+        expect.objectContaining({ url: MR_URL, host: "gitlab" }),
+      );
     });
 
     it("gets no assignee: nothing links a person to a GitLab account, so nobody is looked up", async () => {
       assignee.mockResolvedValue(person("octocat"));
-      await mrOpened(codeHostWith({ gitlab: "devbox-bot" }));
+      await mrOpened();
       expect(assignee).not.toHaveBeenCalled();
       expect(addPrAssignees).not.toHaveBeenCalled();
       expect(results()).toEqual([]);
     });
-
-    it("a failed note is logged and never thrown", async () => {
-      postMrNote.mockRejectedValue(new Error("gitlab down"));
-      await mrOpened(codeHostWith({ gitlab: "devbox-bot" }));
-      expect(error).toHaveBeenCalledWith(
-        "onboarding comment post failed",
-        expect.objectContaining({ message: "gitlab down" }),
-      );
-    });
-  });
-
-  it("a GitHub PR's comment names GitHub's bot when both hosts take @-mentions", async () => {
-    await prOpened(codeHostWith({ github: "gh-bot", gitlab: "devbox-bot" }));
-    expect(postMrNote).not.toHaveBeenCalled();
-    const body = (postIssueComment.mock.calls[0] as unknown as unknown[])[3] as string;
-    expect(body).toContain("`@gh-bot`");
-    expect(body).not.toContain("devbox-bot");
-  });
-
-  it("a hung onboarding comment is cut at the send timeout; the mirror still runs", async () => {
-    postIssueComment.mockImplementation(() => new Promise(() => {}));
-    assignee.mockResolvedValue(person("octocat"));
-    addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
-    await prOpened(codeHost("bot", 20));
-    expect(postIssueComment).toHaveBeenCalledTimes(1);
-    expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
   });
 
   it("an integration that can't link accounts → skip as unsupported", async () => {
@@ -248,7 +229,7 @@ describe("CodeHost", () => {
       assignee.mockResolvedValue(person("583231"));
       getUserById.mockImplementation(() => new Promise(() => {}));
 
-      await prOpened(codeHost("bot", 20));
+      await prOpened(codeHost(20));
 
       expect(addPrAssignees).not.toHaveBeenCalled();
       expect(error).toHaveBeenCalledWith(
