@@ -9,12 +9,7 @@ import { installCommand } from "../k8s/kind";
 import { kube, NAMESPACE, realRunner } from "../k8s/run";
 import { existingSecret } from "../k8s/secrets";
 import { loadTarget, type Target } from "../k8s/target";
-import {
-  enabledGithubApp,
-  enabledJira,
-  type Integrations,
-  type LinearIntegration,
-} from "../lib/integrations";
+import { enabledGithubApp, type Integrations, type LinearIntegration } from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
 import { CliConfigError, cliConfigPath, readCliProfile } from "../up/cliLogin";
@@ -25,7 +20,10 @@ export type LinearDeployment = {
   // The file holding integrations.linear: devbox.config.json or the target file.
   configPath: string;
   linear: LinearIntegration | undefined;
-  // The deployment's top-level publicUrl, shared with GitHub.
+  // Every integration's block, for what the others need when the public URL
+  // changes.
+  integrations: Integrations;
+  // The deployment's top-level publicUrl, shared by every integration.
   publicUrl?: string;
   // k8s: the URL derived from the target's Ingress values, and whether it is
   // the api Ingress's (which may be VPN-only).
@@ -37,11 +35,8 @@ export type LinearDeployment = {
   statusCommand: string;
   // k8s: the user's own integrations Secret (secrets.integrations.existingSecret).
   byoIntegrationsSecret?: string;
-  // The enabled GitHub App (slug and who mints its tokens): used for the public
-  // URL change lines and, as `<slug>[bot]`, as the bot's GitHub username.
+  // The enabled GitHub App: `<slug>[bot]` is the bot's GitHub username.
   githubApp?: { tokens: "devbox" | "external"; slug: string; org?: string };
-  // Whether Jira is on: its webhook URL follows the shared public URL.
-  jira?: boolean;
   // GET through the deployment's CLI profile; the body is read in full.
   api: (path: string) => Promise<Response>;
 };
@@ -107,8 +102,8 @@ export function loadDeployment(opts: { target?: string; noKeychain: boolean }): 
       deployment: { kind: "compose" },
       configPath: CONFIG_PATH,
       linear: cfg.integrations.linear,
+      integrations: cfg.integrations,
       ...(app ? { githubApp: app } : {}),
-      ...(enabledJira(cfg.integrations) ? { jira: true } : {}),
       ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
       applyCommand: "bun run up",
       statusCommand: "bun run linear:status",
@@ -119,14 +114,15 @@ export function loadDeployment(opts: { target?: string; noKeychain: boolean }): 
   const path = resolve(opts.target);
   const target = loadTarget(path);
   const byo = existingSecret(target.values, "integrations");
-  const app = githubAppOf(target.integrations ?? {});
+  const integrations = target.integrations ?? {};
+  const app = githubAppOf(integrations);
   const apply = installCommand(target.context, path);
   return {
     deployment: { kind: "k8s", context: target.context, namespace: NAMESPACE },
     configPath: path,
-    linear: target.integrations?.linear,
+    linear: integrations.linear,
+    integrations,
     ...(app ? { githubApp: app } : {}),
-    ...(enabledJira(target.integrations ?? {}) ? { jira: true } : {}),
     ...(target.publicUrl !== undefined ? { publicUrl: target.publicUrl } : {}),
     ingressUrl: ingressPublicUrl(target),
     fromApiIngress: ingressSource(target) === "api",

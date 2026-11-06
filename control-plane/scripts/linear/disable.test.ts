@@ -46,6 +46,7 @@ async function run(o: {
     deployment: COMPOSE,
     configPath: path,
     linear: o.linear,
+    integrations: o.linear ? { linear: o.linear } : {},
     applyCommand: "bun run up",
     statusCommand: "bun run linear:status",
     api: async () => {

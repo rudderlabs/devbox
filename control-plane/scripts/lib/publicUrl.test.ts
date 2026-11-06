@@ -1,11 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { Deployment } from "./keychain";
 import {
-  type Configured,
   ingressPublicUrl,
   ingressSource,
   PublicUrlError,
-  publicUrlChangeLines,
   resolvePublicUrl,
   validatePublicUrl,
 } from "./publicUrl";
@@ -305,129 +303,5 @@ describe("resolvePublicUrl", () => {
     await expect(resolvePublicUrl({ deployment: COMPOSE }, {}, x.deps)).rejects.toThrow(none);
     expect(x.asked).toEqual([]);
     await expect(resolvePublicUrl({ deployment: COMPOSE }, {}, deps().deps)).rejects.toThrow(none);
-  });
-});
-
-describe("publicUrlChangeLines", () => {
-  const OLD = "https://old.example.com";
-  const LINEAR_LINE = `Update the webhook URL in the Linear app to ${NEXT}/webhook/linear`;
-  const EXTERNAL_LINE = `Update the webhook URL in the GitHub App to ${NEXT}/webhook/github: https://github.com/settings/apps/example-devbox`;
-  const UPDATED = `Updated the GitHub App's webhook URL to ${NEXT}/webhook/github`;
-  const RUN_GITHUB = "Run bun run github:setup to update the GitHub App's webhook URL";
-  const app = (tokens: "devbox" | "external", hookUpdated?: boolean) => ({
-    tokens,
-    slug: "example-devbox",
-    ...(hookUpdated !== undefined ? { hookUpdated } : {}),
-  });
-
-  const table: Array<[string, Configured, "linear" | "github", string[]]> = [
-    ["nothing configured", { linear: false }, "linear", []],
-    ["Linear, from linear", { linear: true }, "linear", [LINEAR_LINE]],
-    ["Linear, from github", { linear: true }, "github", [LINEAR_LINE]],
-    [
-      "devbox App, from linear: points at github:setup",
-      { linear: false, githubApp: app("devbox") },
-      "linear",
-      [RUN_GITHUB],
-    ],
-    [
-      "devbox App, from github, hook updated",
-      { linear: false, githubApp: app("devbox", true) },
-      "github",
-      [UPDATED],
-    ],
-    [
-      "devbox App, from github, hook not updated (no key): by hand",
-      { linear: false, githubApp: app("devbox", false) },
-      "github",
-      [EXTERNAL_LINE],
-    ],
-    [
-      "devbox App, from github, hookUpdated unset: by hand",
-      { linear: false, githubApp: app("devbox") },
-      "github",
-      [EXTERNAL_LINE],
-    ],
-    [
-      "devbox App, from linear ignores hookUpdated",
-      { linear: false, githubApp: app("devbox", true) },
-      "linear",
-      [RUN_GITHUB],
-    ],
-    [
-      "external App, from linear",
-      { linear: false, githubApp: app("external") },
-      "linear",
-      [EXTERNAL_LINE],
-    ],
-    [
-      "external App, from github",
-      { linear: false, githubApp: app("external") },
-      "github",
-      [EXTERNAL_LINE],
-    ],
-    [
-      "Linear and devbox App, from linear: Linear first",
-      { linear: true, githubApp: app("devbox") },
-      "linear",
-      [LINEAR_LINE, RUN_GITHUB],
-    ],
-    [
-      "Linear and devbox App, from github, hook updated",
-      { linear: true, githubApp: app("devbox", true) },
-      "github",
-      [LINEAR_LINE, UPDATED],
-    ],
-    [
-      "Linear and external App, from linear",
-      { linear: true, githubApp: app("external") },
-      "linear",
-      [LINEAR_LINE, EXTERNAL_LINE],
-    ],
-    [
-      "Linear and external App, from github",
-      { linear: true, githubApp: app("external") },
-      "github",
-      [LINEAR_LINE, EXTERNAL_LINE],
-    ],
-  ];
-  for (const [what, configured, from, lines] of table) {
-    it(what, () => {
-      expect(publicUrlChangeLines(OLD, NEXT, configured, from)).toEqual(lines);
-    });
-  }
-
-  it("an organization's App: its settings link is the organization's", () => {
-    expect(
-      publicUrlChangeLines(
-        OLD,
-        NEXT,
-        { linear: false, githubApp: { ...app("external"), org: "example-org" } },
-        "github",
-      ),
-    ).toEqual([
-      `Update the webhook URL in the GitHub App to ${NEXT}/webhook/github: https://github.com/organizations/example-org/settings/apps/example-devbox`,
-    ]);
-  });
-
-  it("Jira: its webhook is updated by hand, after Linear and GitHub", () => {
-    const JIRA_LINE = `Update the webhook URL in Jira (Settings → System → WebHooks) to ${NEXT}/webhook/jira`;
-    const all: Configured = { linear: true, jira: true, githubApp: app("devbox") };
-    expect(publicUrlChangeLines(OLD, NEXT, all, "linear")).toEqual([
-      LINEAR_LINE,
-      RUN_GITHUB,
-      JIRA_LINE,
-    ]);
-    // From jira:setup, which prints the webhook's settings itself: a devbox
-    // App's URL is github:setup's to update.
-    expect(
-      publicUrlChangeLines(OLD, NEXT, { linear: false, githubApp: app("devbox") }, "jira"),
-    ).toEqual([RUN_GITHUB]);
-  });
-
-  it("no lines when the URL is new or unchanged", () => {
-    const all: Configured = { linear: true, githubApp: app("external") };
-    expect(publicUrlChangeLines(undefined, NEXT, all, "linear")).toEqual([]);
-    expect(publicUrlChangeLines(NEXT, NEXT, all, "github")).toEqual([]);
   });
 });

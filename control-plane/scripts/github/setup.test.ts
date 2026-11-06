@@ -243,7 +243,10 @@ function harness(o: {
     deployment,
     configPath,
     githubApp: o.githubApp,
-    linear: o.linear ?? false,
+    integrations: {
+      ...(o.githubApp ? { githubApp: o.githubApp } : {}),
+      ...(o.linear ? { linear: { enabled: true, clientId: "c" } } : {}),
+    },
     repos: o.repos ?? [REPO],
     trust: o.trust ?? { trustedOrgs: [], trustedUsers: [] },
     ...(o.publicUrl !== undefined ? { publicUrl: o.publicUrl } : {}),

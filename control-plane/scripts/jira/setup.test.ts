@@ -182,7 +182,7 @@ function harness(o: {
     deployment,
     configPath,
     jira: o.jira,
-    linear: false,
+    integrations: o.jira ? { jira: o.jira } : {},
     ...(savedUrl !== undefined ? { publicUrl: savedUrl } : {}),
     ...(o.byoIntegrationsSecret !== undefined
       ? { byoIntegrationsSecret: o.byoIntegrationsSecret }
@@ -612,7 +612,8 @@ describe("jira setup", () => {
       env: { JIRA_API_TOKEN: "jira-token", JIRA_WEBHOOK_SECRET: "whsec" },
       isTTY: false,
     });
-    await setup({ ...d, linear: true }, { publicUrl: PUBLIC }, deps);
+    const integrations = { ...d.integrations, linear: { enabled: true, clientId: "c" } };
+    await setup({ ...d, integrations }, { publicUrl: PUBLIC }, deps);
     expect(w.log).toContain(`Update the webhook URL in the Linear app to ${PUBLIC}/webhook/linear`);
     expect(readJson(d.configPath).publicUrl).toBe(PUBLIC);
   });

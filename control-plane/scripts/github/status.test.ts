@@ -58,7 +58,7 @@ async function run(o: {
     deployment,
     configPath: "devbox.config.json",
     githubApp: o.none ? undefined : { ...APP, ...o.app },
-    linear: false,
+    integrations: {},
     repos: [],
     trust: { trustedOrgs: ["example-org"], trustedUsers: [] },
     ...(o.publicUrl === null ? {} : { publicUrl: o.publicUrl ?? PUBLIC }),

@@ -68,7 +68,7 @@ async function run(o: {
     deployment: COMPOSE,
     configPath: path,
     jira: o.jira,
-    linear: false,
+    integrations: {},
     flag: "",
     applyCommand: "bun run up",
     api: async (p) => {

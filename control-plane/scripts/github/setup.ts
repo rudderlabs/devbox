@@ -27,13 +27,15 @@ import {
 import { readPrivateKeyFile, resolvePrivateKey } from "../lib/githubAppKey";
 import { type PendingGithubApp, parseIntegrations } from "../lib/integrations";
 import { deploymentScope, entryName, keychainUsable } from "../lib/keychain";
-import { publicUrlChangeLines, resolvePublicUrl } from "../lib/publicUrl";
+import { resolvePublicUrl } from "../lib/publicUrl";
 import type { ResolverDeps } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
+import { publicUrlChangeLines } from "../webhooks";
 import { type AppAccount, type AppApi, type AppKey, appApi, type Installation } from "./appApi";
 import type { GithubDeployment } from "./deployment";
 import { CALLBACK_TIMEOUT_MS, type CallbackListener } from "./listener";
 import { formPage, githubManifest, manifestPostUrl, registrationLink } from "./manifest";
+import { githubByHandLine } from "./webhook";
 
 export class SetupError extends Error {}
 
@@ -903,24 +905,17 @@ export async function setup(
     );
   }
   // A new or adopted App already has this URL.
+  const own = isNew
+    ? undefined
+    : hookUpdated
+      ? `Updated the GitHub App's webhook URL to ${hookUrl(publicUrl)}`
+      : githubByHandLine(publicUrl, app.slug, org);
   for (const line of publicUrlChangeLines(
     d.publicUrl,
     publicUrl,
-    {
-      linear: d.linear,
-      jira: d.jira === true,
-      ...(isNew
-        ? {}
-        : {
-            githubApp: {
-              tokens,
-              slug: app.slug,
-              hookUpdated,
-              ...(org !== undefined ? { org } : {}),
-            },
-          }),
-    },
-    "github",
+    d.integrations,
+    { name: "github", line: own },
+    flag,
   )) {
     log(line);
   }

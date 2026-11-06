@@ -151,6 +151,12 @@ function harness(o: {
     deployment,
     configPath,
     linear: o.linear,
+    integrations: {
+      ...(o.linear ? { linear: o.linear } : {}),
+      ...(o.githubApp
+        ? { githubApp: { enabled: true, tokenScope: "repos", ciResults: true, ...o.githubApp } }
+        : {}),
+    },
     ...(savedUrl !== undefined ? { publicUrl: savedUrl } : {}),
     ...(o.ingressUrl !== undefined ? { ingressUrl: o.ingressUrl } : {}),
     ...(o.byoIntegrationsSecret !== undefined

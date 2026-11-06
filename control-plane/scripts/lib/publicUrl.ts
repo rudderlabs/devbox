@@ -1,10 +1,11 @@
-// The deployment's one public URL, where Linear, GitHub and Jira deliver
-// webhooks. Linear and GitHub refuse anything but a public HTTPS URL, so a
-// bad one is caught here, before a manifest or a test webhook is built from
-// it. A path prefix (a reverse proxy under /devbox) is kept; trailing slashes
-// are trimmed.
+// The deployment's one public URL, where every integration's webhooks
+// arrive. Webhook senders refuse anything but a public HTTPS URL, so a bad
+// one is caught here, before a manifest or a test webhook is built from it.
+// A path prefix (a reverse proxy under /devbox) is kept; trailing slashes are
+// trimmed.
 import type { Target } from "../k8s/target";
 import { userValue } from "../k8s/values";
+import type { Integrations } from "./integrations";
 import type { Deployment } from "./keychain";
 
 export class PublicUrlError extends Error {}
@@ -161,56 +162,11 @@ export async function resolvePublicUrl(
   return validatePublicUrl(answer);
 }
 
-export type Configured = {
-  linear: boolean;
-  // Jira's admin webhook, set by hand in Jira.
-  jira?: boolean;
-  // hookUpdated: github:setup updated the App's webhook URL itself. org: the
-  // organization that owns the App, when known (its settings page is there).
-  githubApp?: {
-    tokens: "devbox" | "external";
-    slug: string;
-    hookUpdated?: boolean;
-    org?: string;
-  };
+// An integration that takes webhooks at <publicUrl>/webhook/<name>.
+// onPublicUrlChange says what to update when the public URL changes to
+// `next`, or undefined while the integration is off in `integrations`. `flag`
+// is the deployment's ` --target <file>` (empty on Compose).
+export type WebhookTarget = {
+  name: string;
+  onPublicUrlChange: (next: string, integrations: Integrations, flag: string) => string | undefined;
 };
-
-// What each configured integration needs when the public URL changes, in
-// the order Linear, GitHub, Jira. `from` is the setup command that changed
-// it: the App's webhook URL is updated by github:setup, which holds the key.
-// `flag` is the deployment's ` --target <file>` (empty on Compose).
-export function publicUrlChangeLines(
-  old: string | undefined,
-  next: string,
-  configured: Configured,
-  from: "linear" | "github" | "jira",
-  flag = "",
-): string[] {
-  if (old === undefined || old === next) return [];
-  const lines: string[] = [];
-  if (configured.linear) {
-    lines.push(`Update the webhook URL in the Linear app to ${next}/webhook/linear`);
-  }
-  const app = configured.githubApp;
-  if (app) {
-    if (app.tokens === "devbox" && from === "github" && app.hookUpdated) {
-      lines.push(`Updated the GitHub App's webhook URL to ${next}/webhook/github`);
-    } else if (app.tokens === "devbox" && from !== "github") {
-      lines.push(`Run bun run github:setup${flag} to update the GitHub App's webhook URL`);
-    } else {
-      // External tokens, or github:setup without the key: by hand.
-      const settings = app.org
-        ? `https://github.com/organizations/${app.org}/settings/apps`
-        : "https://github.com/settings/apps";
-      lines.push(
-        `Update the webhook URL in the GitHub App to ${next}/webhook/github: ${settings}/${app.slug}`,
-      );
-    }
-  }
-  if (configured.jira) {
-    lines.push(
-      `Update the webhook URL in Jira (Settings → System → WebHooks) to ${next}/webhook/jira`,
-    );
-  }
-  return lines;
-}

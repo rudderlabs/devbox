@@ -14,7 +14,7 @@
 import { writeConfigKeys } from "../lib/configFile";
 import { type JiraIntegration, jiraSiteOrigin } from "../lib/integrations";
 import { deploymentScope, entryName, keychainUsable } from "../lib/keychain";
-import { publicUrlChangeLines, resolvePublicUrl } from "../lib/publicUrl";
+import { resolvePublicUrl } from "../lib/publicUrl";
 import {
   checkWithRetry,
   type Resolved,
@@ -23,6 +23,7 @@ import {
   SecretError,
 } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
+import { publicUrlChangeLines } from "../webhooks";
 import { checkJira, checkPermissions, cloudIdOf, SCOPES } from "./check";
 import type { JiraDeployment } from "./deployment";
 
@@ -335,11 +336,12 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
     publicUrl,
   });
   log(`Wrote integrations.jira to ${d.configPath}`);
+  // Jira's own webhook is step 4's, which already shows the new URL.
   for (const line of publicUrlChangeLines(
     d.publicUrl,
     publicUrl,
-    { linear: d.linear, ...(d.githubApp ? { githubApp: d.githubApp } : {}) },
-    "jira",
+    d.integrations,
+    { name: "jira" },
     d.flag,
   )) {
     log(line);

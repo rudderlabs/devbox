@@ -7,12 +7,14 @@
 
 import { writeConfigKeys } from "../lib/configFile";
 import { deploymentScope, entryName, keychainUsable } from "../lib/keychain";
-import { publicUrlChangeLines, resolvePublicUrl } from "../lib/publicUrl";
+import { resolvePublicUrl } from "../lib/publicUrl";
 import { checkWithRetry, type Resolved, type ResolverDeps, SecretError } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
+import { publicUrlChangeLines } from "../webhooks";
 import { checkLinear, type LinearIdentity } from "./check";
 import type { LinearDeployment } from "./deployment";
 import { linearManifest, manifestLink } from "./manifest";
+import { linearWebhookLine } from "./webhook";
 
 export class SetupError extends Error {}
 
@@ -182,12 +184,8 @@ export async function setup(
   for (const line of publicUrlChangeLines(
     d.publicUrl,
     publicUrl,
-    {
-      linear: !register,
-      jira: d.jira === true,
-      ...(d.githubApp ? { githubApp: d.githubApp } : {}),
-    },
-    "linear",
+    d.integrations,
+    { name: "linear", line: register ? undefined : linearWebhookLine(publicUrl) },
     d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : "",
   )) {
     log(line);

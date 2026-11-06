@@ -8,12 +8,7 @@ import { installCommand } from "../k8s/kind";
 import { NAMESPACE } from "../k8s/run";
 import { existingSecret } from "../k8s/secrets";
 import { loadTarget } from "../k8s/target";
-import {
-  enabledGithubApp,
-  enabledLinear,
-  type Integrations,
-  type JiraIntegration,
-} from "../lib/integrations";
+import type { Integrations, JiraIntegration } from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
 import { composeApi, k8sApi } from "../linear/deployment";
@@ -24,11 +19,10 @@ export type JiraDeployment = {
   // The file holding integrations.jira: devbox.config.json or the target file.
   configPath: string;
   jira: JiraIntegration | undefined;
-  // Whether Linear is on: its webhook URL follows the shared public URL.
-  linear: boolean;
-  // The enabled GitHub App, for the public URL change lines.
-  githubApp?: { tokens: "devbox" | "external"; slug: string; org?: string };
-  // The deployment's top-level publicUrl, shared with Linear and GitHub.
+  // Every integration's block, for what the others need when the public URL
+  // changes.
+  integrations: Integrations;
+  // The deployment's top-level publicUrl, shared by every integration.
   publicUrl?: string;
   // k8s: the URL derived from the target's Ingress values, and whether it is
   // the api Ingress's (which may be VPN-only).
@@ -45,13 +39,6 @@ export type JiraDeployment = {
 
 const DEFAULT_CONFIG_PATH = join(import.meta.dir, "..", "..", "..", "devbox.config.json");
 
-function githubAppOf(i: Integrations): JiraDeployment["githubApp"] {
-  const g = enabledGithubApp(i);
-  return g
-    ? { tokens: g.tokens, slug: g.slug, ...(g.org !== undefined ? { org: g.org } : {}) }
-    : undefined;
-}
-
 export function loadDeployment(opts: {
   target?: string;
   // devbox.config.json; another file in tests.
@@ -60,13 +47,11 @@ export function loadDeployment(opts: {
   if (opts.target === undefined) {
     const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
     const cfg = loadConfig(configPath);
-    const app = githubAppOf(cfg.integrations);
     return {
       deployment: { kind: "compose" },
       configPath,
       jira: cfg.integrations.jira,
-      linear: enabledLinear(cfg.integrations) !== undefined,
-      ...(app ? { githubApp: app } : {}),
+      integrations: cfg.integrations,
       ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
       flag: "",
       applyCommand: "bun run up",
@@ -78,15 +63,13 @@ export function loadDeployment(opts: {
   const target = loadTarget(path);
   const integrations = target.integrations ?? {};
   const byo = existingSecret(target.values, "integrations");
-  const app = githubAppOf(integrations);
   const ingressUrl = ingressPublicUrl(target);
   const apply = installCommand(target.context, path);
   return {
     deployment: { kind: "k8s", context: target.context, namespace: NAMESPACE },
     configPath: path,
     jira: integrations.jira,
-    linear: enabledLinear(integrations) !== undefined,
-    ...(app ? { githubApp: app } : {}),
+    integrations,
     ...(target.publicUrl !== undefined ? { publicUrl: target.publicUrl } : {}),
     ...(ingressUrl !== undefined ? { ingressUrl } : {}),
     fromApiIngress: ingressSource(target) === "api",

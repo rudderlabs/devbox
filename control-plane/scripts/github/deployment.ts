@@ -8,7 +8,7 @@ import { installCommand } from "../k8s/kind";
 import { NAMESPACE } from "../k8s/run";
 import { existingSecret } from "../k8s/secrets";
 import { loadTarget } from "../k8s/target";
-import { enabledJira, enabledLinear, type GithubAppIntegration } from "../lib/integrations";
+import type { GithubAppIntegration, Integrations } from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
 import { composeApi, k8sApi } from "../linear/deployment";
@@ -22,16 +22,15 @@ export type GithubDeployment = {
   configPath: string;
   // The App's block as configured, on or off.
   githubApp: GithubAppIntegration | undefined;
-  // Whether Linear is on: its webhook URL follows the shared public URL.
-  linear: boolean;
-  // Likewise Jira's.
-  jira?: boolean;
+  // Every integration's block, for what the others need when the public URL
+  // changes.
+  integrations: Integrations;
   // The repos the App's installation must cover (devbox.config.json).
   repos: RepoConfig[];
   // Who may drive the agent from GitHub: Compose's top-level `github`, or
   // the target's `values.github` on k8s. Empty lists when unset.
   trust: TrustLists;
-  // The deployment's top-level publicUrl, shared with Linear.
+  // The deployment's top-level publicUrl, shared by every integration.
   publicUrl?: string;
   // k8s: the URL derived from the target's Ingress values, and whether it is
   // the api Ingress's (which may be VPN-only).
@@ -66,8 +65,7 @@ export function loadDeployment(opts: {
       deployment: { kind: "compose" },
       configPath,
       githubApp: cfg.integrations.githubApp,
-      linear: enabledLinear(cfg.integrations) !== undefined,
-      ...(enabledJira(cfg.integrations) ? { jira: true } : {}),
+      integrations: cfg.integrations,
       repos: cfg.repos,
       trust: { trustedOrgs: cfg.github.trustedOrgs, trustedUsers: cfg.github.trustedUsers },
       ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
@@ -80,6 +78,7 @@ export function loadDeployment(opts: {
   const cfg = loadConfig(configPath, { integrations: false });
   const path = resolve(opts.target);
   const target = loadTarget(path);
+  const integrations = target.integrations ?? {};
   const github = (target.values.github ?? {}) as Record<string, unknown>;
   const byoGithub = existingSecret(target.values, "github");
   const byoKey = existingSecret(target.values, "githubApp");
@@ -89,9 +88,8 @@ export function loadDeployment(opts: {
   return {
     deployment: { kind: "k8s", context: target.context, namespace: NAMESPACE },
     configPath: path,
-    githubApp: target.integrations?.githubApp,
-    linear: enabledLinear(target.integrations ?? {}) !== undefined,
-    ...(enabledJira(target.integrations ?? {}) ? { jira: true } : {}),
+    githubApp: integrations.githubApp,
+    integrations,
     repos: cfg.repos,
     trust: { trustedOrgs: strings(github.trustedOrgs), trustedUsers: strings(github.trustedUsers) },
     ...(target.publicUrl !== undefined ? { publicUrl: target.publicUrl } : {}),

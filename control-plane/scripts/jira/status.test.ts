@@ -42,7 +42,7 @@ async function run(o: {
     deployment: COMPOSE,
     configPath: "devbox.config.json",
     jira: o.jira,
-    linear: false,
+    integrations: {},
     ...(o.publicUrl === null ? {} : { publicUrl: o.publicUrl ?? PUBLIC }),
     flag: "",
     applyCommand: "bun run up",
