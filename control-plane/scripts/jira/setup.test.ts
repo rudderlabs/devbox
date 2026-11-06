@@ -528,11 +528,14 @@ describe("jira setup", () => {
     expect(w.shown).toEqual([GENERATED]);
   });
 
-  it("no webhook secret without a terminal: refuses", async () => {
-    const { d, deps } = harness({ isTTY: false, env: { JIRA_API_TOKEN: "jira-token" } });
+  it("no webhook secret without a terminal: shows the webhook, then refuses, writing nothing", async () => {
+    const { d, deps, w } = harness({ isTTY: false, env: { JIRA_API_TOKEN: "jira-token" } });
+    const before = readFileSync(d.configPath, "utf8");
     await expect(setup(d, FLAGS, deps)).rejects.toThrow(
       "no JIRA_WEBHOOK_SECRET: run `bun run jira:setup` in a terminal to generate one, or set JIRA_WEBHOOK_SECRET to the secret of the webhook in Jira",
     );
+    expect(w.log).toEqual(expect.arrayContaining(webhookBlock()));
+    expect(readFileSync(d.configPath, "utf8")).toBe(before);
   });
 
   it("each missing setting without a terminal names its flag", async () => {

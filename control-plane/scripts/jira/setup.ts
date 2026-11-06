@@ -122,20 +122,14 @@ async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolve
 }
 
 // The webhook's secret from the environment or the keychain, as it is.
-// Undefined when it must be asked for, which needs a terminal.
+// Undefined when it must be asked for.
 async function savedWebhookSecret(ctx: Ctx): Promise<Resolved | undefined> {
-  const { resolver } = ctx.deps;
   try {
-    return await resolveSecret("JIRA_WEBHOOK_SECRET", resolver, { noPrompt: true });
+    return await resolveSecret("JIRA_WEBHOOK_SECRET", ctx.deps.resolver, { noPrompt: true });
   } catch (err) {
     if (!(err instanceof SecretError)) throw err;
+    return undefined;
   }
-  if (!resolver.isTTY) {
-    throw new SetupError(
-      `no JIRA_WEBHOOK_SECRET: run \`${ctx.again}\` in a terminal to generate one, or set JIRA_WEBHOOK_SECRET to the secret of the webhook in Jira`,
-    );
-  }
-  return undefined;
 }
 
 // The webhook's secret, typed (at least MIN_WEBHOOK_SECRET characters) or,
@@ -290,6 +284,13 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   log(
     '  JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")',
   );
+  // Without a terminal the secret can't be asked for; the block above still
+  // shows what the webhook in Jira needs.
+  if (askSecret && !resolver.isTTY) {
+    throw new SetupError(
+      `no JIRA_WEBHOOK_SECRET: run \`${ctx.again}\` in a terminal to generate one, or set JIRA_WEBHOOK_SECRET to the secret of the webhook in Jira`,
+    );
+  }
   const webhook: WebhookSecret | undefined = askSecret ? await askWebhookSecret(ctx) : savedWebhook;
   if (webhook?.generated) {
     await deps.promptLine(

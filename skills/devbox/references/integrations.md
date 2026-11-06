@@ -71,7 +71,8 @@ starts a task; comments that `@mention` the bot are follow-ups; replies are
 comments. A Jira admin creates the webhook that `jira:setup` prints. In a
 terminal, setup opens the page each step needs and always prints the link:
 Atlassian Administration for a new token, and the webhooks page on a first
-run or with a new webhook secret.
+run, whenever it asks for the webhook secret, and when the public URL
+changed.
 
 ```bash
 bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
@@ -94,7 +95,8 @@ bun run jira:status [--target <file>]
   keep service projects out with the webhook's JQL (`project not in ("HELP")`)
   or by not giving the service account access there. Both the person who
   assigns the issue and its reporter must be people. Untrusted events are
-  ignored silently.
+  ignored: nothing is posted, and the log has `jira_webhook.ignored` with its
+  reason.
 - Projects: devbox works in every project where the service account has its
   role (Browse projects, Assignable user, Add comments, Transition work items,
   Link work items); there is no project list. To keep it out of a project,

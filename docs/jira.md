@@ -182,7 +182,10 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    ([below](#3-create-the-webhook-in-jira)): the webhooks page and the values
    to paste there.
 7. **The webhook's secret.** `JIRA_WEBHOOK_SECRET` from your environment or
-   the keychain is used as it is. Otherwise, in a terminal, it asks
+   the keychain is used as it is. Without either and without a terminal,
+   setup stops after printing the webhook with
+   `no JIRA_WEBHOOK_SECRET: run bun run jira:setup in a terminal to generate one, or set JIRA_WEBHOOK_SECRET to the secret of the webhook in Jira`.
+   Otherwise, in a terminal, it asks
    `Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate one to paste into its Secret field): `.
    Paste the secret the webhook in Jira already has, or press Enter to have it
    generate a new one: setup shows it once, after
