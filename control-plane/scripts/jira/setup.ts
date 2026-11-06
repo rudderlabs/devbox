@@ -143,6 +143,10 @@ async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolve
       `no JIRA_API_TOKEN: run \`${ctx.again}\` in a terminal, or set JIRA_API_TOKEN`,
     );
   }
+  // At every prompt: a rotation needs the scopes as much as a first run does.
+  ctx.deps.log(
+    `The API token needs exactly these scopes (Jira's classic scopes, not the granular ones): ${SCOPES}`,
+  );
   const typed = (
     await resolver.prompt(
       found
@@ -374,7 +378,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   const found = await availableToken(resolver);
   if (!found && resolver.isTTY) {
     log(
-      `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes ${SCOPES}:`,
+      "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create an API token for it:",
     );
     page(ctx, "https://admin.atlassian.com/");
   }

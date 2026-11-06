@@ -99,9 +99,10 @@ link, so setup also says what to do on the page.
 1. In Atlassian Administration, open Directory → Service accounts and create
    one. Give it access to Jira. Its name is the bot's name in Jira: the name
    people assign issues to and type as `@<bot name>`.
-2. Create an API token for it with the scopes `read:jira-work`,
-   `write:jira-work` and `read:jira-user`. Copy the token: Atlassian shows it
-   only once.
+2. Create an API token for it with exactly the scopes `read:jira-work`,
+   `write:jira-work` and `read:jira-user`. They are Jira's classic scopes:
+   pick them, not the granular ones. Copy the token: Atlassian shows it only
+   once.
 3. **Note the token's expiry date.** Atlassian tokens last at most a year.
    devbox can't read the date from Atlassian: `jira:setup` asks for it, and
    devbox warns from 14 days before ([Rotating the API token](#rotating-the-api-token)).
@@ -167,13 +168,14 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    (`The service account's email (shown on its page in Atlassian Administration): `).
    First, in a terminal with no token in your environment or the keychain,
    it prints
-   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes read:jira-work, write:jira-work and read:jira-user:`
+   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create an API token for it:`
    and the link `https://admin.atlassian.com/`, and opens it: the email and
    the new token both come from there.
 4. **The API token.** `JIRA_API_TOKEN` from your environment is used as it
-   is. Otherwise, in a terminal, it asks
-   `Jira API token (input hidden): `, or, with a token saved in the keychain,
-   `Jira API token (input hidden; press Enter to keep the saved one): `.
+   is. Otherwise, in a terminal, it prints
+   `The API token needs exactly these scopes (Jira's classic scopes, not the granular ones): read:jira-work, write:jira-work and read:jira-user`
+   and asks `Jira API token (input hidden): `, or, with a token saved in the
+   keychain, `Jira API token (input hidden; press Enter to keep the saved one): `.
    Without a terminal it uses the saved one, or stops with
    `no JIRA_API_TOKEN: run bun run jira:setup in a terminal, or set JIRA_API_TOKEN`.
    It checks the token with Jira (`GET /myself`) and prints

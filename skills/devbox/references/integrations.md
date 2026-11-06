@@ -80,8 +80,9 @@ bun run up                      # or k8s:kind / k8s:install --target <file>
 bun run jira:status [--target <file>]
 ```
 
-- The service account's API token needs the scopes `read:jira-work`,
-  `write:jira-work` and `read:jira-user`. Setup asks for its expiry date;
+- The service account's API token needs exactly the classic scopes
+  `read:jira-work`, `write:jira-work` and `read:jira-user`, not granular
+  ones; setup prints them before it asks for the token. Setup asks for its expiry date;
   devbox warns 14 days before.
 - Secrets: `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET`. Unlike
   `linear:setup`, `jira:setup` uses them from the environment when they are

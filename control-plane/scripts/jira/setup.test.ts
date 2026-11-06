@@ -61,9 +61,11 @@ const SHOW_Q = "Press Enter to show the webhook secret, to paste into the webhoo
 
 const ADMIN = "https://admin.atlassian.com/";
 const TOKEN_HINT = [
-  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes read:jira-work, write:jira-work and read:jira-user:",
+  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create an API token for it:",
   `  ${ADMIN}`,
 ];
+const SCOPES_LINE =
+  "The API token needs exactly these scopes (Jira's classic scopes, not the granular ones): read:jira-work, write:jira-work and read:jira-user";
 const WEBHOOKS = `${SITE}/plugins/servlet/webhooks`;
 const GLOBAL_PAGE = `${SITE}/secure/admin/GlobalPermissions!default.jspa`;
 const permissionsPage = (key: string) =>
@@ -286,6 +288,7 @@ describe("jira setup", () => {
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
       ...TOKEN_HINT,
+      SCOPES_LINE,
       ACT_AS,
       "Statuses every project has: To Do, In Progress, Done",
       `Wrote integrations.jira to ${d.configPath}`,
@@ -459,6 +462,7 @@ describe("jira setup", () => {
     expect(w.log).toEqual([
       `Public URL: ${PUBLIC}`,
       "JIRA_API_TOKEN: from the system keychain (compose)",
+      SCOPES_LINE,
       ACT_AS,
       'warning: project ENG has no status "Blocked" (statuses.failed)',
       "JIRA_WEBHOOK_SECRET: from the system keychain (compose)",
@@ -476,6 +480,29 @@ describe("jira setup", () => {
     expect(w.shown).toEqual([]);
     // Nothing new: the links are printed, no page opens.
     expect(w.opened).toEqual([]);
+  });
+
+  it("a saved token: the scopes come right before the prompt to keep or replace it", async () => {
+    const { d, deps, w } = harness({
+      jira: JIRA,
+      saved: { "compose/JIRA_API_TOKEN": "old-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
+      validTokens: ["old-token", "jira-token"],
+      hidden: ["jira-token"],
+      lines: ["2027-12-31"],
+    });
+    // The last line logged before each hidden prompt.
+    const before: Array<string | undefined> = [];
+    const ask = deps.resolver.prompt;
+    deps.resolver.prompt = (q) => {
+      before.push(w.log.at(-1));
+      return ask(q);
+    };
+    await setup(d, {}, deps);
+    expect(w.asked[0]).toBe(KEEP_TOKEN_Q);
+    expect(before).toEqual([SCOPES_LINE]);
+    expect(w.log.filter((l) => l === SCOPES_LINE)).toHaveLength(1);
+    // A saved token needs no Atlassian Administration hint.
+    expect(w.log).not.toContain(TOKEN_HINT[0]);
   });
 
   it("rotation: a new token asks for its expiry, flags change settings", async () => {
