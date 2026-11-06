@@ -1,6 +1,60 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it, mock, spyOn } from "bun:test";
+import type { Context } from "hono";
+import type { IntegrationDefinition } from "../integrations/types";
 import { WEBHOOK_BODY_LIMIT_BYTES } from "../requestLimits";
-import { createWebhookRoutes } from "../routes/webhook";
+import { createWebhookRoutes as createRoutes } from "../routes/webhook";
+
+// The registry's TaskServices reach the database module, which reads config.
+mock.module("../config", () => ({ config: {} }));
+
+const { IntegrationRegistry } = await import("../services/integrationRegistry");
+
+type Webhook = (c: Context) => Promise<Response>;
+
+// The routes of a registry of linear, github and api, where `on` are enabled
+// and each integration takes webhooks only if given one.
+function routesFor(on: string[], webhooks: Partial<Record<string, Webhook>>) {
+  const definitions: IntegrationDefinition[] = ["linear", "github", "api"].map((name) => ({
+    name,
+    createsTasks: false,
+    parseConfig: () => (on.includes(name) ? {} : undefined),
+    create: () => ({
+      async deliver() {},
+      async status() {
+        return {};
+      },
+      ...(webhooks[name] ? { webhook: webhooks[name] } : {}),
+    }),
+    disabledStatus: () => ({}),
+  }));
+  const registry = new IntegrationRegistry(
+    definitions,
+    new Map(definitions.map((d) => [d.name, d.parseConfig({})])),
+    {
+      taskRepo: {} as never,
+      inboxRepo: {} as never,
+      sandboxManager: {} as never,
+      background: { track: () => {} },
+      holds: { of: () => ({ heldTasks: 0, oldestHoldAgeMs: 0 }) },
+    },
+  );
+  return createRoutes(registry.webhooks());
+}
+
+// The routes for enabled integrations with these webhooks.
+function createWebhookRoutes(
+  webhooks: Partial<Record<string, { handleWebhook: (c: Context) => Promise<Response> }>>,
+) {
+  return routesFor(
+    Object.keys(webhooks),
+    Object.fromEntries(
+      Object.entries(webhooks).map(([name, w]) => [
+        name,
+        (c: Context) => (w as { handleWebhook: Webhook }).handleWebhook(c),
+      ]),
+    ),
+  );
+}
 
 const OVERSIZED_BODY = "x".repeat(WEBHOOK_BODY_LIMIT_BYTES + 1);
 
@@ -88,6 +142,21 @@ describe("createWebhookRoutes", () => {
     } finally {
       error.mockRestore();
     }
+  });
+
+  it("serves no webhook for a disabled integration, and calls an enabled one's", async () => {
+    let calls = 0;
+    const app = routesFor(["github", "api"], {
+      linear: async () => new Response(null, { status: 200 }),
+      github: async () => {
+        calls++;
+        return new Response(null, { status: 200 });
+      },
+    });
+    expect((await app.request("/webhook/linear", { method: "POST", body: "{}" })).status).toBe(404);
+    expect((await app.request("/webhook/api", { method: "POST", body: "{}" })).status).toBe(404);
+    expect((await app.request("/webhook/github", { method: "POST", body: "{}" })).status).toBe(200);
+    expect(calls).toBe(1);
   });
 
   it("leaves disabled and unknown webhook routes as 404 even for oversized bodies", async () => {

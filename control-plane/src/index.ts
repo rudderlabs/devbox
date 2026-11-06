@@ -1,10 +1,16 @@
 import { createApp } from "./app";
 import { config } from "./config";
 import { runMigrations } from "./db/migrate";
+import { definitions } from "./integrations";
 import { logger, setup as setupLogger } from "./logger";
 import { MAX_REQUEST_BODY_SIZE_BYTES } from "./requestLimits";
+import { parseIntegrationConfigs } from "./services/integrationRegistry";
 
 setupLogger("devbox-control-plane", {}, [/token/i, /secret/i, /password/i, /authorization/i]);
+
+// Before migrating: a bad integration setting fails boot before the database
+// is touched, as a bad core setting does in config.ts.
+const integrationConfigs = parseIntegrationConfigs(definitions, process.env);
 
 if (config.autoMigrate) {
   logger.info("Running migrations");
@@ -12,7 +18,7 @@ if (config.autoMigrate) {
   logger.info("Migrations complete");
 }
 
-const { app, taskProcessor, stopApiStreams } = createApp();
+const { app, taskProcessor, stopApiStreams } = createApp(integrationConfigs);
 if (config.api.enabled && !config.api.authEnabled) {
   logger.warn(
     "API auth is DISABLED (API_AUTH_ENABLED=false): /api accepts unauthenticated requests",

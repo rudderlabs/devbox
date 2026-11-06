@@ -30,6 +30,8 @@ export type ApiControllerOptions = {
   ssePollMs: number;
   sseMaxDurationMs: number;
   clock: Clock;
+  // The sources a task can have (IntegrationRegistry.taskSources).
+  taskSources: readonly string[];
 };
 
 const TITLE_MAX_CHARS = 256;
@@ -63,7 +65,10 @@ export class ApiController {
 
   async listTasks(c: Context<ApiEnv>): Promise<Response> {
     try {
-      return c.json(await this.service.list(c.get("principal"), parseListQuery(c)), 200);
+      return c.json(
+        await this.service.list(c.get("principal"), parseListQuery(c, this.opts.taskSources)),
+        200,
+      );
     } catch (err) {
       return this.handleError(c, err);
     }
@@ -142,11 +147,11 @@ export class ApiController {
   // Last-Event-ID / ?after=. Errors before the first byte are JSON; errors
   // after are logged and close the stream (no message to the client).
   async streamEvents(c: Context<ApiEnv>): Promise<Response> {
-    let target: { id: string; source: "linear" | "api" };
+    let taskId: string;
     let start: number;
     try {
       start = parseStreamStart(c.req.header("last-event-id"), c.req.query("after"));
-      target = await this.service.streamTarget(c.req.param("ref") ?? "");
+      taskId = await this.service.streamTarget(c.req.param("ref") ?? "");
     } catch (err) {
       return this.handleError(c, err);
     }
@@ -180,19 +185,19 @@ export class ApiController {
         if (!deadlineTimer.signal.aborted) abortCombined();
       });
       try {
-        await this.runStream(stream, target, start, signal);
+        await this.runStream(stream, taskId, start, signal);
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         // After a client disconnect or shutdown, a failed write is expected.
         if (signal.aborted) {
           logger.debug("api event stream ended after abort", {
-            taskId: target.id,
+            taskId,
             message: e.message,
           });
           return;
         }
         logger.error("api event stream failed", {
-          taskId: target.id,
+          taskId,
           message: e.message,
           stack: e.stack,
         });
@@ -205,25 +210,17 @@ export class ApiController {
 
   private async runStream(
     stream: SSEStreamingApi,
-    target: { id: string; source: "linear" | "api" },
+    taskId: string,
     start: number,
     signal: AbortSignal,
   ): Promise<void> {
     const { clock } = this.opts;
-    if (target.source !== "api") {
-      await stream.writeSSE({
-        event: "state",
-        data: JSON.stringify(await this.service.streamState(target.id)),
-      });
-      await stream.writeSSE({ event: "logging", data: JSON.stringify({ logging: "unavailable" }) });
-      return;
-    }
     const startedAt = clock.now();
     let lastWriteAt = startedAt;
     let cursor = start;
     let lastState: string | null = null;
     while (!signal.aborted && clock.now() - startedAt < this.opts.sseMaxDurationMs) {
-      for (const e of await this.service.eventsAfter(target.id, cursor, SSE_BATCH)) {
+      for (const e of await this.service.eventsAfter(taskId, cursor, SSE_BATCH)) {
         if (signal.aborted) return;
         await stream.writeSSE({ id: String(e.id), event: e.type, data: JSON.stringify(e) });
         cursor = e.id;
@@ -231,7 +228,7 @@ export class ApiController {
       }
       if (signal.aborted) return;
       // `state` carries no id, so it never moves the client's resume point.
-      const state = JSON.stringify(await this.service.streamState(target.id));
+      const state = JSON.stringify(await this.service.streamState(taskId));
       if (state !== lastState) {
         await stream.writeSSE({ event: "state", data: state });
         lastState = state;
@@ -357,7 +354,10 @@ function parseIntParam(
   return n;
 }
 
-function parseListQuery(c: Context): ListTasksInput {
+// "a", "a or b", "a, b, or c".
+const OR_LIST = new Intl.ListFormat("en", { type: "disjunction" });
+
+function parseListQuery(c: Context, sources: readonly string[]): ListTasksInput {
   const q: ListTasksInput = {
     limit: parseIntParam(
       c.req.query("limit"),
@@ -369,7 +369,9 @@ function parseListQuery(c: Context): ListTasksInput {
   };
   const source = c.req.query("source");
   if (source !== undefined) {
-    if (source !== "linear" && source !== "api") throw invalid("source must be linear or api");
+    if (!sources.includes(source)) {
+      throw invalid(`source must be ${OR_LIST.format(sources)}`);
+    }
     q.source = source;
   }
   const state = c.req.query("state");

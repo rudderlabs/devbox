@@ -428,6 +428,16 @@ kubectl -n devbox-sandboxes create job devbox-snapshot-builder-manual-$(date +%s
 The snapshot builder also runs on a schedule (`snapshotBuilder.schedule`,
 every 6 hours by default).
 
+### Database migrations
+
+A new control plane pod migrates the database when it starts, while the old
+pods keep serving. For a while old pods run against the new schema, and each
+migration is written to keep them working.
+
+[docs/database.md](../database.md) explains when migrations run, the lock
+timeout and rollbacks. Steps a particular release needs before or after
+upgrading are in [the release's notes on GitHub](https://github.com/rudderlabs/devbox/releases).
+
 ## Uninstall
 
 `k8s:uninstall` acts on the cluster named in the `--target` file, and on

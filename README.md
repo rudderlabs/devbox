@@ -323,6 +323,7 @@ DevBox is the org's shared harness that picks up tickets in the background.
 - [docs/linear.md](docs/linear.md): connecting DevBox to Linear.
 - [docs/github.md](docs/github.md): connecting DevBox to GitHub as an App.
 - [docs/kubernetes/README.md](docs/kubernetes/README.md): running DevBox on Kubernetes.
+- [docs/database.md](docs/database.md): database migrations, upgrades and rollbacks.
 - [docs/extending.md](docs/extending.md): where DevBox could be extended. Not a stable interface.
 - [CONTRIBUTING.md](CONTRIBUTING.md): running the tests and lint.
 

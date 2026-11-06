@@ -97,7 +97,8 @@ The event log is how the harness reports back.
 - `pr_opened` carries the repo, pull request URL, branch and commit.
 - `completed` ends a round. For an assignment, `status` is `completed`, `partial_failure` (some repos failed), `no_action` (no repo needs a change) or `failed`.
 - The control plane keeps the last `seq` it read per task. Each loop it reads the file through OpenSandbox, handles newer events and skips unparsable lines.
-- For API tasks, it stores these events, plus its own (`task_created`, `message_queued`, `task_restarted`, `sandbox_started`, `round_failed`), in `task_events`, and the API serves them from there. Linear tasks' events are not stored (the API reports `logging: "unavailable"`).
+- For every task, whatever its source, it stores these events, plus its own (`task_created`, `message_queued`, `task_restarted`, `sandbox_started`, `round_failed`), in `task_events`. The API serves them from there, so `bun run devbox logs` works on any task, and any API token can read any task's log, agent output and comment text included.
+- `message_queued` marks each follow-up round, from any source. Its data is the round's `source` and `kind`, plus the text as `body` for a `comment`.
 
 ## The harness's stages
 

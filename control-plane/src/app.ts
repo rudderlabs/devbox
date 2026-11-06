@@ -1,13 +1,11 @@
 import { Hono } from "hono";
-import { githubTokenState } from "./clients/github";
 import { realClock } from "./clock";
 import { config } from "./config";
 import { ApiController } from "./controllers/api.controller";
-import { GitHubWebhookController } from "./controllers/githubWebhook.controller";
 import { HealthController } from "./controllers/health.controller";
-import { LinearWebhookController } from "./controllers/linearWebhook.controller";
 import { db } from "./db";
-import { logger } from "./logger";
+import { definitions } from "./integrations";
+import { api } from "./integrations/api";
 import { apiTaskRepository } from "./repositories/apiTask.repository";
 import { apiTokenRepository } from "./repositories/apiToken.repository";
 import { inboxRepository } from "./repositories/inbox.repository";
@@ -16,14 +14,14 @@ import { taskEventRepository } from "./repositories/taskEvent.repository";
 import { createApiRoutes } from "./routes/api";
 import { createHealthRoutes } from "./routes/health";
 import { createWebhookRoutes } from "./routes/webhook";
-import { AgentSessionService } from "./services/agentSession.service";
 import { ApiAuthService } from "./services/apiAuth.service";
 import { ApiTaskService } from "./services/apiTask.service";
+import { BackgroundWork } from "./services/backgroundWork";
+import { CodeHost } from "./services/codeHost.service";
 import { EventDispatcher } from "./services/eventDispatcher";
-import { GithubStatusService } from "./services/githubStatus.service";
 import { InboxService } from "./services/inbox.service";
-import { LinearStatusService } from "./services/linearStatus.service";
-import { LinearTokenProvider } from "./services/linearTokenProvider";
+import { IntegrationRegistry } from "./services/integrationRegistry";
+import { ReplyHolds } from "./services/replyHolds";
 import { SandboxManager } from "./services/sandboxManager.service";
 import { SlackNotifierService } from "./services/slackNotifier.service";
 import { TaskProcessorService } from "./services/taskProcessor.service";
@@ -39,17 +37,9 @@ function joinIfAny(list: string[]): string | undefined {
   return list.length > 0 ? list.join(",") : undefined;
 }
 
-export function createApp(): AppBundle {
-  // Always built, but inert when Linear is off: callers only use it for Linear
-  // tasks, and without credentials it throws "Linear is not configured" rather
-  // than calling Linear. The status service gets it only when Linear is on.
-  const linearTokenProvider = new LinearTokenProvider({
-    creds: config.linear && {
-      clientId: config.linear.clientId,
-      clientSecret: config.linear.clientSecret,
-    },
-    log: logger,
-  });
+// integrationConfigs: each integration's settings, parsed by index.ts before
+// migrations run (parseIntegrationConfigs).
+export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): AppBundle {
   const sandboxManager = new SandboxManager({
     domain: config.opensandbox.domain,
     apiKey: config.opensandbox.apiKey,
@@ -69,69 +59,67 @@ export function createApp(): AppBundle {
     pvcStorageClass: config.opensandbox.pvcStorageClass,
     pvcStorageSize: config.opensandbox.pvcStorageSize,
     forwardedEnv: config.opensandbox.forwardedEnv,
-    trustedOrgs: joinIfAny(config.github.trustedOrgs),
-    trustedUsers: joinIfAny(config.github.trustedUsers),
+    trustedOrgs: joinIfAny(config.codeHost.trustedOrgs),
+    trustedUsers: joinIfAny(config.codeHost.trustedUsers),
   });
 
-  const inboxService = new InboxService(inboxRepository, sandboxManager, linearTokenProvider);
-
-  const agentSessionService = new AgentSessionService(
-    taskRepository,
-    inboxRepository,
-    linearTokenProvider,
+  // Work that outlives its caller (hooks, Slack posts, a restart's sandbox
+  // kill); TaskProcessor.stop() drains it.
+  const background = new BackgroundWork();
+  // Sends held because they failed before anything went out; each
+  // integration's status reports its own.
+  const replyHolds = new ReplyHolds();
+  // The registry builds the TaskServices, the only way tasks and rounds are
+  // created.
+  const registry = new IntegrationRegistry(definitions, integrationConfigs, {
+    taskRepo: taskRepository,
+    inboxRepo: inboxRepository,
     sandboxManager,
-    inboxService,
-  );
+    background,
+    holds: replyHolds,
+  });
+  // Only these sources are claimed and reconciled, so an older image never
+  // works a task whose source it doesn't know.
+  const taskSources = registry.taskSources;
+
+  const inboxService = new InboxService(inboxRepository, sandboxManager, registry);
 
   const slackNotifier = new SlackNotifierService(
     taskRepository,
     config.slack?.botToken ?? "",
     config.slack?.channel ?? "",
+    (task, meta) => registry.for(task.source).assignee(task, meta),
   );
 
   const eventDispatcher = new EventDispatcher(
     taskRepository,
     inboxRepository,
     sandboxManager,
-    linearTokenProvider,
     slackNotifier,
+    registry,
+    new CodeHost(registry, background),
+    replyHolds,
+    background,
   );
 
   const taskProcessor = new TaskProcessorService(
     taskRepository,
     inboxRepository,
-    linearTokenProvider,
     sandboxManager,
     eventDispatcher,
     inboxService,
     slackNotifier,
+    registry,
+    replyHolds,
+    taskSources,
+    background,
   );
 
-  const linearStatus = new LinearStatusService(
-    config.linear ? linearTokenProvider : undefined,
-    logger,
-  );
-
-  // Each webhook exists only when its integration is configured.
-  const linearWebhookController = config.linear
-    ? new LinearWebhookController(agentSessionService, (at) => linearStatus.recordWebhook(at))
-    : undefined;
-  const githubWebhookController = config.github.webhooks
-    ? new GitHubWebhookController(inboxService, taskRepository, config.github.webhooks)
-    : undefined;
-  const githubStatus = new GithubStatusService(githubTokenState, {
-    enabled: githubWebhookController !== undefined,
-    ciResults: config.github.ciResultEnabled,
-    lastWebhookAt: () => githubWebhookController?.lastWebhookAt() ?? null,
-  });
   const healthController = new HealthController(db);
 
   const app = new Hono();
   app.route("/", createHealthRoutes(healthController));
-  app.route(
-    "/",
-    createWebhookRoutes({ linear: linearWebhookController, github: githubWebhookController }),
-  );
+  app.route("/", createWebhookRoutes(registry.webhooks()));
 
   // /api only mounts when explicitly enabled: a CP deployed before the
   // internal ingress exists must expose nothing.
@@ -139,12 +127,11 @@ export function createApp(): AppBundle {
   if (config.api.enabled) {
     const apiTaskService = new ApiTaskService(
       apiTaskRepository,
-      taskRepository,
+      registry.tasks(api.name),
       taskEventRepository,
-      sandboxManager,
       {
-        keyPrefix: config.api.taskKeyPrefix,
         publicBaseUrl: config.api.publicBaseUrl,
+        taskKeyPrefix: config.api.taskKeyPrefix,
         now: () => new Date(),
       },
     );
@@ -153,14 +140,14 @@ export function createApp(): AppBundle {
       ssePollMs: config.api.ssePollMs,
       sseMaxDurationMs: config.api.sseMaxDurationMs,
       clock: realClock,
+      taskSources,
     });
     app.route(
       "/",
       createApiRoutes(apiController, new ApiAuthService(apiTokenRepository), {
         authEnabled: config.api.authEnabled,
         allowedHosts: config.api.allowedHosts,
-        linearStatus: () => linearStatus.status(),
-        githubStatus: () => githubStatus.status(),
+        status: (name) => registry.status(name),
       }),
     );
     stopApiStreams = () => apiController.closeStreams();

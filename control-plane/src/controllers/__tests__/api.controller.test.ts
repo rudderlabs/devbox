@@ -29,7 +29,7 @@ const task: ApiTask = {
 
 const UNAUTHORIZED = { error: { code: "unauthorized", message: "Missing or invalid API token" } };
 
-function setup(opts: { authEnabled: boolean; allowedHosts?: string[] }) {
+function setup(opts: { authEnabled: boolean; allowedHosts?: string[]; taskSources?: string[] }) {
   const service = {
     create: mock(() => Promise.resolve(task)),
     list: mock(() => Promise.resolve({ tasks: [task], next_before: null })),
@@ -39,7 +39,7 @@ function setup(opts: { authEnabled: boolean; allowedHosts?: string[] }) {
     events: mock(() =>
       Promise.resolve({ events: [], next_after: 0, logging: "available" as const }),
     ),
-    streamTarget: mock(() => Promise.resolve({ id: ID, source: "api" as const })),
+    streamTarget: mock(() => Promise.resolve(ID)),
     streamState: mock(() => Promise.resolve({ state: "queued" as const, sandbox_live: false })),
     eventsAfter: mock(() => Promise.resolve([])),
   };
@@ -53,12 +53,19 @@ function setup(opts: { authEnabled: boolean; allowedHosts?: string[] }) {
     ssePollMs: 1000,
     sseMaxDurationMs: 2000,
     clock: { now: () => 0, sleep: async () => {} },
+    taskSources: opts.taskSources ?? ["linear", "api"],
   });
   const app = createApiRoutes(controller, auth, {
     authEnabled: opts.authEnabled,
     allowedHosts: opts.allowedHosts ?? [],
-    linearStatus: async () => LINEAR_STATUS,
-    githubStatus: () => GITHUB_STATUS,
+    status: (name) => {
+      const statuses: Record<string, object> = {
+        linear: LINEAR_STATUS,
+        github: GITHUB_STATUS,
+        api: { enabled: true },
+      };
+      return Object.hasOwn(statuses, name) ? Promise.resolve(statuses[name] as object) : undefined;
+    },
   });
   const req = (path: string, init: RequestInit & { json?: unknown } = {}) =>
     app.request(path, {
@@ -101,6 +108,7 @@ const routes: Array<[string, string, unknown?]> = [
   ["GET", "/api/me"],
   ["GET", "/api/integrations/linear"],
   ["GET", "/api/integrations/github"],
+  ["GET", "/api/integrations/api"],
 ];
 
 describe("ApiController", () => {
@@ -116,6 +124,14 @@ describe("ApiController", () => {
     const res = await req("/api/integrations/github");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(GITHUB_STATUS);
+  });
+
+  it("GET /api/integrations/api returns the status body; an unknown name is 404", async () => {
+    const { req } = setup({ authEnabled: true });
+    expect(await (await req("/api/integrations/api")).json()).toEqual({ enabled: true });
+    for (const name of ["jira", "constructor"]) {
+      expect((await req(`/api/integrations/${name}`)).status).toBe(404);
+    }
   });
 
   describe("auth on", () => {
@@ -430,6 +446,17 @@ describe("ApiController", () => {
         status: 404,
         body: { error: { code: "task_not_found", message: "Task not found" } },
       });
+    });
+
+    it("names every task source in an unknown source's message, however many there are", async () => {
+      for (const [taskSources, message] of [
+        [["api"], "source must be api"],
+        [["linear", "jira", "api"], "source must be linear, jira, or api"],
+      ] as const) {
+        const { req } = setup({ authEnabled: false, taskSources: [...taskSources] });
+        const res = await req("/api/tasks?source=github");
+        expect({ status: res.status, body: await res.json() }).toEqual(bad(message));
+      }
     });
 
     it("409 not_api_task is passed through", async () => {

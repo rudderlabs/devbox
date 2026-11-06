@@ -4,7 +4,6 @@ import {
   bigserial,
   index,
   jsonb,
-  pgEnum,
   pgSequence,
   pgTable,
   text,
@@ -12,8 +11,6 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-
-export const taskSource = pgEnum("task_source", ["linear", "api"]);
 
 // API task keys are `${API_TASK_KEY_PREFIX}${nextval}`. The sequence is not tied
 // to the prefix, so changing the prefix never reuses a number.
@@ -40,7 +37,9 @@ export const tasks = pgTable(
   "tasks",
   {
     id: uuid("id").primaryKey().default(sql`uuidv7()`),
-    source: taskSource("source").notNull(),
+    // The name of the integration that created the task. Plain text: the
+    // integrations registered in the code are the only list of sources.
+    source: text("source").notNull(),
     externalId: text("external_id").notNull(),
     // The human task key (ABC-123, DBX-API-42). Sent to the harness as
     // task_key. Set once at creation and never re-derived from external_url.
@@ -74,7 +73,8 @@ export const tasks = pgTable(
   },
   (t) => [
     uniqueIndex("tasks_source_external_id_uniq").on(t.source, t.externalId),
-    uniqueIndex("tasks_key_uniq").on(t.key),
+    // Keys are unique case-insensitively; readers match lower(key) = lower($1).
+    uniqueIndex("tasks_key_lower_uniq").on(sql`lower(${t.key})`),
     // Heartbeat scans only care whether a pod owns the task.
     index("tasks_lease_idx").on(t.heartbeatAt).where(sql`${t.ownerId} IS NOT NULL`),
     // GitHub webhook PR→task lookup.
@@ -97,9 +97,9 @@ export const inbox = pgTable(
       .references(() => tasks.id, { onDelete: "cascade" }),
     // Upstream system's id; paired with `source` for idempotency.
     externalId: text("external_id").notNull(),
-    // 'linear' | 'github'.
+    // The name of the integration that created the round.
     source: text("source").notNull(),
-    // 'assignment' | 'comment' | 'review'.
+    // 'assignment' | 'comment' | 'review' | 'ci_result'.
     kind: text("kind").notNull(),
     // kind-discriminated work content (prompt body, titles, etc).
     payload: jsonb("payload").notNull(),
@@ -124,6 +124,11 @@ export const inbox = pgTable(
   },
   (t) => [
     // Idempotency anchor: webhook retries / LB reroutes collapse via this.
+    // Every ON CONFLICT targets (source, kind, external_id).
+    uniqueIndex("inbox_source_kind_external_uniq").on(t.source, t.kind, t.externalId),
+    // The older, stricter index, kept for one release so older pods'
+    // ON CONFLICT (source, external_id) still has its arbiter. A later release
+    // drops it.
     uniqueIndex("inbox_source_external_uniq").on(t.source, t.externalId),
     // Pending = not yet delivered or dead-lettered. Sweep + claimNext filter on this.
     index("inbox_pending_idx").on(t.taskId).where(sql`${t.status} = 'pending'`),
@@ -131,7 +136,7 @@ export const inbox = pgTable(
   ],
 );
 
-// Progress log for API tasks (daemon events + CP events). `id` is the API/SSE
+// Every task's progress log (daemon events + CP events). `id` is the API/SSE
 // cursor. The daemon's `seq` restarts at 1 after a restart, so it is stored for
 // information only and is not unique.
 export const taskEvents = pgTable(

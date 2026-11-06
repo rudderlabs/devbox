@@ -820,9 +820,8 @@ class TestProcessOneInboxFile(unittest.TestCase):
 
     def test_comment_round_failure_emits_agent_error_not_response(self) -> None:
         # Round-failure messages ride on agent_error, not agent_response — CP
-        # routes agent_error through emitError on the Linear session
-        # (structured error block) rather than as a normal targeted reply.
-        # Lines up with the assignment-stage terminal-failure path.
+        # labels it a round failure (Linear shows it as a structured error
+        # block) rather than a normal targeted reply.
         entry = {
             "id": "inbox-cf",
             "kind": "comment",
@@ -1105,6 +1104,98 @@ class TestProcessOneInboxFile(unittest.TestCase):
         self.assertEqual(mock_plan.call_args.args[1], "DBX-API-42")
         self.assertEqual(mock_impl.call_args.args[0], "DBX-API-42")
         self.assertTrue((self.processed / f.name).exists())
+
+
+class TestAgentErrorContract(unittest.TestCase):
+    """The two non-retryable agent_error formats the control plane routes on.
+
+    The control plane's labelAgentEmit relies on them: on an assignment row
+    the body is the user-safe summary (shown on public channels as is); on a
+    comment, review or CI row it is exception text (shown only on private
+    channels). Changing either format requires changing that routing.
+    """
+
+    setUp = TestProcessOneInboxFile.setUp
+    tearDown = TestProcessOneInboxFile.tearDown
+    _write_inbox = TestProcessOneInboxFile._write_inbox
+    _events = TestProcessOneInboxFile._events
+
+    def test_failed_assignment_is_the_summary_without_exception_text(self) -> None:
+        entry = {
+            "id": "inbox-f",
+            "kind": "assignment",
+            "source": "linear",
+            "payload": {"title": "T", "task_key": "ABC-9", "target_id": "sess-9"},
+        }
+        f = self._write_inbox(entry)
+        plan_data = {"repos": [{"name": "repo-a", "path": "/tmp/repo-a", "goal": "g"}]}
+        impl_data = {"repos": []}
+        # Exception text the commit stage might carry must not reach the body.
+        commit_repos = [
+            {
+                "name": "repo-a",
+                "pr_url": None,
+                "pr_status": "push_failed",
+                "error": "RuntimeError: push rejected for token=abc",
+            }
+        ]
+        plan_md = self.dir / "plan.md"
+        plan_md.write_text("# Plan", encoding="utf-8")
+
+        with (
+            patch.object(assignment_module, "setup_workspace"),
+            patch.object(
+                assignment_module, "_run_planning_stage", return_value=plan_data
+            ),
+            patch.object(
+                assignment_module, "_run_implementation_stage", return_value=impl_data
+            ),
+            patch.object(
+                assignment_module, "run_self_review_loop", return_value=({}, impl_data)
+            ),
+            patch.object(assignment_module, "run_distillation_stage"),
+            patch.object(
+                assignment_module,
+                "run_commit_stage",
+                return_value=("failed", commit_repos),
+            ),
+            patch.object(assignment_module, "PLAN_MD", plan_md),
+        ):
+            process_one_inbox_file(f, self.state)
+
+        errors = [e for e in self._events() if e["type"] == "agent_error"]
+        self.assertEqual(len(errors), 1)
+        self.assertNotIn(RETRYABLE_ASSIGNMENT_ERROR_EVENT_FIELD, errors[0])
+        self.assertEqual(
+            errors[0]["body"],
+            assignment_module._format_completion_body(
+                commit_repos, plan_data, impl_data, "failed"
+            ),
+        )
+        self.assertNotIn("RuntimeError", errors[0]["body"])
+
+    def test_round_crash_carries_the_exception_text(self) -> None:
+        entry = {
+            "id": "inbox-c",
+            "kind": "comment",
+            "source": "github",
+            "payload": {"target_id": "555", "body": "fix it", "task_key": "ABC-9"},
+        }
+        f = self._write_inbox(entry)
+
+        with patch(
+            "harness.daemon.process_comment",
+            side_effect=RuntimeError("tool call blew up"),
+        ):
+            process_one_inbox_file(f, self.state)
+
+        errors = [e for e in self._events() if e["type"] == "agent_error"]
+        self.assertEqual(len(errors), 1)
+        self.assertNotIn(RETRYABLE_ASSIGNMENT_ERROR_EVENT_FIELD, errors[0])
+        self.assertEqual(
+            errors[0]["body"],
+            "⚠ Something went wrong — RuntimeError: tool call blew up",
+        )
 
 
 class TestArchiveMoveFailureDoesNotCrashLoop(unittest.TestCase):

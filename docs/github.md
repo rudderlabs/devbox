@@ -696,8 +696,9 @@ bun run github:disable [--target <file>] [--no-keychain] [--forget [--yes]]
 - **`github:disable`** sets `integrations.githubApp.enabled` to `false` and
   keeps the settings and the saved secrets. The App and its webhooks are off,
   and devbox falls back to a personal token, so the next apply needs
-  `GITHUB_TOKEN`. Turn the App back on with `bun run github:setup`, or by
-  setting `enabled` to `true`. It asks nothing. A new App waiting for its
+  `GITHUB_TOKEN`. Comments and reviews already queued still run, but their
+  replies are not posted. Turn the App back on with `bun run github:setup`, or
+  by setting `enabled` to `true`. It asks nothing. A new App waiting for its
   install stays, and it prints
   `The new App <slug> is still waiting for its install: bun run github:setup resumes it, bun run github:disable --forget removes it`.
 - **`github:disable --forget`** removes the `integrations.githubApp` block (a

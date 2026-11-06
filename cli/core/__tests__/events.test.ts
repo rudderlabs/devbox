@@ -349,13 +349,36 @@ describe("followTask from a write's round", () => {
   });
 });
 
-describe("followTask without a round to report", () => {
-  // The task state alone never ends a wait.
-  it("keeps waiting when the task failed before any round event", async () => {
+// A task from before its server logged every task can have an empty log: once
+// it is settled, there is no round to wait for.
+describe("followTask on a task with an empty log", () => {
+  function empty(state: Parameters<typeof stateFrame>[0]): Stub {
     const stub = createStub();
     serveEvents(stub, REF, []);
-    serveStream(stub, REF, [() => sse([stateFrame("failed")], "hang")]);
-    const r = await run(stub, { ref: REF, from: "latest", untilDone: true, timeoutMs: 50 });
+    serveStream(stub, REF, [() => sse([stateFrame(state)], "hang")]);
+    return stub;
+  }
+
+  it.each([["latest" as const], [{ after: 0 }]])(
+    "ends at once when idle (from %p)",
+    async (from) => {
+      const r = await run(empty("idle"), { ref: REF, from, untilDone: true });
+      expect(r.items).toEqual([done({ outcome: null, failed: false })]);
+    },
+  );
+
+  it("fails at once when failed", async () => {
+    const r = await run(empty("failed"), { ref: REF, from: "latest", untilDone: true });
+    expect(r.items).toEqual([done({ outcome: null, failed: true, reason: "the task failed" })]);
+  });
+
+  it("keeps waiting while the task is running", async () => {
+    const r = await run(empty("running"), {
+      ref: REF,
+      from: "latest",
+      untilDone: true,
+      timeoutMs: 50,
+    });
     expect(r.items).toEqual([{ kind: "timeout" }]);
   });
 });
@@ -410,8 +433,8 @@ describe("followTask until done, from a cursor", () => {
   });
 });
 
-// A status-less `completed` with no other round event isn't a work
-// round.
+// A status-less `completed` with no round event but its `message_queued`
+// isn't a work round.
 describe("followTask past a round that did no work", () => {
   it("reports the last work round", async () => {
     const stub = createStub();
@@ -419,7 +442,8 @@ describe("followTask past a round that did no work", () => {
       created,
       response,
       completed("partial_failure", 5, "round-1"),
-      envelope(6, "completed", {}, "round-2"),
+      envelope(6, "message_queued", { source: "github", kind: "review" }, "round-2"),
+      envelope(7, "completed", {}, "round-2"),
     ]);
     serveStream(stub, REF, [() => sse([stateFrame("idle")], "hang")]);
     const r = await run(stub, { ref: REF, from: "latest", untilDone: true });

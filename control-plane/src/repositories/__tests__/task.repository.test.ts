@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { sql } from "drizzle-orm";
 import type { HarnessEvent } from "../../types/harnessEvent";
 
@@ -11,10 +11,15 @@ mock.module("../../config", () => ({
 
 const { db, schema } = await import("../../db");
 const { TaskRepository } = await import("../task.repository");
-const { TaskEventRepository, insertCpEventIfApi } = await import("../taskEvent.repository");
+const { InboxRepository } = await import("../inbox.repository");
+const { validateHarnessEvent } = await import("../../services/sandboxManager.service");
+const { TaskEventRepository, insertCpEvent } = await import("../taskEvent.repository");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
 const repo = new TaskRepository();
+
+// Every task source this build knows; claimNext and listInFlightOwnedBy filter on it.
+const ALL_SOURCES: ("linear" | "api")[] = ["linear", "api"];
 
 const linearTarget = (targetId: string) => ({
   id: targetId,
@@ -35,6 +40,22 @@ const assignmentContent = {
   external_url: "https://linear.app/x/issue/ISS-1",
   target_id: "agent-session-1",
 };
+
+// A Linear `created` through assign: issue-1 / ISS-1. The delegation (agent
+// session) defaults to assignmentContent's target_id.
+const assignLinear = (
+  o: { session?: string; title?: string; url?: string; key?: string; flags?: string[] } = {},
+) =>
+  repo.assign({
+    source: "linear",
+    externalId: "issue-1",
+    key: { hint: o.key ?? "ISS-1" },
+    title: o.title ?? "Fix auth",
+    description: "desc",
+    flags: o.flags ?? [],
+    url: () => o.url ?? "https://linear.app/x/issue/ISS-1",
+    target: () => linearTarget(o.session ?? "agent-session-1"),
+  });
 
 // Inserts a bare tasks row directly. Returns the synthetic id.
 async function insertTask(overrides: Record<string, unknown> = {}): Promise<{ id: string }> {
@@ -99,19 +120,11 @@ describe("TaskRepository", () => {
     await db.execute(sql`ALTER SEQUENCE api_task_key_seq RESTART`);
   });
 
-  describe("upsertFromAgentSessionWithInbox", () => {
-    it("inserts task + inbox row in one tx, created=true on fresh insert", async () => {
-      const result = await repo.upsertFromAgentSessionWithInbox({
-        taskKey: "ISS-1",
-        taskExternalId: "issue-1",
-        taskTitle: "Fix auth",
-        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-1")],
-        metadata: { experimentalFlags: ["FAST_PATH"] },
-      });
+  describe("assign (Linear created)", () => {
+    it("inserts task + inbox row in one tx; a fresh insert is created", async () => {
+      const result = await assignLinear({ session: "sess-1", flags: ["FAST_PATH"] });
 
-      expect(result.created).toBe(true);
+      expect(result.result).toBe("created");
 
       const tasks = await db.select().from(schema.tasks);
       expect(tasks).toHaveLength(1);
@@ -127,72 +140,43 @@ describe("TaskRepository", () => {
     });
 
     it("sets tasks.key on insert and never changes it on conflict", async () => {
-      const first = await repo.upsertFromAgentSessionWithInbox({
-        taskExternalId: "issue-1",
-        taskKey: "ISS-1",
-        taskTitle: "Fix auth",
-        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-1")],
-        metadata: {},
-      });
+      const first = await assignLinear({ session: "sess-1" });
       // The issue moved team: new URL, new identifier. The stored key stays.
-      await repo.upsertFromAgentSessionWithInbox({
-        taskExternalId: "issue-1",
-        taskKey: "XYZ-9",
-        taskTitle: "Fix auth",
-        taskExternalUrl: "https://linear.app/x/issue/XYZ-9",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-2")],
-        metadata: {},
+      await assignLinear({
+        session: "sess-2",
+        key: "XYZ-9",
+        url: "https://linear.app/x/issue/XYZ-9",
       });
-      const row = await repo.getById(first.taskId);
+      const row = await repo.getById(first.id);
       expect({ key: row?.key, createdBy: row?.createdBy }).toEqual({
         key: "ISS-1",
         createdBy: null,
       });
     });
 
-    it("created=false on conflict; inbox INSERT is a no-op; existing reply_targets persist", async () => {
-      await repo.upsertFromAgentSessionWithInbox({
-        taskKey: "ISS-1",
-        taskExternalId: "issue-1",
-        taskTitle: "Fix auth",
-        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-1")],
-        metadata: {},
-      });
+    it("a redelivery is a duplicate; inbox INSERT is a no-op; existing reply_targets persist", async () => {
+      await assignLinear({ session: "sess-1" });
 
       // Seed a durable retry budget on the existing row. A duplicate `created`
-      // redelivery passes metadata={}; the upsert MERGES (metadata || EXCLUDED),
-      // so the budget must be PRESERVED — a blind overwrite would silently reset
+      // redelivery must PRESERVE it — a blind overwrite would silently reset
       // the sandbox-retry cap.
       await db.execute(sql`
         UPDATE tasks SET metadata = '{"retryCount":2}'::jsonb WHERE external_id = 'issue-1';
       `);
 
-      const result = await repo.upsertFromAgentSessionWithInbox({
-        taskKey: "ISS-1",
-        taskExternalId: "issue-1",
-        taskTitle: "Fix auth v2",
-        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-2")],
-        metadata: {},
-      });
+      // The same delegation (session) redelivered.
+      const result = await assignLinear({ session: "sess-1", title: "Fix auth v2" });
 
-      expect(result.created).toBe(false);
+      expect(result.result).toBe("duplicate");
 
       const [task] = await db.select().from(schema.tasks);
-      expect(task?.title).toBe("Fix auth v2");
-      // retryCount survives the duplicate-redelivery upsert (merge, not replace).
+      // A duplicate changes nothing, not even the title.
+      expect(task?.title).toBe("Fix auth");
+      // retryCount survives the duplicate redelivery.
       expect((task?.metadata as { retryCount?: number })?.retryCount).toBe(2);
 
-      // Still exactly one inbox row — INSERT was DO NOTHING on conflict, so
-      // the existing reply_targets carrying "sess-1" are preserved (the
-      // caller reads this via inboxRepo.getAssignmentReplyTargetId for
-      // duplicate-webhook detection).
+      // Still exactly one inbox row, and the existing reply_targets carrying
+      // "sess-1" are preserved (assign compares them for duplicate detection).
       const rows = await db.execute<{
         id: string;
         reply_targets: Array<{ id: string }>;
@@ -200,19 +184,130 @@ describe("TaskRepository", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]?.reply_targets[0]?.id).toBe("sess-1");
     });
+
+    it("a duplicate created (same session) changes nothing: not the title, URL or flags, nor the run", async () => {
+      // It used to refresh title, URL and flags.
+      const { id: taskId } = await assignLinear({ session: "sess-1", flags: ["OLD"] });
+      await db.execute(sql`
+        UPDATE tasks
+           SET owner_id = 'pod-a', heartbeat_at = now(), sandbox_id = 'sb-1', pvc_name = 'pvc-1',
+               last_observed_event_seq = 7,
+               pr_urls = '[{"repo":"r","url":"https://github.com/o/r/pull/1","branch":"b","commit_sha":"c"}]'::jsonb
+         WHERE id = ${taskId};
+      `);
+      await db.execute(sql`UPDATE inbox SET status = 'delivered'`);
+      const [before] = await db.execute<{ id: string }>(sql`SELECT id FROM inbox`);
+
+      const result = await assignLinear({
+        session: "sess-1",
+        title: "Fix auth (edited)",
+        url: "https://linear.app/x/issue/ISS-1/fix-auth-edited",
+        flags: ["NEW"],
+      });
+
+      expect(result).toEqual({
+        id: taskId,
+        key: "ISS-1",
+        result: "duplicate",
+        prevSandboxId: null,
+      });
+      const task = await repo.getById(taskId);
+      expect({ title: task?.title, url: task?.externalUrl, metadata: task?.metadata }).toEqual({
+        title: "Fix auth",
+        url: "https://linear.app/x/issue/ISS-1",
+        metadata: { experimentalFlags: ["OLD"] },
+      });
+      expect({
+        ownerId: task?.ownerId,
+        sandboxId: task?.sandboxId,
+        pvcName: task?.pvcName,
+        seq: Number(task?.lastObservedEventSeq),
+        prs: task?.prUrls,
+      }).toEqual({
+        ownerId: "pod-a",
+        sandboxId: "sb-1",
+        pvcName: "pvc-1",
+        seq: 7,
+        prs: [{ repo: "r", url: "https://github.com/o/r/pull/1", branch: "b", commit_sha: "c" }],
+      });
+      const rows = await db.execute<{ id: string; status: string; payload: { title: string } }>(
+        sql`SELECT id, status, payload FROM inbox`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: (before as { id: string }).id,
+        status: "delivered",
+        payload: { title: "Fix auth" },
+      });
+    });
   });
 
   describe("restartTaskWithInbox", () => {
-    it("stamps task_id/task_key on the assignment payload from the task row", async () => {
-      const { taskId } = await repo.upsertFromAgentSessionWithInbox({
-        taskExternalId: "issue-1",
-        taskKey: "ISS-1",
-        taskTitle: "Fix auth",
-        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-1")],
-        metadata: {},
+    it("re-delegation: assign restarts, refreshing title, URL and flags and dropping retryCount", async () => {
+      const { id: taskId } = await assignLinear({ session: "sess-1", flags: ["OLD"] });
+      await db.execute(sql`
+        UPDATE tasks SET metadata = metadata || '{"retryCount":2}'::jsonb WHERE id = ${taskId};
+      `);
+
+      await assignLinear({
+        session: "sess-2",
+        title: "Fix auth v2",
+        url: "https://linear.app/x/issue/ISS-1/v2",
+        flags: ["NEW"],
       });
+
+      const task = await repo.getById(taskId);
+      expect({ title: task?.title, url: task?.externalUrl, metadata: task?.metadata }).toEqual({
+        title: "Fix auth v2",
+        url: "https://linear.app/x/issue/ISS-1/v2",
+        metadata: { experimentalFlags: ["NEW"] },
+      });
+      // A re-delegation logs task_restarted like any restart, on the new run.
+      const [assignment] = await db.execute<{ id: string }>(
+        sql`SELECT id FROM inbox WHERE kind = 'assignment'`,
+      );
+      const events = await db.execute(
+        sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...events].map((e) => e.type)).toEqual(["task_created", "task_restarted"]);
+      expect(events[1]).toEqual({
+        type: "task_restarted",
+        inbox_id: assignment?.id,
+        data: {
+          title: "Fix auth v2",
+          description: "desc",
+          experimental_flags: ["NEW"],
+          superseded_round_ids: [],
+        },
+      });
+    });
+
+    it("rolls back a re-delegation when its task_restarted insert fails", async () => {
+      const { id: taskId } = await assignLinear({ session: "sess-1" });
+      await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-old' WHERE id = ${taskId}`);
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'task_restarted')`,
+      );
+      try {
+        await expect(assignLinear({ session: "sess-2", title: "Fix auth v2" })).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      const task = await repo.getById(taskId);
+      expect({ title: task?.title, sandboxId: task?.sandboxId }).toEqual({
+        title: "Fix auth",
+        sandboxId: "sb-old",
+      });
+      const [assignment] = await db.execute<{ reply_targets: unknown }>(
+        sql`SELECT reply_targets FROM inbox WHERE kind = 'assignment'`,
+      );
+      expect(assignment?.reply_targets).toEqual([linearTarget("sess-1")]);
+      const events = await db.execute(sql`SELECT type FROM task_events`);
+      expect([...events]).toEqual([{ type: "task_created" }]);
+    });
+
+    it("stamps task_id/task_key on the assignment payload from the task row", async () => {
+      const { id: taskId } = await assignLinear();
       const created = await db.execute<{ payload: unknown }>(
         sql`SELECT payload FROM inbox WHERE task_id = ${taskId}`,
       );
@@ -226,6 +321,7 @@ describe("TaskRepository", () => {
         taskId,
         inboxPayload: { ...assignmentContent, title: "Fix auth v2" },
         inboxReplyTargets: [linearTarget("sess-2")],
+        flags: [],
       });
       const restarted = await db.execute<{ payload: unknown }>(
         sql`SELECT payload FROM inbox WHERE task_id = ${taskId}`,
@@ -240,15 +336,7 @@ describe("TaskRepository", () => {
 
     it("rotates and re-pends the task's single assignment inbox row, dead-letters open siblings, and resets the task", async () => {
       // Seed a task + assignment inbox row, then stage an in-flight run.
-      const { taskId } = await repo.upsertFromAgentSessionWithInbox({
-        taskKey: "ISS-1",
-        taskExternalId: "issue-1",
-        taskTitle: "Fix auth",
-        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-1")],
-        metadata: {},
-      });
+      const { id: taskId } = await assignLinear({ session: "sess-1" });
       await db.execute(sql`
         UPDATE tasks
            SET owner_id = 'pod-a', heartbeat_at = now(), sandbox_id = 'sb-old',
@@ -278,6 +366,7 @@ describe("TaskRepository", () => {
         taskId,
         inboxPayload: assignmentContent,
         inboxReplyTargets: [linearTarget("sess-2")],
+        flags: [],
       });
 
       // The preempted sandbox is returned for the caller to kill.
@@ -344,15 +433,7 @@ describe("TaskRepository", () => {
 
   describe("requeueForRetry", () => {
     it("owner-guarded RESUME: keeps pvc/cursor/pr_urls + inbox rows, only drops sandbox_id + releases the lease", async () => {
-      const { taskId } = await repo.upsertFromAgentSessionWithInbox({
-        taskKey: "ISS-1",
-        taskExternalId: "issue-1",
-        taskTitle: "Fix auth",
-        taskExternalUrl: "https://linear.app/x/issue/ISS-1",
-        inboxPayload: assignmentContent,
-        inboxReplyTargets: [linearTarget("sess-1")],
-        metadata: {},
-      });
+      const { id: taskId } = await assignLinear();
       const prUrls = [
         {
           repo: "api",
@@ -443,6 +524,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 100,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -455,6 +537,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
 
       expect(task?.id).toBe(t.id);
@@ -471,6 +554,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 100,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -487,6 +571,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-live",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
       expect(task?.ownerId).toBe("pod-live");
@@ -509,6 +594,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-live",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
       expect(task?.ownerId).toBe("pod-live");
@@ -528,6 +614,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 100,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -546,6 +633,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(b.id);
     });
@@ -561,6 +649,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 1,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -573,6 +662,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 1,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
     });
@@ -598,6 +688,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 1,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -624,6 +715,7 @@ describe("TaskRepository", () => {
           ownerId: "pod-a",
           leaseTimeoutMs: 10_000,
           maxConcurrentSandboxes: 1,
+          sources: ALL_SOURCES,
         }),
       ).toBeNull();
     });
@@ -650,6 +742,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 1,
+        sources: ALL_SOURCES,
       });
       // A claim succeeds — the stale lease did not consume the only slot.
       expect(task?.id).toBe(stale.id);
@@ -674,6 +767,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-a",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 2,
+        sources: ALL_SOURCES,
       });
       // running.n == 1 (not 2) → the fresh task is claimable.
       expect(task?.id).toBe(fresh.id);
@@ -720,7 +814,7 @@ describe("TaskRepository", () => {
         sql`SELECT task_id, origin, type, inbox_id, seq::int AS seq, data FROM task_events ORDER BY id`,
       );
 
-    it("advances the cursor; owner-guarded + monotonic-guarded (Linear: logs nothing)", async () => {
+    it("advances the cursor; owner-guarded + monotonic-guarded (Linear: logs the event)", async () => {
       const t = await insertTask({ ownerId: "pod-a", lastObservedEventSeq: 2 });
       expect(
         await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-x", event: ev(5) }),
@@ -733,7 +827,82 @@ describe("TaskRepository", () => {
       ).toEqual([]);
       const [row] = await db.select().from(schema.tasks);
       expect(row?.lastObservedEventSeq).toBe(5);
-      expect(await events()).toEqual([]);
+      // Only the advance is logged: not the call without the lease, nor the replay.
+      expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "daemon",
+          type: "agent_action",
+          inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+          seq: 5,
+          data: ev(5),
+        },
+      ]);
+    });
+
+    it("renews the lease with each advance", async () => {
+      const stale = new Date(Date.now() - 100_000);
+      const t = await insertTask({ ownerId: "pod-a", heartbeatAt: stale });
+      await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(1) });
+      const [row] = await db.select().from(schema.tasks);
+      expect(row?.heartbeatAt?.getTime()).toBeGreaterThan(stale.getTime() + 90_000);
+    });
+
+    it("a Linear task logs the events of its GitHub round", async () => {
+      const t = await insertTask({ ownerId: "pod-a" });
+      const [round] = await db.execute<{ id: string }>(sql`
+        INSERT INTO inbox (task_id, source, kind, external_id, payload)
+             VALUES (${t.id}, 'github', 'comment', '555', '{}'::jsonb)
+        RETURNING id`);
+      const roundId = (round as { id: string }).id;
+      await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(1, roundId) });
+      expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "daemon",
+          type: "agent_action",
+          inbox_id: roundId,
+          seq: 1,
+          data: ev(1, roundId),
+        },
+      ]);
+    });
+
+    // Postgres rejects both in jsonb; a rejected insert would fail the cursor
+    // advance on every tick, after the message was already sent.
+    it("a Linear task's event with a NUL and a lone surrogate advances the cursor, cleaned", async () => {
+      const t = await insertTask({ ownerId: "pod-a" });
+      const line = JSON.stringify({
+        seq: 1,
+        ts: "2026-10-07T12:00:00Z",
+        type: "agent_response",
+        inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+        target_id: "t",
+        body: "do\u0000ne\ud800",
+      });
+      const event = validateHarnessEvent(JSON.parse(line));
+      if (!event) throw new Error("the event was dropped");
+      expect(await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event })).toEqual([
+        { id: t.id },
+      ]);
+      expect((await repo.getById(t.id))?.lastObservedEventSeq).toBe(1);
+      expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "daemon",
+          type: "agent_response",
+          inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+          seq: 1,
+          data: {
+            seq: 1,
+            ts: "2026-10-07T12:00:00Z",
+            type: "agent_response",
+            inbox_id: "0192f000-0000-7000-8000-0000000000aa",
+            target_id: "t",
+            body: "done\ufffd",
+          },
+        },
+      ]);
     });
 
     it("API task: one log row per event, holding the full event", async () => {
@@ -787,10 +956,11 @@ describe("TaskRepository", () => {
     it("after a restart the old owner writes nothing and the new run's seq 1 is logged", async () => {
       const t = await insertTask({ source: "api", ownerId: "pod-a", lastObservedEventSeq: 5 });
       await insertInboxRow(t.id, { status: "delivered" });
-      await repo.restartTaskWithInbox({
+      const { assignmentId } = await repo.restartTaskWithInbox({
         taskId: t.id,
         inboxPayload: { title: "t", description: null, external_url: "u", target_id: t.id },
         inboxReplyTargets: [{ id: t.id, spec: { kind: "api_session" } }],
+        flags: [],
       });
       expect(
         await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event: ev(6) }),
@@ -798,6 +968,19 @@ describe("TaskRepository", () => {
       await db.execute(sql`UPDATE tasks SET owner_id = 'pod-b' WHERE id = ${t.id}`);
       await repo.recordEventCursor({ taskId: t.id, ownerId: "pod-b", event: ev(1) });
       expect(await events()).toEqual([
+        {
+          task_id: t.id,
+          origin: "control_plane",
+          type: "task_restarted",
+          inbox_id: assignmentId,
+          seq: null,
+          data: {
+            title: "t",
+            description: null,
+            experimental_flags: [],
+            superseded_round_ids: [],
+          },
+        },
         {
           task_id: t.id,
           origin: "daemon",
@@ -814,7 +997,7 @@ describe("TaskRepository", () => {
     it("pages by id after the cursor, ascending", async () => {
       const t = await insertTask({ source: "api" });
       for (const type of ["a", "b", "c"]) {
-        await insertCpEventIfApi(db, {
+        await insertCpEvent(db, {
           taskId: t.id,
           type: "round_failed",
           inboxId: null,
@@ -850,7 +1033,7 @@ describe("TaskRepository", () => {
         branch: "b",
         commitSha: "abc",
       });
-      expect(first).toEqual([{ id: t.id }]);
+      expect(first).toEqual([{ id: t.id, firstTime: true }]);
       // Re-append same url — should not duplicate.
       await repo.appendPrUrl({
         taskId: t.id,
@@ -874,6 +1057,20 @@ describe("TaskRepository", () => {
       expect(urls).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
     });
 
+    it("re-appending a known url still returns the row, with firstTime false", async () => {
+      const t = await insertTask({ ownerId: "pod-a" });
+      const pr = {
+        taskId: t.id,
+        ownerId: "pod-a",
+        prUrl: "https://github.com/o/r/pull/1",
+        repo: "r",
+        branch: "b",
+        commitSha: "abc",
+      };
+      expect(await repo.appendPrUrl(pr)).toEqual([{ id: t.id, firstTime: true }]);
+      expect(await repo.appendPrUrl(pr)).toEqual([{ id: t.id, firstTime: false }]);
+    });
+
     it("owner-guarded: returns 0 rows on stale-lease takeover", async () => {
       const t = await insertTask({ ownerId: "pod-a" });
       const wrong = await repo.appendPrUrl({
@@ -891,7 +1088,7 @@ describe("TaskRepository", () => {
     });
   });
 
-  describe("setSandboxId / getById / findByLinearIssueId / findByPrUrl", () => {
+  describe("setSandboxId / getById / findByExternalId / findByPrUrl", () => {
     it("setSandboxId owner-guarded", async () => {
       const t = await insertTask({ ownerId: "pod-a" });
       expect(await repo.setSandboxId({ taskId: t.id, ownerId: "pod-x", sandboxId: "s" })).toEqual(
@@ -915,10 +1112,11 @@ describe("TaskRepository", () => {
       expect(await repo.getByIdOwnedBy(t.id, "pod-other")).toBeNull();
     });
 
-    it("findByLinearIssueId matches on source + external_id", async () => {
+    it("findByExternalId matches on source + external_id", async () => {
       const t = await insertTask({ externalId: "linear-uuid-1" });
-      expect((await repo.findByLinearIssueId("linear-uuid-1"))?.id).toBe(t.id);
-      expect(await repo.findByLinearIssueId("nope")).toBeNull();
+      expect((await repo.findByExternalId("linear", "linear-uuid-1"))?.id).toBe(t.id);
+      expect(await repo.findByExternalId("linear", "nope")).toBeNull();
+      expect(await repo.findByExternalId("api", "linear-uuid-1")).toBeNull();
     });
 
     it("findByPrUrl matches via the GIN-indexed jsonb predicate", async () => {
@@ -942,8 +1140,43 @@ describe("TaskRepository", () => {
       await insertTask({ externalId: "b", ownerId: "pod-a" }); // no sandbox
       await insertTask({ externalId: "c", ownerId: "pod-b", sandboxId: "sbx-c" }); // other pod
 
-      const ids = (await repo.listInFlightOwnedBy("pod-a")).map((r) => r.id);
+      const ids = (await repo.listInFlightOwnedBy("pod-a", ALL_SOURCES)).map((r) => r.id);
       expect(ids).toEqual([withSbx.id]);
+    });
+  });
+
+  describe("source filter (an image never works a source it doesn't know)", () => {
+    it("claimNext and listInFlightOwnedBy skip a task whose source is not in the list", async () => {
+      const api = await insertTask({ source: "api", externalId: "api-unclaimed" });
+      await insertInboxRow(api.id);
+      const apiOwned = await insertTask({
+        source: "api",
+        externalId: "api-owned",
+        ownerId: "pod-a",
+        sandboxId: "sbx-api",
+      });
+      const linear = await insertTask({
+        externalId: "lin-owned",
+        ownerId: "pod-a",
+        sandboxId: "sbx-l",
+      });
+      const opts = {
+        leaseTimeoutMs: 10_000,
+        maxConcurrentSandboxes: 100,
+        sources: ["linear" as const],
+      };
+
+      expect(await repo.claimNext({ ownerId: "pod-b", ...opts })).toBeNull();
+      expect((await repo.listInFlightOwnedBy("pod-a", ["linear"])).map((r) => r.id)).toEqual([
+        linear.id,
+      ]);
+      // The same rows with the source listed: claimed and listed.
+      expect((await repo.claimNext({ ownerId: "pod-b", ...opts, sources: ALL_SOURCES }))?.id).toBe(
+        api.id,
+      );
+      expect(
+        (await repo.listInFlightOwnedBy("pod-a", ALL_SOURCES)).map((r) => r.id).sort(),
+      ).toEqual([apiOwned.id, linear.id].sort());
     });
   });
 
@@ -960,7 +1193,8 @@ describe("TaskRepository", () => {
         heartbeatAt: new Date("2020-01-01"),
       });
 
-      await repo.heartbeatOwnedBy("pod-a");
+      // The renewed tasks: a task taken over is missing.
+      expect(await repo.heartbeatOwnedBy("pod-a")).toEqual([{ id: mine.id }]);
 
       const rows = await db.select().from(schema.tasks);
       expect(rows.find((r) => r.id === mine.id)?.heartbeatAt?.getFullYear()).toBeGreaterThan(2020);
@@ -976,6 +1210,7 @@ describe("TaskRepository", () => {
         ownerId: "pod-b",
         leaseTimeoutMs: 10_000,
         maxConcurrentSandboxes: 100,
+        sources: ALL_SOURCES,
       });
       expect(task?.id).toBe(t.id);
       expect(task?.ownerId).toBe("pod-b");
@@ -1164,7 +1399,7 @@ describe("TaskRepository", () => {
       ]);
     });
 
-    it("a lost lease or a Linear task logs nothing", async () => {
+    it("a lost lease logs nothing; a Linear task logs like any other", async () => {
       const api = await insertTask({ source: "api", ownerId: "pod-b" });
       const lin = await insertTask({ ownerId: "pod-a" });
       await repo.attachSandboxResources({
@@ -1179,7 +1414,167 @@ describe("TaskRepository", () => {
         sandboxId: "s",
         pvcName: "p",
       });
-      expect([...(await events())]).toEqual([]);
+      await repo.setSandboxId({ taskId: lin.id, ownerId: "pod-a", sandboxId: "s2" });
+      const rows = await db.execute(
+        sql`SELECT task_id, type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...rows]).toEqual([
+        { task_id: lin.id, type: "sandbox_started", inbox_id: null, data: { mode: "fresh" } },
+        { task_id: lin.id, type: "sandbox_started", inbox_id: null, data: { mode: "resume" } },
+      ]);
+    });
+
+    it("rolls back the sandbox stamp when the event insert fails", async () => {
+      const lin = await insertTask({ ownerId: "pod-a" });
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'sandbox_started')`,
+      );
+      try {
+        await expect(
+          repo.attachSandboxResources({
+            taskId: lin.id,
+            ownerId: "pod-a",
+            sandboxId: "s",
+            pvcName: "p",
+          }),
+        ).rejects.toThrow();
+        await expect(
+          repo.setSandboxId({ taskId: lin.id, ownerId: "pod-a", sandboxId: "s2" }),
+        ).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      const task = await repo.getById(lin.id);
+      expect({ sandboxId: task?.sandboxId, pvcName: task?.pvcName }).toEqual({
+        sandboxId: null,
+        pvcName: null,
+      });
+    });
+  });
+
+  // Each event is written in its cause's transaction, for a task of any
+  // source: a cause that fails to commit leaves no event. A deferred trigger
+  // fails the commit after the event's insert has run.
+  describe("a cause that fails to commit writes no event", () => {
+    const inboxRepo = new InboxRepository();
+    // A run killed mid-test can leave a trigger behind.
+    const dropTriggers = async () => {
+      await db.execute(sql`DROP TRIGGER IF EXISTS test_fail_commit ON tasks`);
+      await db.execute(sql`DROP TRIGGER IF EXISTS test_fail_commit ON inbox`);
+    };
+    beforeAll(async () => {
+      await dropTriggers();
+      await db.execute(sql`
+        CREATE OR REPLACE FUNCTION test_fail_commit() RETURNS trigger LANGUAGE plpgsql
+          AS $$ BEGIN RAISE EXCEPTION 'commit blocked'; END $$`);
+    });
+    afterAll(async () => {
+      await dropTriggers();
+      await db.execute(sql`DROP FUNCTION IF EXISTS test_fail_commit()`);
+    });
+
+    async function failingCommit(
+      table: "tasks" | "inbox",
+      op: "INSERT" | "UPDATE",
+      write: () => Promise<unknown>,
+    ): Promise<void> {
+      await db.execute(
+        sql.raw(`CREATE CONSTRAINT TRIGGER test_fail_commit AFTER ${op} ON ${table}
+                   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_fail_commit()`),
+      );
+      try {
+        await expect(write()).rejects.toThrow();
+      } finally {
+        await dropTriggers();
+      }
+    }
+
+    const logTypes = async () =>
+      [...(await db.execute<{ type: string }>(sql`SELECT type FROM task_events ORDER BY id`))].map(
+        (r) => r.type,
+      );
+
+    // A Linear task leased to pod-a, and its assignment round's id.
+    const linearTask = async () => {
+      const t = await assignLinear({ session: "sess-1" });
+      await db.execute(sql`UPDATE tasks SET owner_id = 'pod-a' WHERE id = ${t.id}`);
+      const [round] = await db.execute<{ id: string }>(
+        sql`SELECT id FROM inbox WHERE task_id = ${t.id}`,
+      );
+      return { id: t.id, roundId: (round as { id: string }).id };
+    };
+
+    it("task_created", async () => {
+      await failingCommit("tasks", "INSERT", () => assignLinear({ session: "sess-1" }));
+      expect(await db.execute(sql`SELECT 1 FROM tasks`)).toHaveLength(0);
+      expect(await logTypes()).toEqual([]);
+    });
+
+    it("task_restarted, from a re-delegation", async () => {
+      await linearTask();
+      await failingCommit("tasks", "UPDATE", () => assignLinear({ session: "sess-2" }));
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("sandbox_started", async () => {
+      const t = await linearTask();
+      await failingCommit("tasks", "UPDATE", () =>
+        repo.attachSandboxResources({
+          taskId: t.id,
+          ownerId: "pod-a",
+          sandboxId: "s",
+          pvcName: "p",
+        }),
+      );
+      await failingCommit("tasks", "UPDATE", () =>
+        repo.setSandboxId({ taskId: t.id, ownerId: "pod-a", sandboxId: "s" }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("a daemon event", async () => {
+      const t = await linearTask();
+      const event = {
+        seq: 1,
+        ts: "2026-10-07T12:00:00Z",
+        type: "agent_action",
+        inbox_id: t.roundId,
+        target_id: "sess-1",
+        body: "step",
+      } as HarnessEvent;
+      await failingCommit("tasks", "UPDATE", () =>
+        repo.recordEventCursor({ taskId: t.id, ownerId: "pod-a", event }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("message_queued", async () => {
+      const t = await linearTask();
+      await failingCommit("inbox", "INSERT", () =>
+        inboxRepo.appendFollowUp({
+          taskId: t.id,
+          message: { source: "linear", kind: "comment", external_id: "a-1", payload: {} },
+          replyTargets: [],
+          body: "more",
+        }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
+    });
+
+    it("round_failed", async () => {
+      const t = await linearTask();
+      await failingCommit("inbox", "UPDATE", () =>
+        inboxRepo.failTaskInbox({ taskId: t.id, ownerId: "pod-a", reason: "x" }),
+      );
+      await failingCommit("inbox", "UPDATE", () =>
+        inboxRepo.markFailed({
+          inboxId: t.roundId,
+          ownerId: "pod-a",
+          reason: "r",
+          userMessage: "m",
+        }),
+      );
+      expect(await logTypes()).toEqual(["task_created"]);
     });
   });
 });

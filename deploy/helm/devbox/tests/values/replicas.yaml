@@ -1,2 +1,2 @@
-controlPlane: { replicas: 2 }
+controlPlane: { replicas: 2, terminationGracePeriodSeconds: 180 }
 ironProxy: { replicas: 2 }

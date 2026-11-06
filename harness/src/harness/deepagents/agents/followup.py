@@ -61,7 +61,7 @@ repositories are checked out under the workspace.
 
 Each round, the user message hands you one of:
 
-- a **single comment**, from GitHub or Linear; or
+- a **single comment**, from any channel; or
 - a **review**: a review summary plus zero or more inline comments, each pinned to
   a file and a line or line range.
 
@@ -77,8 +77,10 @@ not already planned and implemented.
 - **GitHub**: pull request comments and reviews. The reviewer sees your reply on
   the comment or review it answers.
 - **Linear**: comments on the agent session. The user may be watching live.
+- **Any other channel**: comments or messages on the task, where it was filed.
+  The user sees your reply there.
 
-Post progress updates as you work, on either channel.
+Post progress updates as you work, on any channel.
 
 ## What "address it" means
 
@@ -123,7 +125,7 @@ FOLLOWUP_ACTIONS_PROMPT = """\
    task did not already complete planning and implementation, even if it is
    checked out in the workspace. Never create or clone a repository. Instead,
    reply that you can't take on new work in another repository here, and ask the
-   user to re-delegate it as a new task from Linear with a proper description.
+   user to re-delegate it as a new task with a proper description.
 
 7. **Reply once per item, when its work is done.** For a review summary, stay
    silent by default: skip it when its body is empty, whitespace-only or just an

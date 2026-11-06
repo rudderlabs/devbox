@@ -4,8 +4,6 @@ import { type ApiController, type ApiEnv, errorBody } from "../controllers/api.c
 import { logger } from "../logger";
 import { API_BODY_LIMIT_BYTES } from "../requestLimits";
 import type { ApiAuthService } from "../services/apiAuth.service";
-import type { GithubStatus } from "../services/githubStatus.service";
-import type { LinearStatus } from "../services/linearStatus.service";
 
 // /api. Mounted by app.ts only when API_ENABLED=true.
 // Order matters: the host check runs first (a disallowed host learns nothing,
@@ -16,8 +14,9 @@ export function createApiRoutes(
   opts: {
     authEnabled: boolean;
     allowedHosts: string[];
-    linearStatus: () => Promise<LinearStatus>;
-    githubStatus: () => GithubStatus;
+    // GET /api/integrations/<name>, for every integration, enabled or not;
+    // undefined for a name no integration has (IntegrationRegistry.status).
+    status: (name: string) => Promise<object> | undefined;
   },
 ): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
@@ -66,7 +65,11 @@ export function createApiRoutes(
   app.get("/api/tasks/:ref/events/stream", (c) => controller.streamEvents(c));
   app.get("/api/tasks/:ref/events", (c) => controller.listEvents(c));
   app.get("/api/me", (c) => controller.me(c));
-  app.get("/api/integrations/linear", async (c) => c.json(await opts.linearStatus()));
-  app.get("/api/integrations/github", (c) => c.json(opts.githubStatus()));
+  app.get("/api/integrations/:name", async (c) => {
+    const status = opts.status(c.req.param("name"));
+    // An unknown name is a 404, as an unregistered route.
+    if (!status) return c.notFound();
+    return c.json(await status);
+  });
   return app;
 }

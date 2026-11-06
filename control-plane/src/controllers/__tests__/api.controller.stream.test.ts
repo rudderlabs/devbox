@@ -90,7 +90,6 @@ function manualClock(): Clock & { advance(ms: number): void } {
 }
 
 function setup(o: {
-  source?: "api" | "linear";
   batches?: ApiEventEnvelope[][];
   states?: SseStateData[];
   maxMs?: number;
@@ -101,7 +100,7 @@ function setup(o: {
   const states = [...(o.states ?? [])];
   let lastState: SseStateData = { state: "running", sandbox_live: true };
   const service = {
-    streamTarget: mock(() => Promise.resolve({ id: ID, source: o.source ?? "api" })),
+    streamTarget: mock((_ref: string) => Promise.resolve(ID)),
     eventsAfter: mock((_id: string, _after: number, _limit: number) =>
       Promise.resolve(batches.shift() ?? []),
     ),
@@ -116,6 +115,7 @@ function setup(o: {
     ssePollMs: o.pollMs ?? 1000,
     sseMaxDurationMs: o.maxMs ?? 3000,
     clock,
+    taskSources: ["linear", "api"],
   });
   const app = createApiRoutes(
     controller,
@@ -123,11 +123,7 @@ function setup(o: {
     {
       authEnabled: false,
       allowedHosts: [],
-      linearStatus: async () => ({ configured: false }),
-      githubStatus: () => ({
-        token: { source: "env", expiresAt: null, readAt: null, lastError: null },
-        webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
-      }),
+      status: () => undefined,
     },
   );
   return { app, service, controller, clock };
@@ -191,15 +187,14 @@ describe("GET /api/tasks/:ref/events/stream", () => {
     expect(service.eventsAfter).toHaveBeenCalledTimes(5);
   });
 
-  it("Linear task: one state, logging unavailable, then close; never reads the log", async () => {
-    const { app, service } = setup({
-      source: "linear",
-      states: [{ state: "idle", sandbox_live: false }],
-    });
+  it("a Linear task's log is available and streams; no logging frame", async () => {
+    const idle: SseStateData = { state: "idle", sandbox_live: false };
+    const { app, service } = setup({ batches: [[env(1, "agent_response")]], states: [idle] });
     expect(await (await app.request(`/api/tasks/ABC-1/events/stream`)).text()).toBe(
-      `${stateFrame({ state: "idle", sandbox_live: false })}event: logging\ndata: {"logging":"unavailable"}\n\n`,
+      frame(env(1, "agent_response")) + stateFrame(idle),
     );
-    expect(service.eventsAfter).not.toHaveBeenCalled();
+    expect(service.streamTarget).toHaveBeenCalledWith("ABC-1");
+    expect(service.eventsAfter.mock.calls[0]).toEqual([ID, 0, 500]);
   });
 
   it("disables Bun's idle timeout for the stream", async () => {

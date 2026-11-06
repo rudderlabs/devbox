@@ -4,6 +4,7 @@ import { type ApiClient, ApiFailure, isFatal } from "./api";
 import { MAX_TIMEOUT_MS } from "./limits";
 import { followStream, type Sleep } from "./sse";
 
+// An older server logs only API tasks and says so for any other task.
 export class NoEventLog extends Error {
   constructor(ref: string) {
     super(`${ref} has no event log (only API tasks are logged)`);
@@ -99,8 +100,10 @@ class RoundTracker {
   private readonly responses = new Map<string, ApiEventEnvelope>();
   private readonly errors = new Map<string, string>();
   private readonly ended = new Map<string, RoundEnd>();
-  // Rounds that have had a round event other than `completed`.
+  // Rounds that have had a round event other than `completed` or
+  // `message_queued`, and the last of them.
   private readonly worked = new Set<string>();
+  private lastWorked: string | null = null;
 
   observe(e: ApiEventEnvelope): void {
     const data = (e.data ?? {}) as Record<string, unknown>;
@@ -109,10 +112,17 @@ class RoundTracker {
     }
     if (e.round_id === null || !ROUND_EVENTS.has(e.type)) return;
     const round = e.round_id;
-    // A status-less `completed` for a round with no other round event did no
-    // work. Such a `completed` neither moves the latest round nor ends one.
-    if (e.type === "completed" && round !== this.fixed && !this.worked.has(round)) return;
-    if (e.type !== "completed") this.worked.add(round);
+    // A status-less `completed` for a round with no other round event but its
+    // `message_queued` did no work. Such a `completed` ends no round, and the
+    // latest round goes back to the last one that worked.
+    if (e.type === "completed" && !data.status && round !== this.fixed && !this.worked.has(round)) {
+      if (this.latest === round) this.latest = this.lastWorked;
+      return;
+    }
+    if (e.type !== "message_queued") {
+      this.worked.add(round);
+      this.lastWorked = round;
+    }
     if (e.type === "task_created" || e.type === "task_restarted") {
       const previous = this.assignment;
       if (
@@ -151,8 +161,15 @@ class RoundTracker {
   result(state: string | undefined): RoundResult | undefined {
     const settled = state === "idle" || state === "failed";
     const target = this.fixed ?? this.latest;
-    // No round seen yet: the task's state alone doesn't say how a round ended.
-    if (target === null) return undefined;
+    // No round seen: a settled task has none to wait for (a task from before
+    // its server logged every task can have an empty log). Unsettled, the
+    // task's state alone doesn't say how a round will end.
+    if (target === null) {
+      if (!settled) return undefined;
+      return state === "failed"
+        ? { outcome: null, failed: true, reason: "the task failed" }
+        : { outcome: null, failed: false };
+    }
     const end = this.ended.get(target);
     // A superseded round is over at once. Other ends wait for the task to
     // settle: CP marks the round responded before it logs `completed`, so the

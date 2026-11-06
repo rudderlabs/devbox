@@ -563,6 +563,7 @@ describe("docker-compose.yml", () => {
       "GITHUB_BOT_LOGIN",
       "GITHUB_BOT_USER_ID",
       "GITHUB_CI_RESULT_ENABLED",
+      "GITHUB_CI_RESULT_MAX_PER_TASK",
       "GITHUB_TRUSTED_ORGS",
       "GITHUB_TRUSTED_USERS",
     ]) {

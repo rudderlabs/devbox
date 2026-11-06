@@ -1,5 +1,5 @@
 // Formatting shared by several commands (ls, show, log lines): ages, PR
-// references, one-line truncation and ANSI colour.
+// references, control-character stripping, one-line truncation and ANSI colour.
 import type { ApiTaskState } from "../../control-plane/src/types/api";
 
 export function prRef(repo: string, url: string): string {
@@ -37,9 +37,24 @@ export const STATE_TONE: Record<ApiTaskState, Tone> = {
   failed: "red",
 };
 
-// One line of at most `max` characters: whitespace runs collapse to a space,
-// and longer text ends in "…".
+// Text from the server without its control characters, except newline and
+// tab, so a title, comment or agent output can't send escape sequences to the
+// terminal (clipboard writes, hidden links, erased lines).
+export const printable = (text: string): string => text.replace(/(?![\n\t])\p{Cc}/gu, "");
+
+// JSON.stringify for printing. JSON.stringify escapes only U+0000–U+001F in
+// strings, so DEL and the C1 controls are escaped here too; the only raw
+// control character left is the newline between pretty-printed lines. The
+// parsed value is unchanged.
+export const toJson = (value: unknown, space?: number): string =>
+  JSON.stringify(value, null, space).replace(
+    /(?!\n)\p{Cc}/gu,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+
+// One line of at most `max` printable characters: whitespace runs collapse to
+// a space, and longer text ends in "…".
 export const oneLine = (text: string, max: number): string => {
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = printable(text).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };

@@ -212,7 +212,7 @@ describe("devbox end to end", () => {
     expect(io.stderr).toEqual([]);
   });
 
-  // A Linear task's stream sends its state before `logging`.
+  // On an older server, a Linear task's stream sends its state before `logging`.
   it("logs -w exits 10 for a Linear task", async () => {
     const stub = createStub();
     serveLinearTask(stub, "ABC-1");
