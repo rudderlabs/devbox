@@ -13,12 +13,7 @@
 // again.
 
 import { writeConfigKeys } from "../lib/configFile";
-import {
-  isJiraDate,
-  type JiraIntegration,
-  type JiraStatuses,
-  jiraSiteOrigin,
-} from "../lib/integrations";
+import { isJiraDate, type JiraIntegration, jiraSiteOrigin } from "../lib/integrations";
 import { deploymentScope, entryName, keychainUsable } from "../lib/keychain";
 import { publicUrlChangeLines, resolvePublicUrl } from "../lib/publicUrl";
 import {
@@ -72,11 +67,6 @@ type WebhookSecret = Resolved & { generated?: boolean };
 // Jira's own "Generate secret" button makes 20 random characters; anything
 // shorter is too easy to guess for the only proof a delivery comes from Jira.
 const MIN_WEBHOOK_SECRET = 20;
-
-const STATUS_ROLES = [
-  { key: "started", proposal: "In Progress", when: "when it starts work" },
-  { key: "done", proposal: "Done", when: "when it finishes" },
-] as const;
 
 // The link to a page a step needs, always printed; in a terminal, and unless
 // `open` is false, the browser opens it too.
@@ -139,38 +129,6 @@ async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolve
   throw new SetupError(
     `No Jira API token entered: nothing was written. Run \`${ctx.again}\` again when you have it.`,
   );
-}
-
-// The statuses devbox moves issues to. Proposed only while the config has
-// none: "In Progress" when it starts and "Done" when it finishes, which a
-// terminal may change ("-" for none). A project without the status is
-// skipped, with a warning, when devbox moves an issue there.
-async function chooseStatuses(ctx: Ctx): Promise<JiraStatuses> {
-  const { deps, d } = ctx;
-  const current = d.jira?.statuses;
-  const out: JiraStatuses = { ...current };
-  if (current === undefined) {
-    for (const role of STATUS_ROLES) {
-      let chosen: string | undefined = role.proposal;
-      if (deps.resolver.isTTY) {
-        const answer = (
-          await deps.promptLine(
-            `Status devbox moves an issue to ${role.when} [${role.proposal}] (- for none): `,
-          )
-        ).trim();
-        chosen = answer === "-" ? undefined : answer || role.proposal;
-      }
-      if (chosen) out[role.key] = chosen;
-    }
-  }
-  for (const role of STATUS_ROLES) {
-    if (!out[role.key]) {
-      deps.log(
-        `warning: no ${role.key} status: devbox won't move issues ${role.when}. Set integrations.jira.statuses.${role.key} in ${d.configPath}`,
-      );
-    }
-  }
-  return out;
 }
 
 // The token's expiry: --token-expires, else the configured one while the token
@@ -322,7 +280,11 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   // in every project the service account can use.
   const warning = await checkPermissions({ cloudId, email: botEmail }, token.value, deps.fetch);
   if (warning) log(warning);
-  const statuses = await chooseStatuses(ctx);
+  // The statuses devbox moves issues to: the configured ones, else "In
+  // Progress" when it starts work and none when it finishes, since devbox
+  // ends with a draft PR that still needs review. A project without the
+  // status is skipped, with a warning, when devbox moves an issue there.
+  const statuses = ctx.d.jira?.statuses ?? { started: "In Progress" };
 
   // 4. The token's expiry and the webhook's secret.
   const tokenExpiresAt = await tokenExpiry(ctx, token.source === "prompt");

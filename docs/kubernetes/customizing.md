@@ -280,7 +280,7 @@ For example, in a target file:
                    "tokens": "devbox", "tokenScope": "repos", "ciResults": true },
     "jira": { "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
               "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-              "statuses": { "started": "In Progress", "done": "Done" },
+              "statuses": { "started": "In Progress" },
               "tokenExpiresAt": "2027-01-31" } } }
 ```
 

@@ -38,9 +38,6 @@ const TOKEN_Q =
   "Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden): ";
 const KEEP_TOKEN_Q =
   "Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden; press Enter to keep the saved one): ";
-const STARTED_Q =
-  "Status devbox moves an issue to when it starts work [In Progress] (- for none): ";
-const DONE_Q = "Status devbox moves an issue to when it finishes [Done] (- for none): ";
 const EXPIRY_Q =
   "When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): ";
 const WEBHOOK_Q =
@@ -83,7 +80,7 @@ const JIRA: JiraIntegration = {
   botEmail: EMAIL,
   botAccountId: BOT_ID,
   botName: "devbox",
-  statuses: { started: "In Progress", done: "Done" },
+  statuses: { started: "In Progress" },
   tokenExpiresAt: "2027-06-30",
 };
 
@@ -222,8 +219,8 @@ const FLAGS: SetupOptions = {
 describe("jira setup", () => {
   it("first run on Compose: every question in order, write, save, the webhook, next step", async () => {
     const { d, deps, w } = harness({
-      // URL, site, email, started, done, expiry, show.
-      lines: [PUBLIC, SITE, EMAIL, "", "", "2027-06-30", ""],
+      // URL, site, email, expiry, show.
+      lines: [PUBLIC, SITE, EMAIL, "2027-06-30", ""],
       hidden: ["jira-token", ""],
     });
     // What was logged and opened before the email was asked for.
@@ -241,8 +238,6 @@ describe("jira setup", () => {
       SITE_Q,
       EMAIL_Q,
       TOKEN_Q,
-      STARTED_Q,
-      DONE_Q,
       EXPIRY_Q,
       WEBHOOK_Q,
       SAVE_BOTH_Q,
@@ -377,19 +372,16 @@ describe("jira setup", () => {
     expect(w.opened).toEqual([]);
   });
 
-  it("statuses: a terminal may change or drop a proposal; a missing one is warned about", async () => {
-    const { d, deps, w } = harness({
-      // URL, site, email, started, done, expiry, show.
-      lines: [PUBLIC, SITE, EMAIL, "-", "In Review", "2027-06-30", ""],
+  it("statuses: a first run moves issues to In Progress when devbox starts, and nowhere when it finishes", async () => {
+    const { d, deps } = harness({
+      // URL, site, email, expiry, show.
+      lines: [PUBLIC, SITE, EMAIL, "2027-06-30", ""],
       hidden: ["jira-token", ""],
     });
     await setup(d, {}, deps);
-    expect(w.log).toContain(
-      `warning: no started status: devbox won't move issues when it starts work. Set integrations.jira.statuses.started in ${d.configPath}`,
-    );
     expect(
       (readJson(d.configPath).integrations as { jira: JiraIntegration }).jira.statuses,
-    ).toEqual({ done: "In Review" });
+    ).toEqual({ started: "In Progress" });
   });
 
   it("re-run with the saved token: nothing asked, the settings kept", async () => {
@@ -611,7 +603,7 @@ describe("jira setup", () => {
     await setup(d, FLAGS, deps);
     const flag = ` --target ${d.configPath}`;
     // No webhook secret asked for and no save offered: the Secret holds them.
-    expect(w.asked).toEqual([KEEP_TOKEN_Q, STARTED_Q, DONE_Q]);
+    expect(w.asked).toEqual([KEEP_TOKEN_Q]);
     expect(w.log.slice(-11)).toEqual([
       ...webhookBlock('JIRA_WEBHOOK_SECRET from Secret "my-integrations"'),
       'Put JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET in Secret "my-integrations" in namespace devbox.',
@@ -628,7 +620,7 @@ describe("jira setup", () => {
       hidden: ["jira-token"],
     });
     await setup(d, FLAGS, deps);
-    expect(w.asked).toEqual([TOKEN_Q, STARTED_Q, DONE_Q]);
+    expect(w.asked).toEqual([TOKEN_Q]);
     expect(w.keychain.entries()).toEqual({});
   });
 

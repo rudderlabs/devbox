@@ -258,7 +258,7 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "statuses": { "started": "In Progress", "done": "Done" },
+  "statuses": { "started": "In Progress" },
   "tokenExpiresAt": "2027-01-31" } }
 ```
 

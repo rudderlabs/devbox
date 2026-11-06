@@ -8,9 +8,9 @@ GitOps).
 ## What you get
 
 - **Assign an issue** to the bot (the service account), and it starts a task,
-  as `bun run devbox create` does. It moves the issue to the configured
-  "started" status, links the draft pull request on the issue and, when the
-  run finishes, moves the issue to done, or to failed if the task failed
+  as `bun run devbox create` does. It moves the issue to In Progress (the
+  "started" status), links the draft pull request on the issue and, when the
+  run finishes, moves the issue to a done or failed status if one is set
   ([Statuses](#statuses)).
 - **Follow-ups** are comments that mention the bot, picked from Jira's @-list
   or typed as `@<bot name>`. They reach the task, like `bun run devbox send`.
@@ -177,11 +177,10 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    permission as held when the service account has it in at least one
    project. It warns, and goes on, about any it holds in no project:
    `warning: the bot lacks <permissions> in every project: give the service account a role that has them in each project devbox works in`.
-6. **The statuses**, on the first run only ([Statuses](#statuses)).
-7. **The token's expiry**
+6. **The token's expiry**
    (`When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): `),
    asked again whenever a new token was typed. A date in the past is refused.
-8. **The webhook's secret.** `JIRA_WEBHOOK_SECRET` from your environment or
+7. **The webhook's secret.** `JIRA_WEBHOOK_SECRET` from your environment or
    the keychain is used as it is. Otherwise, in a terminal, it asks
    `Jira webhook secret (input hidden; paste the webhook's current one, or press Enter to generate a new one to set in Jira): `.
    Paste the secret the webhook in Jira already has, or press Enter to have it
@@ -189,7 +188,7 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    least 20 characters (a secret from Jira's own Generate button qualifies): the signature it makes is the only proof that a
    delivery comes from Jira. A shorter one stops setup with
    `the webhook secret you entered has <n> characters; it needs at least 20 …`.
-9. **Save.** With a terminal and a working keychain, it offers to save what
+8. **Save.** With a terminal and a working keychain, it offers to save what
    you typed or it generated:
    `Save JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET to the system keychain for <scope>? [Y/n]`
    (naming only those), where `<scope>` is `compose` or
@@ -197,11 +196,11 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    When you decline to save a new token, it removes the token saved before,
    so that the next apply doesn't use the old one:
    `Removed the old JIRA_API_TOKEN saved in the system keychain for <scope>, so that <apply command> doesn't use it instead of the new one`.
-10. **Write.** It writes `integrations.jira` with `enabled: true` and
+9. **Write.** It writes `integrations.jira` with `enabled: true` and
     `publicUrl` to the deployment's config file, keeping the rest of the file,
     and prints `Wrote integrations.jira to <file>`.
-11. **The webhook**, on every run ([below](#3-create-the-webhook-in-jira)).
-12. **Next step.** For each secret that is neither saved in the keychain nor
+10. **The webhook**, on every run ([below](#3-create-the-webhook-in-jira)).
+11. **Next step.** For each secret that is neither saved in the keychain nor
     saved now, it says what the next apply does:
     `<apply command> will use <NAME> from your environment`, or
     `Set <NAME> in your environment before <apply command>; otherwise it asks for it in a terminal`.
@@ -279,7 +278,7 @@ The settings go in `devbox.config.json`:
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "statuses": { "started": "In Progress", "done": "Done" },
+  "statuses": { "started": "In Progress" },
   "tokenExpiresAt": "2027-01-31" } }
 ```
 
@@ -436,15 +435,13 @@ restricted content in Jira. So by default devbox skips it:
 `started`, `done` and, optionally, `failed`. Names match in any letter case.
 An absent one means no move.
 
-On its first run, `jira:setup` proposes `In Progress` for `started` and
-`Done` for `done`:
-`Status devbox moves an issue to when it starts work [In Progress] (- for none): `.
-Press Enter to take the proposal, type another status, or `-` for none.
-Without a terminal it takes the proposals. Once the config has `statuses`,
-setup no longer asks: edit `integrations.jira.statuses` to change them,
-including to set `failed`, then apply. setup warns about a missing `started`
-or `done`. In a project whose workflow lacks a configured status, that move
-is skipped and logged.
+When the config has no `statuses`, `jira:setup` writes
+`{ "started": "In Progress" }` and asks nothing. There is no `done` by
+default: devbox finishes with a draft pull request that still needs review,
+so the work isn't done yet, and many teams move an issue to Done when its
+pull request merges. To change `started`, or to set `done` or `failed`, edit
+`integrations.jira.statuses`, then apply. In a project whose workflow lacks a
+configured status, that move is skipped and logged.
 
 devbox moves an issue:
 
@@ -672,7 +669,6 @@ issue or posting anything to it. So:
 | same | `can't reach api.atlassian.com: check this machine's egress or proxy` | On Kubernetes, the control plane needs egress to `api.atlassian.com` too. |
 | `jira:setup` | `warning: the bot lacks <permissions> in every project: …` | Give the service account a role that has them in each project devbox works in ([The service account](#1-the-service-account)). |
 | `jira:setup` | `warning: can't check the bot's permissions: …` | Jira didn't answer. Check this machine's egress to `api.atlassian.com`, then run `jira:setup` again. |
-| `jira:setup` | `warning: no started status: …` | Set `integrations.jira.statuses` ([Statuses](#statuses)). |
 | `jira:status` | `Permissions: missing … in every project`, or `Permissions: can't check (<class>)` | As the `jira:setup` rows above. |
 | `jira:status` | `auth rejected`, or `API token: expired …` | Rotate the token ([Rotating the API token](#rotating-the-api-token)). |
 | `jira:status` | `Replies held for …`, `Last failed reply to Jira: HTTP <status>` | Jira refuses the bot's comments. 403: the bot lacks Add Comments; 429: Jira's rate limit, which passes. |
