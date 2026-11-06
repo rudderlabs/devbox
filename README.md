@@ -3,6 +3,8 @@
   <img alt="DevBox: open-source autonomous engineering harness in your cloud. It plans the change, writes the code, runs the tests and reviews its own work, then opens a draft pull request." src="docs/images/banner-light.png" width="100%">
 </picture>
 
+> DevBox runs on your infrastructure, with your model keys. It is built for a whole engineering org: one shared harness that picks up Linear tickets, answers on GitHub pull requests, works across your repos, and remembers what it learned in them. Join the community on [rudderstack.com/devbox](https://www.rudderstack.com/devbox).
+
 <p align="center">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
@@ -16,11 +18,6 @@ Comment on the pull request, and it pushes the fix to the same branch.
   <br>
   <a href="https://youtu.be/wJQK3yCfYoI">Watch the full launch video (2 min)</a>
 </p>
-
-DevBox runs on your infrastructure, with your model keys. It is built for a
-whole engineering org: one shared harness that picks up Linear tickets,
-answers on GitHub pull requests, works across your repos, and remembers what
-it learned in them.
 
 ## Why we built it
 
@@ -36,7 +33,7 @@ DevBox works alongside those tools.
 
 ## Features
 
-- **Staged, gated pipeline.** Orientation, planning, plan review, implementation, self-review. No code is written until the plan passes review.
+- **Staged pipeline.** Orientation, planning, plan review, implementation, self-review. A reviewer checks the plan. If it asks for changes, the planners revise once before any code is written.
 - **Closed feedback loop.** Review comments, @mentions and failed CI runs route back to the running task (with the GitHub App).
 - **Versioned memory.** Learnings are distilled into your repo and land as a commit on the pull request, reviewed like code.
 - **Credential isolation.** Sandboxes hold placeholder tokens. An egress proxy injects the real ones and scopes writes to your repos.
@@ -70,21 +67,15 @@ with 8 GB of memory for Docker (Compose 2.13 or newer),
 [Bun](https://bun.sh) 1.4.4 or newer, `make`, `openssl`, a GitHub token or
 `gh` logged in, and an OpenAI or Anthropic API key.
 
+> [!TIP]
+> **Prefer to let an agent do it?** Run `claude` in the cloned repo and ask it to
+> set up DevBox. Other coding agents can read `skills/devbox/`.
+
 1. **Get the code.**
 
    ```bash
    git clone https://github.com/rudderlabs/devbox.git && cd devbox
    ```
-
-   > [!TIP]
-   > **Set it up with Claude Code.** Run `claude` in this directory and ask
-   > it to help you set up DevBox. The repo ships a DevBox skill
-   > (`.claude/skills/devbox`, also `/devbox`): Claude checks your tools,
-   > writes `devbox.config.json` with you, and hands you the
-   > `bun run quickstart` command to run. Run it yourself, in another terminal
-   > or with a `!` in front in Claude Code, so you type your keys at its hidden
-   > prompts and they never go through the chat. Other coding agents can read
-   > the same skill in `skills/devbox/`.
 
 2. **Pick your repo and model.** Copy the example config, then set your repo's
    URL and your LLM in it.
@@ -164,7 +155,7 @@ with 8 GB of memory for Docker (Compose 2.13 or newer),
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/lifecycle-dark.png">
-  <img alt="Task lifecycle: task, orient, plan, plan review (a gate: no code until it passes), implement, self-review, draft PR with a knowledge commit. You review; follow-ups from PR comments, @mentions, failed CI or devbox send go back to implement." src="docs/images/lifecycle-light.png" width="100%">
+  <img alt="Task lifecycle: task, orient, plan, plan review (one round of revision before code), implement, self-review, draft PR with a knowledge commit. You review; follow-ups from PR comments, @mentions, failed CI or devbox send go back to implement." src="docs/images/lifecycle-light.png" width="100%">
 </picture>
 
 ## Next steps
