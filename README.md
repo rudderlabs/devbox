@@ -345,6 +345,7 @@ DevBox is the org's shared harness that picks up tickets in the background.
 - [docs/linear.md](docs/linear.md): connecting DevBox to Linear.
 - [docs/jira.md](docs/jira.md): connecting DevBox to Jira.
 - [docs/github.md](docs/github.md): connecting DevBox to GitHub as an App.
+- [docs/public-url.md](docs/public-url.md): the public URL every integration's webhooks reach.
 - [docs/kubernetes/README.md](docs/kubernetes/README.md): running DevBox on Kubernetes.
 - [docs/database.md](docs/database.md): database migrations, upgrades and rollbacks.
 - [docs/extending.md](docs/extending.md): where DevBox could be extended. Not a stable interface.

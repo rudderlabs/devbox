@@ -25,45 +25,11 @@ one that owns the app.
 
 ## The public URL
 
-Linear delivers webhooks only to a public HTTPS URL. The URL is the
-deployment's top-level `publicUrl`, shared with the GitHub App and Jira: one
-tunnel or Ingress serves `/webhook/linear`, `/webhook/github` and
-`/webhook/jira` ([GitHub](github.md#the-public-url), [Jira](jira.md#the-public-url)).
-`linear:setup`, `github:setup` and `jira:setup` all read and write it, and all
-refuse anything but a public HTTPS URL: `http://`,
-`localhost`, and loopback, link-local or private (RFC 1918, ULA) addresses. A
-path prefix is kept (`https://example.com/devbox`) and a trailing slash
-dropped; a query, a fragment or credentials are refused.
-
-- **Compose: bring your own.** Run a tunnel or a reverse proxy that forwards
-  HTTPS to port 3000 on your machine, and pass its URL:
-  - [ngrok](https://ngrok.com/): `ngrok http 3000`;
-  - [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/):
-    `cloudflared tunnel --url http://localhost:3000`;
-  - a reverse proxy with a certificate, on a host you own.
-
-  devbox bundles no tunnel. A free tunnel's URL changes when it restarts, and
-  the URL is stored in the Linear app: see
-  [When the public URL changes](#when-the-public-url-changes).
-- **Kubernetes: the Ingress.** Without `--public-url` or a saved URL, it comes
-  from the target file's values: the `ingress.webhooks` host, else the `ingress.api`
-  host ([customizing.md](kubernetes/customizing.md#ingress)). It is `https://`
-  when that Ingress has `tls`, and `http://` without, which is refused. When
-  TLS ends at a load balancer in front of the Ingress (the ALB example), `tls`
-  stays empty: pass `--public-url https://<host>`.
-
-  A `webhooks` Ingress alone is enough. An `api` Ingress that only your VPN
-  reaches can't receive Linear's webhooks: add a public `ingress.webhooks`.
-
-The control plane accepts webhook request bodies up to 1 MiB. Larger Linear
-deliveries receive HTTP 413 and are not processed; a legitimate delivery above
-this limit is therefore lost. Keep any tunnel, reverse-proxy, or Ingress body
-limit at or below 1 MiB so it rejects oversized requests before they reach the
-control plane.
-
-Only `linear:setup`, `github:setup` and `jira:setup` (for the apps and the
-webhook) and the `*:status` commands (for the probe) use the public URL. The
-control plane does not read it.
+Linear delivers webhooks to `<publicUrl>/webhook/linear`; see
+[The public URL](public-url.md) for what the URL must be and how to get one.
+`linear:setup` registers the Linear app with it, and the app stores it: when
+the URL changes, the app is updated by hand
+([When the public URL changes](#when-the-public-url-changes)).
 
 ## Setup
 
@@ -347,23 +313,19 @@ nothing prints it: change the Secret, then restart the control plane with the
 Run `bun run linear:setup --public-url <new> [--target <file>]`. It updates
 the config and prints
 `Update the webhook URL in the Linear app to <new>/webhook/linear`. That edit,
-on the app's page in Linear, is yours to make: Linear has no API for it. Then
-run `linear:status` to probe the new URL.
+on the app's page in Linear, is yours to make: Linear has no API for it. It
+also prints what each other integration that is on needs
+([When it changes](public-url.md#when-it-changes)). Then run `linear:status`
+to probe the new URL.
 
-With the GitHub App on, the URL is the App's too, and `linear:setup` also
-prints `Run bun run github:setup to update the GitHub App's webhook URL`, with
-`--target <file>` on Kubernetes (with external tokens: `Update the webhook URL in the GitHub App to <new>/webhook/github: <link>`).
-Run `bun run github:setup --public-url <new>` and it updates the App's webhook
-for you ([GitHub](github.md#the-public-url)). With Jira on, `linear:setup`
-also prints
-`Update the webhook URL in Jira (Settings → System → WebHooks) to <new>/webhook/jira`:
-edit the webhook in Jira yourself ([Jira](jira.md#the-public-url)).
+Another integration's setup run with a new URL prints the same line while
+Linear is on.
 
 ## Troubleshooting
 
 | Where | What you see | What to do |
 |---|---|---|
-| `linear:setup` | `Webhooks need a public HTTPS URL: …` | Use a public HTTPS URL ([The public URL](#the-public-url)). On Kubernetes with TLS at a load balancer, pass `--public-url https://<host>`. |
+| `linear:setup` | `Webhooks need a public HTTPS URL: …` | Use a public HTTPS URL ([The public URL](public-url.md#what-setup-accepts)). On Kubernetes with TLS at a load balancer, pass `--public-url https://<host>`. |
 | `linear:setup` | `No client ID entered: nothing was written.` | Run `bun run linear:setup` again once you have the client ID. Without a terminal, set `integrations.linear.clientId` in the config file. |
 | `linear:setup`, `up`, `k8s:install`, `k8s:check` | `Linear rejected the client ID or LINEAR_CLIENT_SECRET (invalid_client)` | Copy both again from the app's page in Linear (Settings → API → Applications). |
 | same | `the Linear app does not allow client credentials` | Turn on client credentials on the app (Settings → API → Applications → the app). |

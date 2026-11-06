@@ -39,39 +39,25 @@ works with one Jira site.
 
 ## The public URL
 
-Jira delivers webhooks only to a public HTTPS URL. It is the same setting as
-for Linear and GitHub: the top-level `publicUrl` of the config file
-(`devbox.config.json`, or the target file on Kubernetes). One tunnel or
-Ingress serves `/webhook/jira`, `/webhook/linear` and `/webhook/github`. How
-the URL is chosen and which URLs are refused is described in
-[Linear: The public URL](linear.md#the-public-url).
-
-In short:
-
-- **Compose and kind: bring your own.** Run a tunnel or a reverse proxy that
-  forwards HTTPS to port 3000 on your machine (on kind, to the local port of
-  `bun run k8s:connect`), and pass its URL with `--public-url`.
-- **Kubernetes with an Ingress:** the `ingress.webhooks` host, else the
-  `ingress.api` host.
-
-The control plane accepts webhook request bodies up to 1 MiB, and answers a
-larger delivery with HTTP 413 without processing it. Keep any tunnel,
-reverse-proxy, or Ingress body limit at or below 1 MiB.
-
-Only `jira:setup` (and the Linear and GitHub setups) and `jira:status` (for
-the probe) use the public URL. The control plane does not read it.
+Jira delivers webhooks to `<publicUrl>/webhook/jira`; see
+[The public URL](public-url.md) for what the URL must be and how to get one.
+Jira has no API the bot may use for its webhook, so a Jira admin creates it by
+hand with that URL ([Create the webhook in Jira](#3-create-the-webhook-in-jira)).
 
 **When the URL changes**, run
 `bun run jira:setup --public-url <new> [--target <file>]`. It saves the new
-URL and prints the webhook's settings with it: edit the webhook in Jira (Settings → System → WebHooks) and set its
-URL to `<new>/webhook/jira`. Jira has no API the bot may use for it. With
-Linear or the GitHub App on, it also prints what they need. A token or
-webhook secret that is neither in your environment nor in the keychain is
-asked for again: at the webhook secret, paste the current one, since Enter
-generates a new one that you must then set in Jira
-([Running it again](#running-it-again)). `linear:setup` and `github:setup`
-run with a new URL print
-`Update the webhook URL in Jira (Settings → System → WebHooks) to <new>/webhook/jira`.
+URL and prints the webhook's settings with it: edit the webhook in Jira
+(Settings → System → WebHooks) and set its URL to `<new>/webhook/jira`. A
+token or webhook secret that is neither in your environment nor in the
+keychain is asked for again: at the webhook secret, paste the current one,
+since Enter generates a new one that you must then set in Jira
+([Running it again](#running-it-again)). It also prints what each other
+integration that is on needs
+([When it changes](public-url.md#when-it-changes)).
+
+Another integration's setup run with a new URL prints
+`Update the webhook URL in Jira (Settings → System → WebHooks) to <new>/webhook/jira`
+while Jira is on.
 
 ## Setup
 
@@ -294,8 +280,8 @@ check, and `--skip-checks` skips it with the others.
 
 #### kind
 
-kind has no public address, so it needs a tunnel, as for the
-[GitHub App](github.md#kind): point it at the local port
+kind has no public address, so it needs a tunnel
+([The public URL](public-url.md#getting-one)): point it at the local port
 `bun run k8s:connect --target devbox.kind.json` forwards to.
 `devbox.kind.json` must exist first: run `bun run k8s:kind` once. Then run
 `bun run jira:setup --target devbox.kind.json --public-url https://<your-tunnel-host>`,

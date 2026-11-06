@@ -27,6 +27,8 @@ Other pages:
 - [GitHub](../github.md): connecting devbox to GitHub as an App.
 - [Linear](../linear.md): connecting devbox to Linear.
 - [Jira](../jira.md): connecting devbox to Jira.
+- [The public URL](../public-url.md): the URL every integration's webhooks
+  reach, and how the Ingress gives it.
 - [harness-image.md](harness-image.md): adding tools to the sandbox image.
 - [The chart's values reference](../../deploy/helm/devbox/README.md).
 - [The architecture on Kubernetes](../architecture.md#on-kubernetes).

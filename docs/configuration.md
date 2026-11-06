@@ -276,9 +276,9 @@ strings ([Trust settings](#trust-settings)). With `integrations.githubApp`
 enabled, one of them must be set.
 
 `publicUrl` is a top-level key, not part of a block: the public HTTPS URL
-webhooks reach. One tunnel or Ingress serves every integration, so Linear,
-GitHub and Jira share it. Only the CLI (`linear:setup`, `github:setup`,
-`jira:setup` and the `*:status` commands) reads it.
+webhooks reach. One tunnel or Ingress serves every integration, so they all
+share it. Only the CLI reads it: every integration's setup command and the
+`*:status` commands ([docs/public-url.md](public-url.md)).
 
 `bun run linear:setup` writes this block ([docs/linear.md](linear.md)); you may
 also edit it. Unknown keys are refused. Only `enabled: true` turns Linear on: a

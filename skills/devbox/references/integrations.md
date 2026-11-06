@@ -26,7 +26,7 @@ Jira keep sending to the old one. Recommend a URL that doesn't change: a free
 ngrok static domain (`ngrok http --url=<domain> 3000`) or a named Cloudflare
 tunnel.
 If it changed anyway, run the setup again with the new `--public-url`
-([docs/linear.md](../../../docs/linear.md#when-the-public-url-changes)).
+([docs/public-url.md](../../../docs/public-url.md#when-it-changes)).
 
 ## GitHub App
 
