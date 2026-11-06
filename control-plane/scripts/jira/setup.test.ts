@@ -61,7 +61,7 @@ const SHOW_Q = "Press Enter to show the webhook secret, to paste into the webhoo
 
 const ADMIN = "https://admin.atlassian.com/";
 const TOKEN_HINT = [
-  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create an API token for it:",
+  "Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it:",
   `  ${ADMIN}`,
 ];
 const SCOPES_LINE =

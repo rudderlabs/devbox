@@ -97,7 +97,8 @@ groups. It never opens the Groups page. Jira takes nothing prefilled from a
 link, so setup also says what to do on the page.
 
 1. In Atlassian Administration, open Directory → Service accounts and create
-   one. Give it access to Jira. Its name is the bot's name in Jira: the name
+   one. Give it access to Jira with the **User** role, not an admin role:
+   devbox never needs admin rights. Its name is the bot's name in Jira: the name
    people assign issues to and type as `@<bot name>`.
 2. Create an API token for it with exactly the scopes `read:jira-work`,
    `write:jira-work` and `read:jira-user`. They are Jira's classic scopes:
@@ -168,7 +169,7 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    (`The service account's email (shown on its page in Atlassian Administration): `).
    First, in a terminal with no token in your environment or the keychain,
    it prints
-   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create an API token for it:`
+   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it access to Jira with the User role (not an admin role), and create an API token for it:`
    and the link `https://admin.atlassian.com/`, and opens it: the email and
    the new token both come from there.
 4. **The API token.** `JIRA_API_TOKEN` from your environment is used as it
