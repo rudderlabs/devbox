@@ -1,27 +1,13 @@
 import { parseApiConfig } from "./apiConfig";
 import { parseGithubTokenSettings } from "./clients/githubToken";
 import { pickForwardedEnv } from "./forwardedEnv";
-import { parseGithubConfig, parseLinearConfig, parseSlackConfig } from "./integrationsConfig";
+import { optionalNumber, parseTrustList } from "./integrations/env";
+import { parseSlackConfig } from "./integrationsConfig";
 import {
   parseGitlabBaseUrl,
   parseSandboxGitIdentity,
   parseSandboxRuntimeConfig,
 } from "./sandboxConfig";
-
-// Optional numeric env with a default. Unset or empty/whitespace-only → `def`.
-// A PRESENT but non-finite value (typo, "Infinity", a Helm-rendered garbage
-// string) THROWS at boot instead of silently coercing to 0/NaN. This matters
-// for safety knobs like the ci_result loop breaker: `Number(env ?? d)` would
-// let "" / "abc" map to 0/NaN, which the breaker reads as "disabled" — silently
-// removing the only guard against a runaway sandbox-recreate loop. An explicit
-// finite 0/negative still passes through (a documented, intentional disable).
-function optionalNumber(name: string, def: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === "") return def;
-  const value = Number(raw);
-  if (!Number.isFinite(value)) throw new Error(`Env var ${name} must be a number`);
-  return value;
-}
 
 const taskPollIntervalMs = Number(process.env.TASK_POLL_INTERVAL_MS ?? 5000);
 
@@ -42,7 +28,11 @@ if (leaseTimeoutMs <= taskPollIntervalMs) {
 // intentional disable for knobs like the ci_result loop breaker) — but for a
 // TIMEOUT, 0/negative means "expire immediately," not "off": every reconcile
 // Files-API call would instant-timeout fleet-wide instead of being disabled.
-const reconcileFilesTimeoutMs = optionalNumber("SANDBOX_RECONCILE_FILES_TIMEOUT_MS", 20_000);
+const reconcileFilesTimeoutMs = optionalNumber(
+  process.env,
+  "SANDBOX_RECONCILE_FILES_TIMEOUT_MS",
+  20_000,
+);
 if (reconcileFilesTimeoutMs <= 0) {
   throw new Error(
     `SANDBOX_RECONCILE_FILES_TIMEOUT_MS (${reconcileFilesTimeoutMs}) must be a positive number; ` +
@@ -82,7 +72,7 @@ export const config = {
   // time we see it gone — we wait this long for it to appear, then fail the
   // task. A pod that EXISTS in a terminal phase (Failed/Succeeded) is failed
   // immediately, with no grace.
-  sandboxAbsentGraceMs: optionalNumber("SANDBOX_ABSENT_GRACE_MS", 2 * 60_000),
+  sandboxAbsentGraceMs: optionalNumber(process.env, "SANDBOX_ABSENT_GRACE_MS", 2 * 60_000),
   // Max automatic retries for a task whose SANDBOX failed (terminal/absent pod,
   // dead execd). Each retry kills the dead sandbox and RESUMES the task on the
   // SAME PVC (workspace / event cursor / PRs preserved); the lease is released so
@@ -94,39 +84,26 @@ export const config = {
   // optionalNumber (not raw Number) so a non-numeric env throws at boot
   // rather than yielding NaN, which would make `attempt > NaN` always false and
   // silently disable the cap → an unbounded retry/sandbox-recreate loop.
-  maxTaskRetries: optionalNumber("MAX_TASK_RETRIES", 3),
-  // Undefined unless LINEAR_ENABLED=true; then LINEAR_CLIENT_ID,
-  // LINEAR_CLIENT_SECRET and LINEAR_WEBHOOK_SECRET are required. Parsed by
-  // integrationsConfig.ts.
-  linear: parseLinearConfig(process.env),
+  maxTaskRetries: optionalNumber(process.env, "MAX_TASK_RETRIES", 3),
   // Undefined unless SLACK_ENABLED=true; then SLACK_BOT_TOKEN (xoxb-…, posts
-  // task-completion updates) and SLACK_CHANNEL_ID (C…) are required, and
-  // SLACK_NOTIFY_SOURCES picks the task sources that post (default linear).
-  // The token matches the /token/i log-redaction pattern. Parsed by
-  // integrationsConfig.ts.
+  // task-completion updates) and SLACK_CHANNEL_ID (C…) are required. The token
+  // matches the /token/i log-redaction pattern. Parsed by integrationsConfig.ts.
   slack: parseSlackConfig(process.env),
-  github: {
+  // The code host's settings (GitHub is the only one). They belong to core,
+  // not to the GitHub integration, whose own settings are parsed in
+  // integrations/github/config.ts: core posts the onboarding comment, assigns
+  // PRs and gives sandboxes their trust lists whether or not GitHub webhooks
+  // are on.
+  codeHost: {
     // The control plane's own GitHub token (it runs outside the sandbox
     // egress path, so it needs a real one): GITHUB_TOKEN_FILE (a mounted
     // Secret, re-read on a TTL) or GITHUB_TOKEN. See clients/githubToken.ts.
     tokenSettings: parseGithubTokenSettings(process.env),
-    // Webhook settings (secret, bot identity, trust lists). Undefined unless
-    // GITHUB_WEBHOOKS_ENABLED=true; then the secret, bot and trust settings are
-    // required. Trust lists are also parsed with webhooks off so they can be
-    // forwarded to the sandbox. Parsed by integrationsConfig.ts.
-    ...parseGithubConfig(process.env),
-    // Feature flag: enable workflow_run CI result inbox enqueue. Disabled by
-    // default until the harness is ready to consume ci_result inbox rows.
-    ciResultEnabled: process.env.GITHUB_CI_RESULT_ENABLED === "true",
-    // Loop breaker: max ci_result ROWS we forward to the harness per task.
-    // harness fixes CI → pushes → CI re-runs → can fail again → fix → … a
-    // runaway burns sandbox time and Linear noise. Once a task has this many
-    // ci_result rows, further CI failures are dropped at enqueue. NOTE: the unit
-    // is failed-workflow_run rows, NOT fix-cycles — a push that fails N parallel
-    // CI workflows writes N rows, so on a multi-workflow repo the cap is reached
-    // in ~max/N pushes. Size it with your workflow fan-out in mind. Configurable;
-    // an explicit 0 (or negative) disables the breaker.
-    ciResultMaxPerTask: optionalNumber("GITHUB_CI_RESULT_MAX_PER_TASK", 20),
+    // Orgs whose members, and logins of users, whose comments the agent
+    // trusts. Forwarded to every sandbox for PR-discussion trust. The GitHub
+    // integration reads the same variables for its own webhook trust gate.
+    trustedOrgs: parseTrustList(process.env.GITHUB_TRUSTED_ORGS),
+    trustedUsers: parseTrustList(process.env.GITHUB_TRUSTED_USERS),
   },
   gitlab: {
     // The self-managed GitLab instance repos may live on (GITLAB_BASE_URL),

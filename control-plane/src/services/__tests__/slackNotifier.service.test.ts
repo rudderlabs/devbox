@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import type { TaskRepository } from "../../repositories/task.repository";
 
@@ -12,7 +13,26 @@ mock.module("../../clients/slack", () => ({
   lookupSlackUserIdByEmail: mock(() => Promise.resolve(null)),
 }));
 
+// The GitHub client, full export surface: the nudge must never call it.
+const github = {
+  postIssueComment: mock(),
+  postReviewCommentReply: mock(),
+  addIssueCommentReaction: mock(),
+  addReviewCommentReaction: mock(),
+  getReviewComments: mock(),
+  fetchOrgMembers: mock(),
+  addPrAssignees: mock(),
+  getUserById: mock(),
+  getUserIdByLogin: mock(),
+  requestReviewers: mock(),
+  parsePrUrl: mock(),
+  githubTokenState: mock(),
+};
+mock.module("../../clients/github", () => github);
+
 const { SlackNotifierService } = await import("../slackNotifier.service");
+const { LinearIntegration } = await import("../../integrations/linear");
+const { logger } = await import("../../logger");
 
 type Ctor = ConstructorParameters<typeof SlackNotifierService>;
 
@@ -45,32 +65,26 @@ describe("SlackNotifierService", () => {
   let getById: ReturnType<typeof mock>;
   let taskRepo: TaskRepository;
 
-  const make = (botToken = "xoxb-test", channel = "C1", sources: Ctor[3] = ["linear"]) =>
+  const make = (botToken = "xoxb-test", channel = "C1") =>
     new SlackNotifierService(
       taskRepo,
       botToken,
       channel,
-      sources,
-      { assignee } as unknown as Ctor[4],
-      post as unknown as Ctor[5],
-      lookupSlackUser as unknown as Ctor[6],
+      assignee as unknown as Ctor[3],
+      post as unknown as Ctor[4],
+      lookupSlackUser as unknown as Ctor[5],
     );
 
   // The text posted by the single post() call.
   const postedText = (): string => (post.mock.calls[0] as unknown as [{ text: string }])[0].text;
 
   beforeEach(() => {
+    for (const call of Object.values(github)) call.mockClear();
     post = mock(() => Promise.resolve({ ts: "1" }));
     assignee = mock(() => Promise.resolve(null));
     lookupSlackUser = mock(() => Promise.resolve(null));
     getById = mock((id: string) => Promise.resolve(makeTask({ id, prUrls: [PR] })));
     taskRepo = { getById } as unknown as TaskRepository;
-  });
-
-  it("bounds the post with an abort signal", async () => {
-    await make().notifyTerminal(makeTask(), "completed");
-    const arg = (post.mock.calls[0] as unknown as [{ signal?: unknown }])[0];
-    expect(arg.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("posts a ✅ completion into the configured channel with the ticket + PR links", async () => {
@@ -168,23 +182,9 @@ describe("SlackNotifierService", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("skips an API task unless SLACK_NOTIFY_SOURCES has api", async () => {
-    const notifier = make();
-    expect(notifier.notifies("api")).toBe(false);
-    await notifier.notifyTerminal(makeTask({ source: "api" }), "completed");
+  it("skips an API task", async () => {
+    await make().notifyTerminal(makeTask({ source: "api" }), "completed");
     expect(post).not.toHaveBeenCalled();
-  });
-
-  it("posts for an opted-in API task: labelled by its key when untitled, never nudged", async () => {
-    const task = makeTask({
-      source: "api",
-      key: "DBX-API-7",
-      title: "",
-      externalUrl: "https://devbox.example.com/api/tasks/DBX-API-7",
-    });
-    getById.mockResolvedValue({ ...task, prUrls: [PR] });
-    await make("xoxb-test", "C1", ["linear", "api"]).notifyTerminal(task, "completed");
-    expect(postedText()).toContain("<https://devbox.example.com/api/tasks/DBX-API-7|DBX-API-7>");
     expect(assignee).not.toHaveBeenCalled();
   });
 
@@ -194,19 +194,17 @@ describe("SlackNotifierService", () => {
       id: "usr-1",
       displayName: "ada",
       email: "ada@acme.com",
-      codeHost: "unlinked",
+      githubAccount: null,
     };
-    const mapped = { ...unmapped, codeHost: { githubLogin: "ada" } };
+    const mapped = { ...unmapped, githubAccount: "583231" };
 
     it("appends the nudge when the human assignee has no GitHub connected and PRs exist", async () => {
       assignee.mockResolvedValue(unmapped);
       await make().notifyTerminal(makeTask(), "completed");
       const text = postedText();
-      expect(assignee).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "task-1" }),
-        null,
-        expect.anything(),
-      );
+      expect(assignee).toHaveBeenCalledWith(expect.objectContaining({ id: "task-1" }), {
+        purpose: "slack_nudge",
+      });
       expect(text).toContain("⚠️ ada: I couldn't assign the PR to you");
       expect(text).toContain("*Linear → Settings → Connected accounts*");
       // The nudge rides directly under the PR list.
@@ -217,6 +215,13 @@ describe("SlackNotifierService", () => {
 
     it("omits the nudge when the assignee is already mapped", async () => {
       assignee.mockResolvedValue(mapped);
+      await make().notifyTerminal(makeTask(), "completed");
+      expect(postedText()).not.toContain("Connected accounts");
+    });
+
+    it("omits the nudge when the platform can't link accounts", async () => {
+      const { githubAccount: _, ...unsupported } = unmapped;
+      assignee.mockResolvedValue(unsupported);
       await make().notifyTerminal(makeTask(), "completed");
       expect(postedText()).not.toContain("Connected accounts");
     });
@@ -235,7 +240,7 @@ describe("SlackNotifierService", () => {
     });
 
     it("still posts (without the nudge) when the assignee lookup fails", async () => {
-      // IntegrationHooks.assignee logs the failure and yields undefined.
+      // The registry's assignee() logs the failure and yields undefined.
       assignee.mockResolvedValue(undefined);
       await make().notifyTerminal(makeTask(), "completed");
       expect(post).toHaveBeenCalledTimes(1);
@@ -252,7 +257,7 @@ describe("SlackNotifierService", () => {
       assignee.mockResolvedValue(unmapped);
       lookupSlackUser.mockResolvedValue("U0ADA");
       await make().notifyTerminal(makeTask(), "completed");
-      expect(lookupSlackUser).toHaveBeenCalledWith("ada@acme.com", expect.any(AbortSignal));
+      expect(lookupSlackUser).toHaveBeenCalledWith("ada@acme.com");
       const text = postedText();
       expect(text).toContain("⚠️ <@U0ADA>: I couldn't assign the PR");
       expect(text).not.toContain("⚠️ ada:");
@@ -303,6 +308,51 @@ describe("SlackNotifierService", () => {
       await make().notifyTerminal(makeTask(), "no_action");
       expect(assignee).not.toHaveBeenCalled();
       expect(postedText()).not.toContain("Connected accounts");
+    });
+
+    describe("with Linear's assignee", () => {
+      // The issue's assignee as Linear returns it, linked to this GitHub
+      // account (null: not linked).
+      const linearUser = (gitHubUserId: string | null) => ({
+        id: "usr-1",
+        name: "Ada Lovelace",
+        displayName: "ada",
+        email: "ada@acme.com",
+        gitHubUserId,
+        app: false,
+        isMe: false,
+      });
+
+      for (const [account, nudged] of [
+        ["583231", false],
+        ["octocat", false],
+        [null, true],
+        ["", true],
+      ] as const) {
+        it(`${nudged ? `unlinked (${JSON.stringify(account)}): nudges` : `linked as ${account}: no nudge`}, from one Linear lookup and no GitHub call`, async () => {
+          const issue = mock(() =>
+            Promise.resolve({ assignee: Promise.resolve(linearUser(account)) }),
+          );
+          const linear = new LinearIntegration(
+            { getAuthorizedLinearClient: async () => ({ issue }) as unknown as LinearClient },
+            {} as never,
+            {} as never,
+          );
+          assignee.mockImplementation((task: Task) =>
+            linear.assignee(
+              { signal: new AbortController().signal, log: logger, isCurrent: async () => false },
+              task,
+            ),
+          );
+
+          await make().notifyTerminal(makeTask(), "completed");
+
+          expect(issue).toHaveBeenCalledTimes(1);
+          expect(issue).toHaveBeenCalledWith("issue-1");
+          for (const call of Object.values(github)) expect(call).not.toHaveBeenCalled();
+          expect(postedText().includes("Connected accounts")).toBe(nudged);
+        });
+      }
     });
   });
 });

@@ -4,11 +4,11 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 // mock.module("../../config") with partial shapes (e.g. { databaseUrl } in the
 // repository tests), and on Linux those mocks leak across files in readdir order
 // (oven-sh/bun#12823). If a partial mock leaks in before this file runs,
-// config.github is undefined and githubFetch throws at call time — order-
+// config.codeHost is undefined and githubFetch throws at call time — order-
 // dependent CI-only failures. Registering our own mock here makes this file
 // immune to whatever ran before it. See control-plane/README.md (Conventions).
 mock.module("../../config", () => ({
-  config: { github: { tokenSettings: { token: "test-token" } } },
+  config: { codeHost: { tokenSettings: { token: "test-token" } } },
 }));
 
 // Import a FRESH instance of ./githubApi, NOT the ../github barrel or the

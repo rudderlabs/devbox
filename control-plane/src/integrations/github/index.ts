@@ -2,46 +2,62 @@ import type { Context } from "hono";
 import {
   addIssueCommentReaction,
   addReviewCommentReaction,
+  githubTokenState,
   parsePrUrl,
   postIssueComment,
   postReviewCommentReply,
   requestReviewers,
 } from "../../clients/github";
-import { config } from "../../config";
-import type { GitHubWebhookController } from "../../controllers/githubWebhook.controller";
 import type { Task } from "../../db/schema";
-import type { InboxRow, ReplyTarget, ReplyTargetSpec } from "../../repositories/inbox.repository";
-import type { GithubStatus, GithubStatusService } from "../../services/githubStatus.service";
-import { WORKSPACE_MISSING_MESSAGE } from "../../services/inbox.service";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
-import type { HookCtx, Integration } from "../types";
+import type { HookCtx, Integration, IntegrationDefinition, ReplyTarget, Round } from "../types";
+import { type GithubConfig, parseGithubConfig } from "./config";
+import { type GithubSpec, isGithubSpec } from "./rounds";
+import { type GithubStatus, GithubStatusService } from "./status";
+import { GitHubWebhookController } from "./webhook";
 
-type GithubSpec = Extract<
-  ReplyTargetSpec,
-  { kind: "issue_comment" | "review_comment" | "review_body" }
->;
+// GitHub creates no tasks: its rounds come only from its webhooks, so it is
+// enabled exactly when they are, and disabling them skips open rounds' replies.
+// Its status always reports the control plane's own token.
+export const github: IntegrationDefinition<GithubConfig> = {
+  name: "github",
+  createsTasks: false,
+  parseConfig: parseGithubConfig,
+  create(core, cfg) {
+    const controller = new GitHubWebhookController(core.tasks, cfg, core.log);
+    const status = new GithubStatusService(githubTokenState, {
+      enabled: true,
+      ciResults: cfg.ciResultEnabled,
+      lastWebhookAt: () => controller.lastWebhookAt(),
+    });
+    return new GithubIntegration(cfg, status, controller);
+  },
+  disabledStatus: () =>
+    new GithubStatusService(githubTokenState, {
+      enabled: false,
+      ciResults: false,
+      lastWebhookAt: () => null,
+    }).status(),
+};
 
 // GitHub rounds (comments, reviews, CI results) post on the PR. A PR shows no
 // live progress, and it is public: a failure's raw detail never goes there.
-// GitHub creates no tasks: its rounds come only from its webhooks, so it is
-// enabled exactly when they are, and disabling them skips open rounds' replies.
-export class GithubIntegration implements Integration<GithubStatus> {
-  readonly name = "github";
-  // Today's webhook controller. It enqueues through InboxService, which needs
-  // this registry, so app.ts attaches it afterwards (only when enabled).
-  controller?: GitHubWebhookController;
+export class GithubIntegration implements Integration {
+  // Its webhooks turn @-mentions of the bot into rounds.
+  readonly prMentionLogin: string;
 
   constructor(
-    // GITHUB_WEBHOOKS_ENABLED.
-    readonly enabled: boolean,
+    cfg: Pick<GithubConfig, "botLogin">,
     private statusService: Pick<GithubStatusService, "status">,
-  ) {}
+    private controller: Pick<GitHubWebhookController, "handleWebhook">,
+  ) {
+    this.prMentionLogin = cfg.botLogin;
+  }
 
   // Today's responses: 403 for untrusted actors, 503 when the trusted set
-  // can't be fetched. The controller already holds the intake.
-  async webhook(c: Context): Promise<Response> {
-    if (!this.controller) return c.notFound();
+  // can't be fetched. The controller holds its TaskService.
+  webhook(c: Context): Promise<Response> {
     return this.controller.handleWebhook(c);
   }
 
@@ -50,15 +66,10 @@ export class GithubIntegration implements Integration<GithubStatus> {
   }
 
   async deliver(ctx: SendCtx, target: ReplyTarget, message: Outbound): Promise<void> {
-    // Its own three kinds only (post() switches over them exhaustively).
+    // Anything else isn't a GitHub target (a malformed or foreign row): the
+    // error is logged and the send dropped.
     const spec = target.spec;
-    if (
-      spec.kind !== "issue_comment" &&
-      spec.kind !== "review_comment" &&
-      spec.kind !== "review_body"
-    ) {
-      throw new Error(`github cannot deliver to a ${spec.kind} target`);
-    }
+    if (!isGithubSpec(spec)) throw new Error("not a GitHub PR thread target");
     switch (message.type) {
       case "reply":
         await post(ctx, spec, message.body);
@@ -66,7 +77,7 @@ export class GithubIntegration implements Integration<GithubStatus> {
       case "progress":
         return;
       case "failure":
-        await deliverFailure(ctx, spec, message);
+        await deliverFailure(ctx, spec, message, this.prMentionLogin);
         return;
       default: {
         const _exhaustive: never = message;
@@ -80,7 +91,7 @@ export class GithubIntegration implements Integration<GithubStatus> {
   async onRoundFinished(
     ctx: HookCtx & { firstTransition: boolean },
     task: Task,
-    round: InboxRow,
+    round: Round,
   ): Promise<void> {
     if (ctx.firstTransition && round.kind === "review") {
       await requestReviewFromOriginalReviewer(ctx, round, task);
@@ -90,7 +101,7 @@ export class GithubIntegration implements Integration<GithubStatus> {
 
 async function requestReviewFromOriginalReviewer(
   ctx: HookCtx,
-  inboxRow: Extract<InboxRow, { kind: "review" }>,
+  inboxRow: Round,
   task: Task,
 ): Promise<void> {
   const payload = inboxRow.payload as Record<string, unknown> | null | undefined;
@@ -138,9 +149,9 @@ async function requestReviewFromOriginalReviewer(
 }
 
 function reviewPrCoordinates(
-  inboxRow: Extract<InboxRow, { kind: "review" }>,
+  inboxRow: Round,
 ): { owner: string; repo: string; prNumber: number } | null {
-  const pr = inboxRow.payload.pr as Record<string, unknown> | undefined;
+  const pr = (inboxRow.payload as { pr?: Record<string, unknown> } | null)?.pr;
   const owner = typeof pr?.owner === "string" ? pr.owner : "";
   const repo = typeof pr?.repo === "string" ? pr.repo : "";
   const prNumber = typeof pr?.prNumber === "number" ? pr.prNumber : Number.NaN;
@@ -148,12 +159,10 @@ function reviewPrCoordinates(
     return { owner, repo, prNumber };
   }
 
-  const target = inboxRow.reply_targets.find(
-    (t) => t.spec.kind === "review_body" || t.spec.kind === "review_comment",
-  );
-  if (target && "owner" in target.spec) {
-    return { owner: target.spec.owner, repo: target.spec.repo, prNumber: target.spec.prNumber };
-  }
+  const spec = inboxRow.reply_targets
+    .map((t) => t.spec)
+    .find((s) => isGithubSpec(s) && (s.kind === "review_body" || s.kind === "review_comment"));
+  if (isGithubSpec(spec)) return { owner: spec.owner, repo: spec.repo, prNumber: spec.prNumber };
 
   const prUrl = typeof pr?.pr_url === "string" ? pr.pr_url : "";
   return prUrl ? parsePrUrl(prUrl) : null;
@@ -163,6 +172,7 @@ async function deliverFailure(
   ctx: SendCtx,
   spec: GithubSpec,
   message: Extract<Outbound, { type: "failure" }>,
+  botLogin: string,
 ): Promise<void> {
   const { round } = message;
   switch (message.cause) {
@@ -173,9 +183,7 @@ async function deliverFailure(
     case "round_failed": {
       // A failed CI-fix round stays silent.
       if (round.kind === "ci_result") return;
-      // The retry hint is an @-mention, which only works with webhooks on.
-      const botLogin = config.github.webhooks?.botLogin;
-      if (!botLogin) return;
+      // The retry hint is an @-mention, which the webhooks turn into a round.
       await post(
         ctx,
         spec,
@@ -184,7 +192,7 @@ async function deliverFailure(
       return;
     }
     case "workspace_missing":
-      await workspaceMissing(ctx, spec, round);
+      if (message.summary) await workspaceMissing(ctx, spec, round, message.summary);
       return;
   }
 }
@@ -193,15 +201,22 @@ async function deliverFailure(
 // top-level PR comment for its summary, whatever target core passed (the
 // review body has no reply / reactions API). A CI result is informational and
 // dead-lettered silently.
-async function workspaceMissing(ctx: SendCtx, spec: GithubSpec, round: InboxRow): Promise<void> {
+async function workspaceMissing(
+  ctx: SendCtx,
+  spec: GithubSpec,
+  round: Round,
+  text: string,
+): Promise<void> {
   if (round.kind === "review") {
-    const body = round.reply_targets.find((t) => t.spec.kind === "review_body");
-    if (body?.spec.kind === "review_body") await post(ctx, body.spec, WORKSPACE_MISSING_MESSAGE);
+    const body = round.reply_targets
+      .map((t) => t.spec)
+      .find((s) => isGithubSpec(s) && s.kind === "review_body");
+    if (isGithubSpec(body)) await post(ctx, body, text);
     return;
   }
   if (round.kind !== "comment") return;
   try {
-    await post(ctx, spec, WORKSPACE_MISSING_MESSAGE);
+    await post(ctx, spec, text);
   } finally {
     // The reaction is independent of the reply: try it even if the reply failed.
     await confusedReaction(ctx, spec).catch((err: unknown) => {

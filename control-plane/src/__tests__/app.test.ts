@@ -1,64 +1,81 @@
-import { afterEach, describe, expect, it, mock, setSystemTime } from "bun:test";
+// createApp's wiring, end to end through HTTP and the test database: the API
+// creates tasks through its own TaskService, and the task sources the API and
+// the claim filter use are the registry's.
+import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
+import { sql } from "drizzle-orm";
+import { parseApiConfig } from "../apiConfig";
+import { parseSandboxRuntimeConfig } from "../sandboxConfig";
 
-// config.ts reads required env at import; nothing here reads it.
-mock.module("../config", () => ({ config: {} }));
+const TEST_DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? "postgres://devbox:devbox@localhost:5432/devbox";
+const ENV = {
+  API_ENABLED: "true",
+  API_AUTH_ENABLED: "false",
+  API_PUBLIC_BASE_URL: "https://devbox.example",
+};
+mock.module("../config", () => ({
+  config: {
+    databaseUrl: TEST_DATABASE_URL,
+    podId: "pod-test",
+    codeHost: { tokenSettings: { token: "test-token" }, trustedOrgs: [], trustedUsers: [] },
+    gitlab: { baseUrl: undefined },
+    opensandbox: { ...parseSandboxRuntimeConfig({}), domain: "localhost:1", forwardedEnv: {} },
+    api: parseApiConfig(ENV),
+  },
+}));
 
-const { createIntegrations, statusesWithHolds } = await import("../app");
-const { RetryableError } = await import("../integrations/outbound");
-const { ReplyHolds } = await import("../services/replyHolds");
+const { createApp } = await import("../app");
+const { db } = await import("../db");
+const { definitions } = await import("../integrations");
+const { parseIntegrationConfigs } = await import("../services/integrationRegistry");
+const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
-type Cfg = Parameters<typeof createIntegrations>[0];
-const statusOf = (body: object) => ({ status: async () => body }) as never;
-const registry = (cfg: Cfg, linear = {}, github = {}) =>
-  createIntegrations(cfg, {} as never, statusOf(linear), statusOf(github));
+describe("createApp", () => {
+  let bundle: ReturnType<typeof createApp>;
 
-describe("createIntegrations", () => {
-  it("enables each integration from its own setting", () => {
-    const enabled = (cfg: Cfg) =>
-      Object.fromEntries(Object.values(registry(cfg)).map((i) => [i.name, i.enabled]));
-    const off = { api: { enabled: false }, github: {} };
-    expect(enabled(off)).toEqual({ linear: false, api: false, github: false });
-    expect(enabled({ ...off, linear: {} })).toEqual({ linear: true, api: false, github: false });
-    expect(enabled({ ...off, api: { enabled: true } })).toEqual({
-      linear: false,
-      api: true,
-      github: false,
-    });
-    expect(enabled({ ...off, github: { webhooks: {} } })).toEqual({
-      linear: false,
-      api: false,
-      github: true,
-    });
-  });
-});
-
-describe("statusesWithHolds", () => {
-  afterEach(() => {
-    setSystemTime();
-  });
-
-  it("adds each integration's held sends to its own status body", async () => {
-    const T0 = new Date("2026-10-30T12:00:00Z").getTime();
-    const holds = new ReplyHolds();
-    setSystemTime(new Date(T0));
-    holds.hold("t1", { inbox_id: "i1", seq: 1 }, "github", new RetryableError("HTTP 429"));
-    setSystemTime(new Date(T0 + 4_000));
-    holds.hold("t2", { inbox_id: "i2", seq: 3 }, "github", new RetryableError("HTTP 429"));
-    setSystemTime(new Date(T0 + 5_000));
-    const linear = { configured: true, lastWebhookAt: null, lastTokenError: null };
-    const github = { token: { ok: true }, webhooks: { enabled: true, lastWebhookAt: null } };
-
-    const statuses = statusesWithHolds(
-      registry({ linear: {}, api: { enabled: true }, github: { webhooks: {} } }, linear, github),
-      holds,
+  beforeAll(async () => {
+    await migrate(db, { migrationsFolder: "./drizzle" });
+    await db.execute(
+      sql`TRUNCATE TABLE task_events, inbox, tasks, api_tokens RESTART IDENTITY CASCADE`,
     );
+    bundle = createApp(parseIntegrationConfigs(definitions, ENV));
+  });
+  afterAll(() => {
+    bundle.stopApiStreams();
+  });
 
-    const none = { heldTasks: 0, oldestHoldAgeMs: 0 };
-    expect(await statuses.linear.status()).toEqual({ ...linear, holds: none });
-    expect(await statuses.github.status()).toEqual({
-      ...github,
-      holds: { heldTasks: 2, oldestHoldAgeMs: 5_000 },
+  it("creates API tasks through the API's own TaskService", async () => {
+    const res = await bundle.app.request("/api/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Add a health check" }),
     });
-    expect(await statuses.api.status()).toEqual({ enabled: true, holds: none });
+    expect(res.status).toBe(201);
+    expect(await db.execute(sql`SELECT source FROM tasks`)).toEqual([{ source: "api" }]);
+  });
+
+  it("lists and claims the sources of the integrations that create tasks", async () => {
+    const res = await bundle.app.request("/api/tasks?source=github");
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: { code: "invalid_request", message: "source must be linear or api" },
+    });
+    // The claim filter (TaskProcessorService's own list).
+    expect((bundle.taskProcessor as unknown as { taskSources: string[] }).taskSources).toEqual([
+      "linear",
+      "api",
+    ]);
+  });
+
+  it("serves every integration's status, off ones included, and mounts no webhook while off", async () => {
+    const none = { heldTasks: 0, oldestHoldAgeMs: 0 };
+    const status = async (name: string) =>
+      (await bundle.app.request(`/api/integrations/${name}`)).json();
+    expect(await status("linear")).toEqual({ configured: false, holds: none });
+    expect(await status("api")).toEqual({ enabled: true, holds: none });
+    for (const name of ["linear", "github"]) {
+      const res = await bundle.app.request(`/webhook/${name}`, { method: "POST", body: "{}" });
+      expect(res.status).toBe(404);
+    }
   });
 });

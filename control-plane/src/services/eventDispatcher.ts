@@ -1,23 +1,21 @@
-import { addPrAssignees, parsePrUrl, postIssueComment } from "../clients/github";
 import { config } from "../config";
 import type { Task } from "../db/schema";
-import { deliverToRound, SEND_TIMEOUT_MS, withTimeout } from "../integrations/http";
 import { type Outbound, RetryableError } from "../integrations/outbound";
-import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
 import type { AgentEmit, HarnessEvent } from "../types/harnessEvent";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { BackgroundWork } from "./backgroundWork";
+import type { CodeHost } from "./codeHost.service";
+import type { IntegrationRegistry } from "./integrationRegistry";
 import type { ReplyHolds } from "./replyHolds";
 import type { SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
 
 // Outcome of dispatching a single event.
 // - `ok`: handled; reconcileOne advances the cursor and goes on.
-// - `dropped`: the event's send timed out or failed for good. reconcileOne
-//   advances past it, then stops this task's events for the tick, so a slow
-//   or failing platform can't eat the tick.
+// - `dropped`: the event's send timed out or failed for good (logged).
+//   reconcileOne advances past it and goes on to the task's next event.
 // - `hold`: a send (or the owner's onPrOpened) failed before anything went out
 //   (RetryableError); the hold is recorded in ReplyHolds. reconcileOne stops
 //   this task's events BEFORE advancing the cursor, so the event is retried
@@ -33,38 +31,26 @@ import type { SlackNotifierService } from "./slackNotifier.service";
 //   and cannot trigger a side effect.
 export type DispatchResult = "ok" | "dropped" | "hold" | "self_evict" | "abort";
 
-// One-time onboarding comment posted on every PR harness opens — comment
-// interactivity is invisible unless users know it exists. Built per-call from
-// the configured bot login so the displayed name and the `@mention` example
-// always match the actual GitHub App identity (config.github.webhooks.botLogin).
-function onboardingCommentBody(botLogin: string, taskKey: string): string {
-  return [
-    `👋 I'm **${botLogin}**. I opened this PR from task \`${taskKey}\`.`,
-    "",
-    `Mention \`@${botLogin}\` and I'll act on it — on a top-level PR comment,`,
-    "in a review summary, or on an inline comment on the diff. Without a mention I won't see it.",
-  ].join("\n");
-}
-
 // Replaces taskState.service.ts + taskStateHandlers.ts. Flat switch on
 // event.type — each case applies a side effect the same way the old handlers
 // did, just driven by events instead of state transitions.
 //
 // At-least-once dispatch semantics: the cursor advances AFTER handle()
 // completes. A crash between a side-effect and the cursor commit re-fires the
-// event on the next reconcile tick: pr_opened and completed side effects are
-// idempotent or run only the first time (appendPrUrl's firstTime,
-// markResponded's first transition).
+// event on the next reconcile tick. completed's side effects are idempotent or
+// run only on markResponded's first transition. pr_opened's onPrOpened is
+// idempotent; its onboarding comment and assignee mirror run on every dispatch
+// until the PR is recorded, so they can repeat.
 export class EventDispatcher {
   constructor(
     private taskRepo: TaskRepository,
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">,
-    private integrations: Record<IntegrationName, Integration>,
+    private slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
+    private registry: Pick<IntegrationRegistry, "for">,
+    private codeHost: Pick<CodeHost, "prRef" | "prOpened">,
     private holds: ReplyHolds,
-    private hooks: IntegrationHooks,
-    private sendTimeoutMs = SEND_TIMEOUT_MS,
+    private background: Pick<BackgroundWork, "track">,
   ) {}
 
   async handle(event: HarnessEvent, task: Task): Promise<DispatchResult> {
@@ -91,9 +77,12 @@ export class EventDispatcher {
     // Pair this record with `crossed_sandbox_binding` using taskId and sandboxId
     // to determine how the streams crossed.
     let inboxRow: InboxRow | null = null;
+    // The assignment id of the run this event belongs to, read with the row:
+    // its hooks' isCurrent() compares the task's assignment id with it.
+    let runId: string | null = null;
     if (event.inbox_id) {
-      inboxRow = await this.inboxRepo.getByIdForTask(event.inbox_id, task.id);
-      if (!inboxRow) {
+      const found = await this.inboxRepo.getByIdForTask(event.inbox_id, task.id);
+      if (!found) {
         logger.error("cross_task_leak_detected: event.inbox_id does not belong to this task", {
           event: "cross_task_leak_detected",
           taskId: task.id,
@@ -110,6 +99,8 @@ export class EventDispatcher {
         });
         return "abort";
       }
+      inboxRow = found.row;
+      runId = found.assignmentId;
     }
     switch (event.type) {
       // Agent emits → labelled, then delivered by the round's integration
@@ -123,9 +114,25 @@ export class EventDispatcher {
         return this.deliver(event, inboxRow, task);
 
       case "pr_opened": {
+        const pr = this.codeHost.prRef(event);
+        // A PR not yet on the task (the URL test appendPrUrl's firstTime uses)
+        // gets the code host's work: the onboarding comment and the assignee
+        // mirror. The comment is posted, and the mirror started, before
+        // appendPrUrl records the PR, so a crash before the record replays the
+        // event and repeats both. The mirror runs in BackgroundWork and isn't
+        // awaited (that would stall the tick), so it is best-effort: a crash
+        // while it is still running, after the record, is not retried. Once
+        // recorded, a replay skips both, so a held onPrOpened, retried every
+        // tick, doesn't post again. An owner that lost its lease finds out
+        // only at appendPrUrl, after posting, and the new owner posts again.
+        // A repeated help comment is acceptable.
+        const isNew = !(
+          Array.isArray(task.prUrls) && task.prUrls.some((p) => p?.url === event.pr_url)
+        );
+        if (isNew) await this.codeHost.prOpened(task, pr);
         // appendPrUrl is owner-guarded; a 0-row return means the lease was
-        // taken over (stale-lease takeover). Self-evict BEFORE any side effect
-        // and before the cursor advance — a sibling pod now owns this task.
+        // taken over (stale-lease takeover). Self-evict BEFORE onPrOpened and
+        // before the cursor advance — a sibling pod now owns this task.
         const [appended] = await this.taskRepo.appendPrUrl({
           taskId: task.id,
           ownerId: config.podId,
@@ -141,28 +148,10 @@ export class EventDispatcher {
           });
           return "self_evict";
         }
-        // Only the dispatch that added the URL posts the onboarding comment
-        // and mirrors the assignee; a replay (the cursor advances only after
-        // handle() returns) finds the URL already there.
-        if (appended.firstTime) {
-          // Onboarding comment so users discover they can drive harness with
-          // @harness comments + reviews. Best-effort, not load-bearing.
-          await this.postOnboardingComment(event, task);
-          // Detached (not awaited): up to 4 upstream round-trips must not
-          // stall tick() toward the lease window — the same hazard
-          // reconcileFilesTimeoutMs exists for. Nothing downstream reads the
-          // result, and the method never rejects (see its contract).
-          this.hooks.detach(task.id, "assignee", this.mirrorPrAssignee(event, task, inboxRow));
-        }
         // The owner's onPrOpened (Linear: attach the PR to the issue) runs on
         // every dispatch and is idempotent. Unlike other hooks, its
         // RetryableError escapes to handle(), which holds pr_opened.
-        await this.hooks.prOpened(
-          task,
-          inboxRow,
-          { url: event.pr_url, repo: event.repo, branch: event.branch },
-          appended.firstTime,
-        );
+        await this.registry.for(task.source).onPrOpened(task, runId, pr, appended.firstTime);
         break;
       }
 
@@ -181,17 +170,19 @@ export class EventDispatcher {
         // command (~tens of seconds), run only if the hook asks for it while
         // the sandbox is still alive (it lives until the idle reaper).
         const sandboxId = task.sandboxId;
-        this.hooks.roundFinished(task, inboxRow, outcome, marked, async () =>
-          sandboxId ? this.sandboxManager.extractArchive(sandboxId) : null,
-        );
-        // Slack completion update to the configured channel, for a task
-        // whose source is opted in (SLACK_NOTIFY_SOURCES). Assignment-only
-        // (the top-level task, not comment/review rounds) and gated on the
-        // first inbox transition so a cursor-replay can't double-post.
-        // Detached: a Slack outage (or the assignee lookup for its mention)
-        // must not stall the dispatch loop.
-        if (marked && inboxRow.kind === "assignment" && this.slackNotifier.notifies(task.source)) {
-          this.hooks.detach(
+        this.registry
+          .for(inboxRow.source)
+          .onRoundFinished(task, inboxRow, runId, outcome, marked, async () =>
+            sandboxId ? this.sandboxManager.extractArchive(sandboxId) : null,
+          );
+        // Slack completion update to the configured channel.
+        // Assignment-only (the top-level task, not comment/review rounds) and
+        // gated on the first inbox transition so a cursor-replay can't double-
+        // post. Detached: a Slack outage (or the assignee lookup for its
+        // mention) must not stall the dispatch loop. The notifier no-ops when
+        // Slack is disabled or the task isn't from Linear.
+        if (marked && inboxRow.kind === "assignment") {
+          this.background.track(
             task.id,
             "slack",
             this.slackNotifier
@@ -218,9 +209,9 @@ export class EventDispatcher {
   // row's reply_targets[] by target_id, labels the emit, and hands both to the
   // round's integration, which decides where (or whether) it shows up. Core
   // never checks what an integration can show. A disabled integration's send
-  // is skipped and counts as sent. The send runs under sendTimeoutMs
-  // (SEND_TIMEOUT_MS). A RetryableError (nothing was sent) holds the event on
-  // the round's integration; a timeout or any other failure is logged and the
+  // is skipped and counts as sent. The send runs under the registry's send
+  // timeout. A RetryableError (nothing was sent) holds the event on the
+  // round's integration; a timeout or any other failure is logged and the
   // event dropped.
   private async deliver(
     event: AgentEmit,
@@ -245,14 +236,12 @@ export class EventDispatcher {
     }
 
     try {
-      return await deliverToRound(
-        this.integrations,
-        inboxRow,
-        target,
-        labelAgentEmit(event, inboxRow),
-        { taskId: task.id, eventType: event.type },
-        this.sendTimeoutMs,
-      );
+      return await this.registry
+        .for(inboxRow.source)
+        .deliver(inboxRow, target, labelAgentEmit(event, inboxRow), {
+          taskId: task.id,
+          eventType: event.type,
+        });
     } catch (err) {
       // Nothing was sent: the event holds on the round's integration.
       if (!(err instanceof RetryableError)) throw err;
@@ -297,110 +286,6 @@ export class EventDispatcher {
       // status stays pre-'responded'; the reaper guard keeps the sandbox alive.
       // User-recoverable via a follow-up comment.
       return false;
-    }
-  }
-
-  private async postOnboardingComment(
-    event: Extract<HarnessEvent, { type: "pr_opened" }>,
-    task: Task,
-  ): Promise<void> {
-    // The comment explains @-mentions, which only work with webhooks on.
-    const webhooks = config.github.webhooks;
-    if (!webhooks) return;
-    const pr = parsePrUrl(event.pr_url);
-    if (!pr) return; // not a github.com PR URL — skip
-    // Awaited inside the tick, so bounded like a send.
-    await withTimeout(this.sendTimeoutMs, (signal) =>
-      postIssueComment(
-        pr.owner,
-        pr.repo,
-        pr.prNumber,
-        onboardingCommentBody(webhooks.botLogin, task.key),
-        signal,
-      ),
-    ).catch((err) => logErr("onboarding comment post failed", err));
-  }
-
-  // Mirrors the task's assignee (the owner integration's assignee()) onto the
-  // GitHub PR as assignee. Assignee is the right primitive here: harness PRs
-  // open as DRAFTS and GitHub rejects requested_reviewers on drafts.
-  //
-  // Best-effort by contract: never throws, a failure must not block dispatch or
-  // the cursor. Runs once per PR (firstTime).
-  private async mirrorPrAssignee(
-    event: Extract<HarnessEvent, { type: "pr_opened" }>,
-    task: Task,
-    round: InboxRow | null,
-  ): Promise<void> {
-    const pr = parsePrUrl(event.pr_url);
-    if (!pr) return; // not a github.com PR URL — skip
-    // undefined: no assignee() (API tasks), or the lookup failed (logged).
-    const person = await this.hooks.assignee(task, round, { prUrl: event.pr_url });
-    if (person === undefined) return;
-    if (!person) {
-      logger.info("PR assignee mirror skipped", {
-        event: "pr_assignee.result",
-        status: "skipped",
-        reason: "no_human_assignee",
-        taskId: task.id,
-        prUrl: event.pr_url,
-      });
-      return;
-    }
-    if (typeof person.codeHost !== "object") {
-      // Linear's fix path: the member connects GitHub in Linear Settings →
-      // Connected accounts. Log the account id, not the name or email.
-      logger.info("PR assignee mirror skipped", {
-        event: "pr_assignee.result",
-        status: "skipped",
-        reason: person.codeHost === "unlinked" ? "no_github_mapping" : "unsupported",
-        taskId: task.id,
-        prUrl: event.pr_url,
-        linearUserId: person.id,
-      });
-      return;
-    }
-    const login = person.codeHost.githubLogin;
-    if (!login) {
-      // getUserById normalizes a malformed 2xx body to login: "" — don't POST
-      // an empty assignee and misreport it as no_push_access.
-      logger.warn("PR assignee mirror skipped", {
-        event: "pr_assignee.result",
-        status: "skipped",
-        reason: "unresolved_login",
-        taskId: task.id,
-        prUrl: event.pr_url,
-        linearUserId: person.id,
-      });
-      return;
-    }
-    try {
-      const { assigned } = await addPrAssignees(pr.owner, pr.repo, pr.prNumber, [login]);
-      // GitHub logins are case-insensitive but the response echoes canonical
-      // casing — compare case-folded so a cased mapping isn't a false drop.
-      if (!assigned.some((a) => a.toLowerCase() === login.toLowerCase())) {
-        // GitHub silently drops logins without push access (201 regardless).
-        logger.warn("PR assignee silently dropped by GitHub", {
-          event: "pr_assignee.result",
-          status: "silently_dropped",
-          reason: "no_push_access",
-          taskId: task.id,
-          prUrl: event.pr_url,
-          requested: login,
-          assigned,
-        });
-        return;
-      }
-      logger.info("PR assignee mirrored", {
-        event: "pr_assignee.result",
-        status: "assigned",
-        taskId: task.id,
-        prUrl: event.pr_url,
-        requested: login,
-        assigned,
-      });
-    } catch (err) {
-      logErr("PR assignee mirror failed", err, { taskId: task.id, prUrl: event.pr_url });
     }
   }
 }

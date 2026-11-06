@@ -22,6 +22,13 @@
       "when": 1793368820991,
       "tag": "0002_tasks_key_lower",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793769571360,
+      "tag": "0003_task_source_text",
+      "breakpoints": true
     }
   ]
 }

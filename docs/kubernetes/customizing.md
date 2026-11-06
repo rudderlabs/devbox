@@ -30,8 +30,9 @@ kubectl -n devbox create secret generic devbox-database \
   --from-literal=DATABASE_URL='postgres://<user>:<password>@<host>:5432/<db>'
 ```
 
-The control plane migrates the schema at start. The database must be reachable
-from the `devbox` namespace.
+The control plane migrates the schema at start
+([docs/database.md](../database.md)). The database must be reachable from the
+`devbox` namespace.
 
 ## Ingress
 
@@ -251,7 +252,6 @@ enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 | `integrations.linear.clientId` | The Linear app's client ID. Required when enabled. |
 | `integrations.slack.enabled` | Turns on Slack notifications when a task finishes. |
 | `integrations.slack.channelId` | The Slack channel ID. Required when enabled. |
-| `integrations.slack.notifySources` | The task sources whose finished tasks post, from `linear` and `api`. Default: `linear`. |
 | `integrations.githubApp.enabled` | Turns on the GitHub App: webhooks at `/webhook/github` (`@<botLogin>` mentions, reviews and failed CI runs reach the agent) and, with `tokens: devbox`, the token minter. See [docs/github.md](../github.md). |
 | `integrations.githubApp.appId`, `integrations.githubApp.installationId`, `integrations.githubApp.botUserId` | The App's ID, its installation's ID and the bot's numeric GitHub user ID. Required when enabled. |
 | `integrations.githubApp.botLogin` | The App's slug. The installer copies it from `slug` in the target file's block. Required when enabled. |

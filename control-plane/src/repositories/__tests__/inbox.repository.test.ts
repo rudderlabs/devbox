@@ -13,6 +13,9 @@ const { InboxRepository } = await import("../inbox.repository");
 const { migrate } = await import("drizzle-orm/bun-sql/migrator");
 
 const repo = new InboxRepository();
+// Every caller runs appendInbox inside its own transaction.
+const appendInbox = (p: Parameters<typeof repo.appendInbox>[0]) =>
+  db.transaction((tx) => repo.appendInbox(p, tx));
 
 const linearTarget = (targetId: string) => ({
   id: targetId,
@@ -74,7 +77,7 @@ describe("InboxRepository", () => {
     it("inserts a row and returns the synthetic id", async () => {
       const task = await insertTask();
 
-      const result = await repo.appendInbox({
+      const result = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -90,7 +93,7 @@ describe("InboxRepository", () => {
 
     it("is idempotent on (source, external_id) — returns null on conflict", async () => {
       const task = await insertTask();
-      await repo.appendInbox({
+      await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -101,7 +104,7 @@ describe("InboxRepository", () => {
         replyTargets: [linearTarget("sess-1")],
       });
 
-      const second = await repo.appendInbox({
+      const second = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -133,7 +136,7 @@ describe("InboxRepository", () => {
 
     it("a redelivered comment adds nothing, even after its round finished", async () => {
       const task = await insertTask();
-      const first = await repo.appendInbox({
+      const first = await appendInbox({
         taskId: task.id,
         message: ghComment("555"),
         replyTargets: [],
@@ -141,7 +144,7 @@ describe("InboxRepository", () => {
       await db.execute(sql`UPDATE inbox SET status = 'responded'`);
 
       expect(
-        await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] }),
+        await appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] }),
       ).toBeNull();
       const rows = await db.execute<{ id: string; status: string }>(
         sql`SELECT id, status FROM inbox`,
@@ -154,9 +157,9 @@ describe("InboxRepository", () => {
       // (source, kind, external_id) index allows this row, but the old
       // (source, external_id) one still rejects it.
       const task = await insertTask();
-      await repo.appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
+      await appendInbox({ taskId: task.id, message: ghComment("555"), replyTargets: [] });
 
-      const review = await repo.appendInbox({
+      const review = await appendInbox({
         taskId: task.id,
         message: {
           source: "github",
@@ -219,7 +222,7 @@ describe("InboxRepository", () => {
 
       // failTaskInbox is whole-task — dead-letter the `failed` row while it is
       // the only non-terminal row, before the others are inserted.
-      const failed = await repo.appendInbox({
+      const failed = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -232,7 +235,7 @@ describe("InboxRepository", () => {
       if (!failed) throw new Error("insert failed");
       await repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "pvc missing" });
 
-      const delivered = await repo.appendInbox({
+      const delivered = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -245,7 +248,7 @@ describe("InboxRepository", () => {
       if (!delivered) throw new Error("insert failed");
       await repo.markDelivered({ inboxId: delivered.id, ownerId: "pod-a" });
 
-      const pending = await repo.appendInbox({
+      const pending = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -265,7 +268,7 @@ describe("InboxRepository", () => {
   describe("markDelivered", () => {
     it("pending → delivered; owner-guarded", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -290,7 +293,7 @@ describe("InboxRepository", () => {
   describe("failTaskInbox", () => {
     it("fails every non-terminal row (pending + delivered); owner-guarded", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const pendingRow = await repo.appendInbox({
+      const pendingRow = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -300,7 +303,7 @@ describe("InboxRepository", () => {
         },
         replyTargets: [],
       });
-      const deliveredRow = await repo.appendInbox({
+      const deliveredRow = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -339,7 +342,7 @@ describe("InboxRepository", () => {
       const task = await insertTask({ ownerId: "pod-a" });
       const ids: string[] = [];
       for (const external_id of ["first", "second"]) {
-        const row = await repo.appendInbox({
+        const row = await appendInbox({
           taskId: task.id,
           message: {
             source: "linear",
@@ -361,7 +364,7 @@ describe("InboxRepository", () => {
 
     it("does not touch an already-responded row", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -384,7 +387,7 @@ describe("InboxRepository", () => {
   describe("getByIdForTask", () => {
     it("returns the row when it belongs to the task", async () => {
       const task = await insertTask();
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -397,13 +400,35 @@ describe("InboxRepository", () => {
       if (!row) throw new Error("insert failed");
 
       const found = await repo.getByIdForTask(row.id, task.id);
-      expect(found?.id).toBe(row.id);
+      expect(found?.row.id).toBe(row.id);
+      expect(found?.assignmentId).toBe(row.id);
+    });
+
+    it("carries the task's assignment id on a follow-up round", async () => {
+      const task = await insertTask();
+      const assignment = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
+      const comment = await insertRow(task.id, {
+        source: "github",
+        kind: "comment",
+        status: "pending",
+      });
+
+      const found = await repo.getByIdForTask(comment.id, task.id);
+      expect(found?.row.id).toBe(comment.id);
+      expect(found?.row.kind).toBe("comment");
+      expect(found?.assignmentId).toBe(assignment.id);
+      // The row is the row as every other lookup reads it.
+      expect(found?.row).toEqual((await repo.getById(comment.id)) as never);
     });
 
     it("returns null when the row belongs to a different task (confused deputy)", async () => {
       const taskA = await insertTask({ externalId: "task-a" });
       const taskB = await insertTask({ externalId: "task-b" });
-      const rowA = await repo.appendInbox({
+      const rowA = await appendInbox({
         taskId: taskA.id,
         message: {
           source: "linear",
@@ -441,7 +466,7 @@ describe("InboxRepository", () => {
   describe("markResponded", () => {
     it("owner match → status 'responded' + 1 row; owner mismatch / re-fire → 0 rows", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -474,7 +499,7 @@ describe("InboxRepository", () => {
 
     it("stores the completed event's status as outcome", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const r = await repo.appendInbox({
+      const r = await appendInbox({
         taskId: task.id,
         message: {
           source: "linear",
@@ -496,7 +521,7 @@ describe("InboxRepository", () => {
   describe("markFailed", () => {
     it("owner match → status 'failed' + reason; owner mismatch / terminal → 0 rows", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      const row = await repo.appendInbox({
+      const row = await appendInbox({
         taskId: task.id,
         message: {
           source: "github",
@@ -592,16 +617,56 @@ describe("InboxRepository", () => {
       );
     });
 
-    it("failTaskInbox on a Linear task writes nothing", async () => {
+    it("failTaskInbox on a Linear task writes round_failed too", async () => {
       const task = await insertTask({ ownerId: "pod-a" });
-      await insertRow(task.id, { source: "linear", kind: "assignment", status: "delivered" });
+      const a = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
       await repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "x" });
-      expect([...(await events())]).toEqual([]);
+      expect([...(await events())]).toEqual([
+        {
+          origin: "control_plane",
+          type: "round_failed",
+          inbox_id: a.id,
+          seq: null,
+          data: { reason: "x" },
+        },
+      ]);
     });
 
-    it("markFailed writes round_failed with the user-facing message", async () => {
-      const task = await insertTask({ ownerId: "pod-a", source: "api" });
-      const r = await insertRow(task.id, { source: "api", kind: "comment", status: "pending" });
+    it("rolls back the failed rows when the event insert fails", async () => {
+      const task = await insertTask({ ownerId: "pod-a" });
+      const a = await insertRow(task.id, {
+        source: "linear",
+        kind: "assignment",
+        status: "delivered",
+      });
+      const c = await insertRow(task.id, { source: "linear", kind: "comment", status: "pending" });
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'round_failed')`,
+      );
+      try {
+        await expect(
+          repo.failTaskInbox({ taskId: task.id, ownerId: "pod-a", reason: "x" }),
+        ).rejects.toThrow();
+        await expect(
+          repo.markFailed({ inboxId: c.id, ownerId: "pod-a", reason: "r", userMessage: "m" }),
+        ).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      const rows = await db.execute(sql`SELECT id, status FROM inbox ORDER BY created_at`);
+      expect([...rows]).toEqual([
+        { id: a.id, status: "delivered" },
+        { id: c.id, status: "pending" },
+      ]);
+    });
+
+    it("markFailed writes round_failed with the user-facing message, for any source", async () => {
+      const task = await insertTask({ ownerId: "pod-a" });
+      const r = await insertRow(task.id, { source: "github", kind: "comment", status: "pending" });
       await repo.markFailed({
         inboxId: r.id,
         ownerId: "pod-a",
@@ -626,6 +691,91 @@ describe("InboxRepository", () => {
         [],
       );
       expect([...(await events())]).toEqual([]);
+    });
+  });
+
+  describe("appendFollowUp message_queued", () => {
+    const events = () =>
+      db.execute<Record<string, unknown>>(
+        sql`SELECT task_id, origin, type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+    const follow = (
+      taskId: string,
+      o: { source: string; kind: "comment" | "review" | "ci_result"; id: string; body?: string },
+    ) =>
+      repo.appendFollowUp({
+        taskId,
+        message: { source: o.source, kind: o.kind, external_id: o.id, payload: {} },
+        replyTargets: [],
+        body: o.body,
+      });
+
+    it("logs every inserted round of any source and kind; a body only when given", async () => {
+      const task = await insertTask();
+      const lin = await follow(task.id, {
+        source: "linear",
+        kind: "comment",
+        id: "activity-1",
+        body: "and the tests",
+      });
+      const rev = await follow(task.id, { source: "github", kind: "review", id: "900" });
+      const id = (r: unknown) => (r as { roundId: string }).roundId;
+      expect([...(await events())]).toEqual([
+        {
+          task_id: task.id,
+          origin: "control_plane",
+          type: "message_queued",
+          inbox_id: id(lin),
+          data: { source: "linear", kind: "comment", body: "and the tests" },
+        },
+        {
+          task_id: task.id,
+          origin: "control_plane",
+          type: "message_queued",
+          inbox_id: id(rev),
+          data: { source: "github", kind: "review" },
+        },
+      ]);
+    });
+
+    it("a duplicate or stale round logs nothing", async () => {
+      const task = await insertTask();
+      const first = await follow(task.id, {
+        source: "github",
+        kind: "comment",
+        id: "555",
+        body: "x",
+      });
+      expect(
+        await follow(task.id, { source: "github", kind: "comment", id: "555", body: "x" }),
+      ).toEqual({ dropped: "duplicate" });
+      expect(
+        await repo.appendFollowUp({
+          taskId: task.id,
+          message: { source: "github", kind: "comment", external_id: "556", payload: {} },
+          replyTargets: [],
+          prUrl: "https://github.com/o/r/pull/1",
+          body: "y",
+        }),
+      ).toEqual({ dropped: "stale" });
+      expect([...(await events())].map((e) => e.inbox_id)).toEqual([
+        (first as { roundId: string }).roundId,
+      ]);
+    });
+
+    it("rolls back the round when the event insert fails", async () => {
+      const task = await insertTask();
+      await db.execute(
+        sql`ALTER TABLE task_events ADD CONSTRAINT test_block CHECK (type <> 'message_queued')`,
+      );
+      try {
+        await expect(
+          follow(task.id, { source: "github", kind: "comment", id: "555", body: "x" }),
+        ).rejects.toThrow();
+      } finally {
+        await db.execute(sql`ALTER TABLE task_events DROP CONSTRAINT test_block`);
+      }
+      expect(await db.execute(sql`SELECT 1 FROM inbox`)).toHaveLength(0);
     });
   });
 });

@@ -307,7 +307,7 @@ kube context, so a command never acts on a cluster you did not name.
 | `context` | yes | The kube context of the cluster. |
 | `profile` | no, default `k8s-<context>` | The CLI profile the installer writes. Lower-case letters, digits and `-`; the default is the context made lower-case with other characters replaced by `-`. |
 | `values` | no | Helm values for the chart, passed as they are. `storage.storageClass` and `storage.volumeSnapshotClass` are required by the chart. Sandbox sizing goes under `values.sandbox`; the Compose-only `devbox.config.json` block is ignored. `repos` and `llm` are refused: the installer copies the full `llm` block, including effort and stage overrides, from `devbox.config.json`. `integrations` is refused: it goes at the top level. |
-| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`, `notifySources`) and `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
+| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`) and `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
 
 Any other key is an error: chart values go under `values`. The installer adds
 `repos`, `llm`, `integrations`, `ironProxy.clusterIP`,
@@ -682,8 +682,9 @@ way.
 | `GITHUB_WEBHOOK_SECRET` | | The App's webhook secret, which signs each delivery. |
 | `GITHUB_BOT_LOGIN`, `GITHUB_BOT_USER_ID` | | The App's slug and its bot's numeric user ID. Events from the bot itself, and on pull requests it did not open, are dropped. |
 | `GITHUB_CI_RESULT_ENABLED` | | `true` sends a failed CI run on a task's pull request to the task. The setting `integrations.githubApp.ciResults` sets it. |
-| `GITHUB_CI_RESULT_MAX_PER_TASK` | `20` | The most CI failures sent to one task. Environment only. |
+| `GITHUB_CI_RESULT_MAX_PER_TASK` | `20` | The most CI failures sent to one task; `0` or negative means no cap. Environment only: on Compose, set it in the shell you run `bun run up` from; on Kubernetes, with `extraEnv`. |
 | `SANDBOX_GIT_NAME`, `SANDBOX_GIT_EMAIL` | | The commit identity of the agent in every sandbox. Set both or neither. Unset, the harness image's own identity applies. The chart sets them from `git.name` and `git.email`. |
+| `SHUTDOWN_DRAIN_MS` | `10000` | How long shutdown waits, in milliseconds, for in-flight provisions and integration hooks once it has finished the task it was reconciling. On Kubernetes, set it with `extraEnv` and raise `controlPlane.terminationGracePeriodSeconds` by as much. |
 
 ### Settings for the token minter
 

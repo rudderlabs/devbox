@@ -2,16 +2,15 @@ import type { SandboxInfo } from "@alibaba-group/opensandbox";
 import { config } from "../config";
 import type { Task } from "../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../errors";
-import { deliverToRound } from "../integrations/http";
 import type { Outbound } from "../integrations/outbound";
-import type { Integration, IntegrationName } from "../integrations/types";
 import { logger } from "../logger";
 import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { TaskRepository } from "../repositories/task.repository";
+import type { BackgroundWork } from "./backgroundWork";
 import type { EventDispatcher } from "./eventDispatcher";
 import { extractExperimentalFlags } from "./experimentalFlags";
 import type { InboxService } from "./inbox.service";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { IntegrationRegistry } from "./integrationRegistry";
 import type { ReplyHolds } from "./replyHolds";
 import { type PodStatus, SandboxManager } from "./sandboxManager.service";
 import type { SlackNotifierService } from "./slackNotifier.service";
@@ -45,13 +44,13 @@ export class TaskProcessorService {
   private readonly sandboxManager: SandboxManager;
   private readonly eventDispatcher: EventDispatcher;
   private readonly inboxService: InboxService;
-  private readonly slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">;
-  private readonly integrations: Record<IntegrationName, Integration>;
+  private readonly slackNotifier: Pick<SlackNotifierService, "notifyTerminal">;
+  private readonly registry: Pick<IntegrationRegistry, "for">;
   private readonly holds: ReplyHolds;
   // Sources this build has an integration for; claimNext and
   // listInFlightOwnedBy see only these tasks.
   private readonly taskSources: Task["source"][];
-  private readonly hooks: IntegrationHooks;
+  private readonly background: BackgroundWork;
 
   constructor(
     taskRepo: TaskRepository,
@@ -59,11 +58,11 @@ export class TaskProcessorService {
     sandboxManager: SandboxManager,
     eventDispatcher: EventDispatcher,
     inboxService: InboxService,
-    slackNotifier: Pick<SlackNotifierService, "notifies" | "notifyTerminal">,
-    integrations: Record<IntegrationName, Integration>,
+    slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
+    registry: Pick<IntegrationRegistry, "for">,
     holds: ReplyHolds,
     taskSources: Task["source"][],
-    hooks: IntegrationHooks,
+    background: BackgroundWork,
   ) {
     this.taskRepo = taskRepo;
     this.inboxRepo = inboxRepo;
@@ -71,10 +70,10 @@ export class TaskProcessorService {
     this.eventDispatcher = eventDispatcher;
     this.inboxService = inboxService;
     this.slackNotifier = slackNotifier;
-    this.integrations = integrations;
+    this.registry = registry;
     this.holds = holds;
     this.taskSources = taskSources;
-    this.hooks = hooks;
+    this.background = background;
   }
 
   start(): void {
@@ -92,12 +91,12 @@ export class TaskProcessorService {
       await this.loopPromise.catch(() => {});
     }
 
-    // In-flight provisions, then detached hooks (some started by those
+    // In-flight provisions, then background work (some started by those
     // provisions), share one shutdownDrainMs budget.
     const drain = Promise.allSettled([...this.inflight.values()]);
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, config.shutdownDrainMs));
     await Promise.race([drain, timeout]);
-    await this.hooks.drain(timeout);
+    await this.background.drain(timeout);
 
     // Backdate own heartbeat so any survivors become immediately reclaimable
     // instead of waiting the full LEASE_TIMEOUT_MS.
@@ -136,7 +135,13 @@ export class TaskProcessorService {
       // Shutting down: leave the rest to siblings (stop() backdates our
       // heartbeats), so shutdown waits for one task's reconcile at most.
       if (!this.running) break;
-      if (!(await this.leaseHeld(task.id))) {
+      // A failed renewal skips this task, not the rest of the tick.
+      const held = await this.leaseHeld(task.id).catch((err) => {
+        logErr(`lease renewal failed; skipping task ${task.id} this tick`, err);
+        return null;
+      });
+      if (held === null) continue;
+      if (!held) {
         logger.info("lease lost before reconcile; skipping", { taskId: task.id });
         continue;
       }
@@ -301,14 +306,15 @@ export class TaskProcessorService {
     // and the `created` path always inserts one) — a missing target means the
     // row was deleted out from under us, which is a hard invariant break.
     const assignment = await this.inboxRepo.getAssignment(task.id);
-    if (!assignment?.reply_targets[0]) {
+    const target = assignment?.reply_targets[0];
+    if (!assignment || !target) {
       throw new Error(`runTask: assignment inbox row missing reply target for task ${task.id}`);
     }
 
     // The owner integration's onTaskStarted (Linear: issue state and the
-    // Provisioning action), at most once per assignment on this pod. Never
-    // throws. API tasks' logs get sandbox_started from attachSandboxResources.
-    await this.hooks.taskStarted(task);
+    // Provisioning action), on every fresh-provision attempt. Never throws.
+    // Every task's log gets sandbox_started from attachSandboxResources.
+    await this.registry.for(task.source).onTaskStarted(task, assignment.id, target);
 
     // WORKSPACE is the only task-specific input passed at creation; the daemon
     // derives its .harness dir from it and reads everything else from the inbox file
@@ -420,7 +426,7 @@ export class TaskProcessorService {
       const result = await this.eventDispatcher.handle(event, currentTask);
       switch (result) {
         case "ok":
-        case "dropped":
+        case "dropped": // a send that timed out or failed goes on like a sent one
           break;
         case "hold":
           // A send failed before anything went out. Stop BEFORE advancing the
@@ -474,9 +480,6 @@ export class TaskProcessorService {
       }
       // The cursor is past any held event now.
       this.holds.release(currentTask.id);
-      // A dropped send (timed out or failed for good) ends this task's events
-      // for the tick, so a slow or failing platform can't eat the tick.
-      if (result === "dropped") break;
 
       // Re-fetch (owner-scoped) to pick up dispatcher mutations (pr_urls
       // append, etc.). An owner-scoped fetch returns null on a takeover in the
@@ -836,14 +839,19 @@ export class TaskProcessorService {
         };
         // At most once: there is no cursor to hold, so a RetryableError is
         // dropped too.
-        await deliverToRound(this.integrations, row, t, notice, { taskId: task.id }).catch((e) =>
-          logErr(`failTask: notice to target ${t.id} dropped`, e),
-        );
+        await this.registry
+          .for(row.source)
+          .deliver(row, t, notice, { taskId: task.id })
+          .catch((e) => logErr(`failTask: notice to target ${t.id} dropped`, e));
       }
     }
 
     // The assignment's integration finishes its round as failed (detached).
-    if (assignment) this.hooks.roundFinished(task, assignment, "failed", true);
+    if (assignment) {
+      this.registry
+        .for(assignment.source)
+        .onRoundFinished(task, assignment, assignment.id, "failed", true);
+    }
 
     // Kill the sandbox the task ACTUALLY holds, read from the DB — NOT the
     // dispatch-time `task` closure, whose sandbox_id can be stale (a recreate
@@ -854,18 +862,18 @@ export class TaskProcessorService {
       const current = await this.taskRepo.getByIdOwnedBy(task.id, config.podId);
       if (current?.sandboxId) await this.killSandboxQuietly(current.sandboxId);
     }
-    // Slack failure update to the configured channel, for a task whose source
-    // is opted in (SLACK_NOTIFY_SOURCES). Gated on the ASSIGNMENT (top-level)
-    // round being among the rows just dead-lettered, mirroring the completion
-    // path's kind === "assignment" gate in eventDispatcher. Without this, a
-    // failing follow-up comment/review/ci_result round (a new inbox row on the
-    // SAME task, appended after the assignment already completed and posted
-    // "✅ devbox completed") would post a contradictory "❌ devbox failed" into
-    // that same thread — only the top-level delegated task should ever notify
-    // Slack. Tying it to this failTaskInbox transition also keeps it
-    // at-most-once. Detached: a Slack outage must not affect teardown.
-    if (assignment && this.slackNotifier.notifies(task.source)) {
-      this.hooks.detach(
+    // Slack failure update to the configured channel. Gated on the ASSIGNMENT
+    // (top-level) round being among the rows just dead-lettered, mirroring the
+    // completion path's kind === "assignment" gate in eventDispatcher. Without
+    // this, a failing follow-up comment/review/ci_result round (a new inbox row
+    // on the SAME task, appended after the assignment already completed and
+    // posted "✅ devbox completed") would post a contradictory "❌ devbox
+    // failed" into that same thread — only the top-level delegated task should
+    // ever notify Slack. Tying it to this failTaskInbox transition also keeps
+    // it at-most-once. Detached: a Slack outage must not affect teardown; the
+    // notifier no-ops when Slack is disabled or the task isn't from Linear.
+    if (assignment) {
+      this.background.track(
         task.id,
         "slack",
         this.slackNotifier

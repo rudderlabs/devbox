@@ -87,6 +87,18 @@ describe("wait: run", () => {
     expect(io.stderr).toEqual(["devbox: DBX-API-7 failed: The sandbox could not start."]);
   });
 
+  it("strips control characters from the response and the reason", async () => {
+    const esc = envelope(4, "agent_response", { body: "Done\x1b]52;c;eA==\x07.\nOK" });
+    const ok = waitWith(() => items(done({ outcome: "completed", failed: false, response: esc })));
+    expect(await ok.code).toBe(0);
+    expect(ok.io.stdout).toEqual(["Done]52;c;eA==.\nOK"]);
+    const failed = waitWith(() =>
+      items(done({ outcome: null, failed: true, reason: "no\x1b[2K\rpe" })),
+    );
+    expect(await failed.code).toBe(1);
+    expect(failed.io.stderr).toEqual(["devbox: DBX-API-7 failed: no[2Kpe"]);
+  });
+
   it("exits 3 on timeout", async () => {
     const { code, io } = waitWith(() => items<FollowItem>({ kind: "timeout" }));
     expect(await code).toBe(3);
