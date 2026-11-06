@@ -2,8 +2,8 @@
 // its webhook controller need, and nothing the sandboxes do (those go through
 // iron-proxy with the harness's own client). One instance is configured:
 // config.gitlab.baseUrl. Projects are addressed by their numeric id, which
-// every webhook payload carries; the code host, which has only a merge
-// request's URL, passes the project's path instead.
+// every webhook payload carries; the integration's onPrOpened, which has only
+// a merge request's URL, passes the project's path instead.
 //
 // Numbers: a merge request's `iid` (per project) is what URLs and every
 // `/merge_requests/<n>` path use; the global `id` never leaves the payload.

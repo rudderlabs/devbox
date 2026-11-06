@@ -101,7 +101,6 @@ const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
 const { BackgroundWork } = await import("../backgroundWork");
 const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
-const { CodeHost } = await import("../codeHost.service");
 const { InboxService: RealInboxService } = await import("../inbox.service");
 const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound");
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
@@ -1372,7 +1371,6 @@ describe("TaskProcessorService", () => {
           sandboxManager,
           slackNotifier,
           registry,
-          new CodeHost(registry, background),
           holds,
           background,
         );

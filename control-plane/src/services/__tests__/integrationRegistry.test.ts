@@ -136,6 +136,110 @@ describe("IntegrationRegistry", () => {
     expect(await (await (hooks[0] as (typeof hooks)[0]).webhook({} as never)).text()).toBe("a");
   });
 
+  describe("onPrOpenedOnHost", () => {
+    const task = { id: "task-1", source: "src" } as never;
+    const pr = { url: "https://b.example/pr/1", repo: "r", branch: "x" };
+    // A code host's integration: hosts URLs under its own name's domain.
+    const host = (name: string, onPrOpened: Integration["onPrOpened"]) =>
+      definition(name, {
+        createsTasks: false,
+        create: () => ({
+          ...integration(),
+          hostsPr: (url) => url.startsWith(`https://${name}.example/`),
+          onPrOpened,
+        }),
+      });
+
+    it("hands a new PR to the integration that hosts its URL, as a first time, with the task's person to ask for", async () => {
+      const seen: unknown[] = [];
+      const source = definition("src", {
+        create: () => ({
+          ...integration(),
+          assignee: async () => ({ id: "usr-1", displayName: "ada" }),
+        }),
+      });
+      const a = host("a", async () => {
+        seen.push("a");
+      });
+      const b = host("b", async (ctx, _task, opened) => {
+        seen.push(["b", opened.url, ctx.firstTime, await ctx.person()]);
+      });
+      const r = registry([source, a, b], { src: "on", a: "on", b: "on" });
+      await r.onPrOpenedOnHost(task, null, pr);
+      expect(seen).toEqual([
+        ["b", "https://b.example/pr/1", true, { id: "usr-1", displayName: "ada" }],
+      ]);
+    });
+
+    it("tracks what the hook hands to ctx.background instead of waiting for it; shutdown drains it", async () => {
+      let done = false;
+      const b = host("b", async (ctx) => {
+        ctx.background(
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              done = true;
+              resolve();
+            }, 20),
+          ),
+        );
+      });
+      const background = new BackgroundWork();
+      const defs = [definition("src"), b];
+      const r = new IntegrationRegistry(
+        defs,
+        parseIntegrationConfigs(defs, { src: "on", b: "on" }),
+        {
+          taskRepo,
+          inboxRepo: {} as InboxRepository,
+          sandboxManager: {} as never,
+          background,
+          holds: new ReplyHolds(),
+        },
+      );
+      await r.onPrOpenedOnHost(task, null, pr);
+      expect(done).toBe(false);
+      await background.drain(new Promise((resolve) => setTimeout(resolve, 500)));
+      expect(done).toBe(true);
+    });
+
+    it("does nothing for a URL no enabled integration hosts: another site, or its host's integration is off", async () => {
+      const called = mock(async () => {});
+      const defs = () => [definition("src"), host("b", called)];
+      await registry(defs(), { src: "on", b: "on" }).onPrOpenedOnHost(task, null, {
+        ...pr,
+        url: "https://elsewhere.example/pr/1",
+      });
+      await registry(defs(), { src: "on" }).onPrOpenedOnHost(task, null, pr);
+      expect(called).not.toHaveBeenCalled();
+    });
+
+    it("never throws: a failure, even a RetryableError, is logged and nothing is held", async () => {
+      const error = spyOn(logger, "error").mockImplementation(() => logger);
+      try {
+        for (const failure of [new Error("host down"), new RetryableError("rate limited")]) {
+          const b = host("b", async () => {
+            throw failure;
+          });
+          await registry([definition("src"), b], { src: "on", b: "on" }).onPrOpenedOnHost(
+            task,
+            null,
+            pr,
+          );
+          expect(error).toHaveBeenLastCalledWith(
+            "onPrOpened hook failed",
+            expect.objectContaining({
+              taskId: "task-1",
+              integration: "b",
+              message: failure.message,
+            }),
+          );
+        }
+      } finally {
+        error.mockRestore();
+      }
+    });
+  });
+
   it("status adds held sends; disabled ones answer disabledStatus(); unknown names have none", async () => {
     const T0 = new Date("2026-10-30T12:00:00Z").getTime();
     const holds = new ReplyHolds();

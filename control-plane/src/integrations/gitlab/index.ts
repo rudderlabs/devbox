@@ -11,9 +11,9 @@ import type { Task } from "../../db/schema";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
 import type {
-  HookCtx,
   Integration,
   IntegrationDefinition,
+  PrOpenedCtx,
   PrRef,
   ReplyTarget,
   Round,
@@ -72,12 +72,21 @@ export class GitlabIntegration implements Integration {
     return this.statusService.status();
   }
 
+  // Merge requests on the configured instance are GitLab's: core hands it
+  // each new one.
+  hostsPr(url: string): boolean {
+    return parseMrUrl(url) !== null;
+  }
+
   // The agent opened a merge request on the instance (core calls this as the
-  // merge request's code host's integration): the onboarding note, once per
-  // merge request. This runs only while GitLab is on, which is while its webhooks take
-  // @-mentions. The project goes by its path, all a merge request URL
-  // carries. A failure is the registry's to log.
-  async onPrOpened(ctx: HookCtx & { firstTime: boolean }, task: Task, pr: PrRef): Promise<void> {
+  // merge request's code host's integration, once per merge request): the
+  // onboarding note. This runs only while GitLab is on, which is while its
+  // webhooks take @-mentions. The project goes by its path, all a merge
+  // request URL carries. A failure is the registry's to log.
+  //
+  // No assignee: nothing links the task's person to a GitLab account (Linear
+  // links GitHub accounts only), so ctx.person() is not asked.
+  async onPrOpened(ctx: PrOpenedCtx, task: Task, pr: PrRef): Promise<void> {
     if (!ctx.firstTime) return;
     const mr = parseMrUrl(pr.url);
     if (!mr) return;

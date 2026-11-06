@@ -137,9 +137,9 @@ With `integrations.gitlab.enabled`, the control plane serves
 
 With the webhooks on, the agent introduces itself on each merge request it
 opens: one note that names the bot and says how to mention it. The merge
-request gets no assignee yet. On GitHub the pull request is assigned to the
-person a Linear issue belongs to, through the GitHub account Linear links to
-them, and nothing links a person to a GitLab account.
+request gets no assignee yet. On GitHub, with the App, the pull request is
+assigned to the person a Linear issue belongs to, through the GitHub account
+Linear links to them, and nothing links a person to a GitLab account.
 
 Only notes from trusted users count: members of `gitlab.trustedGroups`
 (inherited members included) and `gitlab.trustedUsers`, by immutable numeric

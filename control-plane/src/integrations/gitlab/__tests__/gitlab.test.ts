@@ -239,9 +239,11 @@ describe("GitlabIntegration.onPrOpened", () => {
     { status: () => ({}) as never },
     { handleWebhook: async () => new Response() },
   );
-  const hookCtx = { ...ctx, isCurrent: async () => false, firstTime: true };
+  const person = mock(() => Promise.resolve(null));
+  const background = mock((_work: Promise<unknown>) => {});
+  const hookCtx = { ...ctx, isCurrent: async () => false, firstTime: true, person, background };
   const task = { id: "task-1", key: "XYZ-1" } as never;
-  const opened = (url: string) => ({ url, repo: "api", branch: "b", host: "gitlab" });
+  const opened = (url: string) => ({ url, repo: "api", branch: "b" });
   const MR_URL = "https://gitlab.example.com/platform/backend/api/-/merge_requests/3";
 
   beforeEach(() => {
@@ -249,7 +251,13 @@ describe("GitlabIntegration.onPrOpened", () => {
     postMrNote.mockResolvedValue({ id: 1 });
   });
 
-  it("posts the onboarding note on the merge request, naming its bot and the task", async () => {
+  it("hosts merge requests on the configured instance and nothing else", () => {
+    expect(integration.hostsPr(MR_URL)).toBe(true);
+    expect(integration.hostsPr("https://github.com/o/r/pull/1")).toBe(false);
+    expect(integration.hostsPr("https://gitlab.com/o/r/-/merge_requests/1")).toBe(false);
+  });
+
+  it("posts the onboarding note on the merge request, naming its bot and the task, and asks for nobody", async () => {
     await integration.onPrOpened(hookCtx, task, opened(MR_URL));
     expect(postMrNote).toHaveBeenCalledTimes(1);
     const [project, mrIid, body, signal] = postMrNote.mock.calls[0] as unknown as [
@@ -264,6 +272,9 @@ describe("GitlabIntegration.onPrOpened", () => {
     expect(body).toContain("merge request from task `XYZ-1`");
     expect(body).toContain("`@devbox-bot`");
     expect(signal).toBe(ctx.signal);
+    // No assignee on a merge request yet: nobody is looked up, nothing deferred.
+    expect(person).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
   });
 
   it("posts nothing on a replay of a merge request the task already has", async () => {

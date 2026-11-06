@@ -15,10 +15,12 @@ import type {
   HookCtx,
   Integration,
   IntegrationDefinition,
+  PrOpenedCtx,
   PrRef,
   ReplyTarget,
   Round,
 } from "../types";
+import { assignToTaskPerson } from "./assignee";
 import { type GithubConfig, parseGithubConfig } from "./config";
 import { type GithubSpec, isGithubSpec } from "./rounds";
 import { type GithubStatus, GithubStatusService } from "./status";
@@ -93,12 +95,22 @@ export class GithubIntegration implements Integration {
     }
   }
 
+  // github.com pull requests are GitHub's: core hands it each new one.
+  hostsPr(url: string): boolean {
+    return parsePrUrl(url) !== null;
+  }
+
   // The agent opened a pull request on github.com (core calls this as the
-  // PR's code host's integration): the onboarding comment, once per PR.
-  // Comment interactivity is invisible unless users know it exists. This runs
-  // only while GitHub is on, which is while its webhooks take @-mentions. A
-  // failure is the registry's to log.
-  async onPrOpened(ctx: HookCtx & { firstTime: boolean }, task: Task, pr: PrRef): Promise<void> {
+  // PR's code host's integration, once per PR). Two things, each on its own:
+  // a failed comment doesn't cost the PR its assignee.
+  // - The onboarding comment, awaited: comment interactivity is invisible
+  //   unless users know it exists.
+  // - The assignee: the task's person, through their linked GitHub account.
+  //   In the background, since its round trips (the task's integration, then
+  //   GitHub) must not stall the tick and nothing reads its result.
+  // Both happen only while GitHub is on, that is while its webhooks are: a
+  // deployment on a personal token, with no webhooks, gets neither.
+  async onPrOpened(ctx: PrOpenedCtx, task: Task, pr: PrRef): Promise<void> {
     if (!ctx.firstTime) return;
     const gh = parsePrUrl(pr.url);
     if (!gh) return;
@@ -108,7 +120,16 @@ export class GithubIntegration implements Integration {
       gh.prNumber,
       onboardingCommentBody(this.botLogin, task.key),
       ctx.signal,
-    );
+    ).catch((err: unknown) => {
+      const e = err instanceof Error ? err : new Error(String(err));
+      ctx.log.error("onboarding comment post failed", {
+        taskId: task.id,
+        prUrl: pr.url,
+        message: e.message,
+        stack: e.stack,
+      });
+    });
+    ctx.background(assignToTaskPerson(ctx, task, { url: pr.url, ...gh }));
   }
 
   // A finished review re-requests review from its reviewer, once (a replayed

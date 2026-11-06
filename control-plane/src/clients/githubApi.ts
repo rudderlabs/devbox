@@ -354,8 +354,8 @@ export async function getUserIdByLogin(login: string): Promise<number | null> {
 }
 
 // Parse a github.com PR URL → {owner, repo, prNumber}; null for a non-GitHub
-// or malformed URL. The code host uses it for a new PR's coordinates (its
-// onboarding comment and assignee mirror).
+// or malformed URL. The GitHub integration uses it for a new PR's coordinates
+// (its onboarding comment and assignee).
 //   https://github.com/acme/widgets/pull/42
 //     → { owner: "acme", repo: "widgets", prNumber: 42 }
 export function parsePrUrl(
