@@ -89,9 +89,12 @@ does. After that, its only network calls go to your Jira site and to
 Jira now calls issues *work items* and projects *spaces*, and its permission
 screens use those words. This page keeps saying issue and project.
 
-You don't have to find these pages yourself: run in a terminal, `jira:setup`
-opens each one when a step needs it, and always prints its link. Jira takes
-nothing prefilled from a link, so setup also says what to do on the page.
+Run in a terminal, `jira:setup` opens some of these pages for you, and always
+prints their links: Atlassian Administration when no token is in your
+environment or the keychain, a project's permissions when the check there
+fails, and the global permissions when trusted groups lack Browse users and
+groups. It never opens the Groups page. Jira takes nothing prefilled from a
+link, so setup also says what to do on the page.
 
 1. In Atlassian Administration, open Directory → Service accounts and create
    one. Give it access to Jira. Its name is the bot's name in Jira: the name
@@ -145,7 +148,7 @@ bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
 | `--email <address>` | The service account's email, shown on its page in Atlassian Administration. |
 | `--projects <KEY,…>` | The keys of the projects devbox works in, comma-separated, such as `ENG,OPS`. Upper-cased. |
 | `--trusted-groups <names>` | Only members of these Jira groups may assign issues to devbox and ask it to follow up, comma-separated ([Trust](#trust)). Without this flag and `--trusted-users`, everyone with access to the site may. |
-| `--trusted-users <ids>` | Account IDs of other people who may, comma-separated. |
+| `--trusted-users <ids>` | Account IDs of people who may, besides any groups' members, comma-separated. |
 | `--token-expires <YYYY-MM-DD>` | When the API token expires. |
 | `--no-keychain` | Never read or write the system keychain. |
 
@@ -162,14 +165,15 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    needs it.
 3. **The service account's email**
    (`The service account's email (shown on its page in Atlassian Administration): `).
+   First, in a terminal with no token in your environment or the keychain,
+   it prints
+   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes read:jira-work, write:jira-work and read:jira-user:`
+   and the link `https://admin.atlassian.com/`, and opens it: the email and
+   the new token both come from there.
 4. **The API token.** `JIRA_API_TOKEN` from your environment is used as it
    is. Otherwise, in a terminal, it asks
    `Jira API token (input hidden): `, or, with a token saved in the keychain,
    `Jira API token (input hidden; press Enter to keep the saved one): `.
-   Before asking for a new token (none in your environment or the keychain),
-   it prints
-   `Create the service account in Atlassian Administration (Directory → Service accounts) if it doesn't exist, give it Jira access, and create its API token with the scopes read:jira-work, write:jira-work and read:jira-user:`
-   and the link `https://admin.atlassian.com/`, and opens it.
    Without a terminal it uses the saved one, or stops with
    `no JIRA_API_TOKEN: run bun run jira:setup in a terminal, or set JIRA_API_TOKEN`.
    It checks the token with Jira (`GET /myself`) and prints
@@ -265,8 +269,9 @@ it is shown once, on the terminal), `the secret you entered`,
 `JIRA_WEBHOOK_SECRET from your environment`, the one saved in the keychain
 (not shown), or `JIRA_WEBHOOK_SECRET from Secret "<name>"`.
 
-Setup opens the webhooks page on a first run, and whenever it generated a new
-webhook secret, which Jira must get. Other runs only print the link.
+Setup opens the webhooks page when the webhook must be created or edited: on
+a first run, and when it generated a new webhook secret or the public URL
+changed. Other runs only print the link.
 
 In Jira, as an admin, open Settings → System → WebHooks (the printed link) and
 create a webhook:
@@ -405,9 +410,16 @@ trusts everyone in its workspace. That is everyone your Jira admins let onto
 the site: your colleagues, people from outside your company they invite, such
 as contractors, and, when the site lets people sign up on their own (for
 example anyone with an email address at your company's domain), everyone who
-does. It is never the public: Jira sends events only for what accounts on the
-site do, and devbox checks each webhook's signature. In this mode devbox looks
-nothing up, and the service account needs no extra permission.
+does. Nobody without an account on the site can drive devbox: Jira sends
+events only for what accounts on the site do, and devbox checks each
+webhook's signature. In this mode devbox looks nothing up, and the service
+account needs no extra permission.
+
+**On a site with Jira Service Management, people who use the help center with
+an Atlassian account count as people with access**, so by default devbox
+trusts them too: an issue one of them reported can start a task, and their
+comments can reach it. Keep service projects out of `projectKeys`, or narrow
+trust with groups or users.
 
 Two lists in `integrations.jira` narrow trust. With either set, devbox trusts
 only the people they name:
@@ -422,7 +434,8 @@ only the people they name:
   their profile URL in Jira.
 
 In every mode, only people are trusted. Accounts of apps, Automation for Jira
-among them, and Jira Service Management customers never are: an action by one
+among them, and Jira Service Management's customer accounts (help-center
+users without an Atlassian account) never are: an action by one
 is ignored with `reason: non_human`, and an issue one reported is ignored with
 `reason: untrusted` and `side: reporter`. So an automation rule that runs as
 Automation for Jira (its default actor) does nothing; a rule set to run as the

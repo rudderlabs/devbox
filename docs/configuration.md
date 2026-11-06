@@ -270,9 +270,9 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 | `cloudId` | when `enabled` is `true` | The site's cloud ID, a UUID. `jira:setup` reads it from the site. |
 | `botEmail` | when `enabled` is `true` | The service account's email. With `JIRA_API_TOKEN`, it signs devbox in to Jira. |
 | `botAccountId`, `botName` | when `enabled` is `true` | The service account's account ID and display name, as Jira reported them to `jira:setup`. People type `@<botName>` to mention the bot. |
-| `projectKeys` | when `enabled` is `true` | A non-empty list of upper-case project keys, such as `["ENG", "OPS"]`. Events from other projects are ignored. |
+| `projectKeys` | when `enabled` is `true` | A non-empty list of upper-case project keys, such as `["ENG", "OPS"]`. Events from other projects are ignored. Without trust lists, leave service projects out: help-center users with an Atlassian account are trusted ([docs/jira.md](jira.md#trust)). |
 | `trustedGroups` | no | Jira group names, any letter case, without commas. Only their members, and `trustedUsers`, may assign issues to devbox and ask it to follow up. Without either list, everyone with access to the site may ([docs/jira.md](jira.md#trust)). |
-| `trustedUsers` | no | Account IDs of other people who may. |
+| `trustedUsers` | no | Account IDs of people who may, besides any groups' members. |
 | `statuses` | no | `started`, `done` and `failed`: the status names devbox moves an issue to, in any letter case. An absent one means no move ([docs/jira.md](jira.md#statuses)). |
 | `tokenExpiresAt` | when `enabled` is `true` | When the API token expires, `YYYY-MM-DD`. devbox warns from 14 days before. |
 | `allowRestrictedIssues` | no, default `false` | `true` acts on issues with a security level too. |

@@ -87,8 +87,11 @@ bun run jira:status [--target <file>]
   `linear:setup`, `jira:setup` uses them from the environment when they are
   set.
 - Trust: by default everyone with access to the site, people only (never
-  apps such as Automation for Jira, or service-desk customers). Both the
-  person who assigns the issue and its reporter must be trusted.
+  apps such as Automation for Jira, or service-desk customer accounts). On a
+  site with Jira Service Management, help-center users who sign in with an
+  Atlassian account count as people: keep service projects out of
+  `projectKeys`, or narrow trust. Both the person who assigns the issue and
+  its reporter must be trusted.
   `trustedGroups` or `trustedUsers` narrow it; trusting groups needs the
   global permission Browse users and groups. Untrusted events are ignored
   silently.

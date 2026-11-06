@@ -152,7 +152,7 @@ integrations:
     projectKeys: []
     # -- Jira groups whose members may assign issues to devbox and ask it to follow up; the service account then needs the global permission Browse users and groups. Leave this and trustedUsers empty to trust every person with access to the site (never app or customer accounts).
     trustedGroups: []
-    # -- Account IDs of other people who may assign issues to devbox and ask it to follow up. Leave this and trustedGroups empty to trust every person with access to the site.
+    # -- Account IDs of people who may assign issues to devbox and ask it to follow up, besides any groups' members. Leave this and trustedGroups empty to trust every person with access to the site.
     trustedUsers: []
     statuses:
       # -- The status devbox moves an issue to when it starts work. Empty: no move.
