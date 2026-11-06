@@ -8,16 +8,19 @@ from dataclasses import dataclass
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from pydantic import BaseModel
 
+from harness.codehost import CodeHost, CodeHostApiError, client_for_kind
 from harness.deepagents.middleware.arguments import format_validation_error
 from harness.deepagents.middleware.system_prompt import SystemPromptMiddleware
-from harness.git import GitHubApiError, GitHubClient
 
 
 @dataclass(frozen=True)
 class WorkflowRunRef:
+    """A GitHub Actions run, or (``kind="gitlab"``) a GitLab pipeline."""
+
     owner: str
     repo: str
     run_id: int
+    kind: str = "github"
 
 
 class _NoArgs(BaseModel):
@@ -30,11 +33,13 @@ class CiRerunMiddleware(SystemPromptMiddleware):
     def __init__(
         self,
         *,
-        github: GitHubClient,
+        github: CodeHost,
         run: WorkflowRunRef,
         system_prompt: str | None = None,
     ) -> None:
-        self.github = github
+        # The run's own host: the given client for GitHub, the GitLab adapter
+        # for a pipeline.
+        self.github = github if run.kind == "github" else client_for_kind(run.kind)
         self.run = run
         self.system_prompt = system_prompt
         self.tools = [self._build_tool()]
@@ -57,7 +62,7 @@ class CiRerunMiddleware(SystemPromptMiddleware):
         run = self.run
         try:
             self.github.rerun_failed_jobs(run.owner, run.repo, run.run_id)
-        except GitHubApiError as exc:
+        except CodeHostApiError as exc:
             raise ToolException(str(exc)) from exc
         except (OSError, ValueError, http.client.HTTPException) as exc:
             raise ToolException(f"{exc.__class__.__name__}: {exc}") from exc

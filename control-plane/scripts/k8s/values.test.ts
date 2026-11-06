@@ -4,7 +4,13 @@ import { apiIngressUrl, chartValues, deepMerge, userValue, type Values } from ".
 
 const cfg: DevboxConfig = {
   repos: [
-    { url: "https://github.com/acme/widgets.git", branch: "main", owner: "acme", name: "widgets" },
+    {
+      url: "https://github.com/acme/widgets.git",
+      branch: "main",
+      host: "github",
+      owner: "acme",
+      name: "widgets",
+    },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "gpt-test" },
   github: { trustedOrgs: [], trustedUsers: [] },
@@ -219,4 +225,30 @@ describe("apiIngressUrl", () => {
   for (const [name, values, want] of rows) {
     it(name, () => expect(apiIngressUrl({ values })).toBe(want));
   }
+});
+
+describe("chartValues with gitlab", () => {
+  it("passes gitlab.baseUrl through and leaves it out otherwise", () => {
+    expect("gitlab" in chartValues(cfg, {}, {})).toBe(false);
+    const withGitlab: DevboxConfig = {
+      ...cfg,
+      gitlab: { baseUrl: "https://gitlab.example.com" },
+      repos: [
+        ...cfg.repos,
+        {
+          url: "https://gitlab.example.com/platform/api.git",
+          branch: "main",
+          host: "gitlab",
+          owner: "platform",
+          name: "api",
+        },
+      ],
+    };
+    const values = chartValues(withGitlab, {}, {});
+    expect(values.gitlab).toEqual({ baseUrl: "https://gitlab.example.com" });
+    expect(values.repos).toEqual([
+      { url: "https://github.com/acme/widgets.git", branch: "main" },
+      { url: "https://gitlab.example.com/platform/api.git", branch: "main" },
+    ]);
+  });
 });

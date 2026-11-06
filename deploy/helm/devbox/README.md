@@ -33,6 +33,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | git.name | string | `"devbox"` | Commit identity for the agent's commits. `bun run k8s:install` sets the GitHub user's. |
 | github.trustedOrgs | list | `[]` | GitHub orgs whose members may drive devbox. Required with trustedUsers (either) when the GitHub App is enabled. |
 | github.trustedUsers | list | `[]` | GitHub users who may drive devbox. Required with trustedOrgs (either) when the GitHub App is enabled. |
+| gitlab.baseUrl | string | `""` | A GitLab instance repos may live on, self-managed or https://gitlab.com, for example https://gitlab.example.com (a relative URL root such as https://example.com/gitlab is fine; the default port only). Repos under it clone, push and open merge requests there with the token in secrets.gitlab.existingSecret. Empty turns GitLab off. Outbound only so far: no webhooks. |
 | images.controlPlane | string | `"rudderlabs/devbox-control-plane"` | Control-plane image repository. Required; the default is the published image. |
 | images.controlPlanePullSecrets | list | `[]` | Pull Secrets for the control-plane image, for a private registry. Create each Secret in the release namespace and in devbox-sandboxes; harness sandbox pulls use sandbox.imagePullSecrets. |
 | images.harness | string | `"rudderlabs/devbox-harness"` | The harness image sandboxes run. Required; see docs/kubernetes/harness-image.md to extend it. |
@@ -60,6 +61,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | integrations.linear.enabled | bool | `false` | Turns Linear on (LINEAR_ENABLED). Its secrets go in the integrations Secret. |
 | integrations.slack.channelId | string | `""` | Required when enabled: the Slack channel ID. |
 | integrations.slack.enabled | bool | `false` | Turns Slack on (SLACK_ENABLED). SLACK_BOT_TOKEN goes in the integrations Secret. |
+| ironProxy.caBundle | string | `""` | Name of a Secret (key `ca.crt`, a PEM bundle) whose CAs iron-proxy trusts for its own upstream connections, in addition to the system roots: for a GitLab instance with a private CA. Sandboxes need nothing: they see iron-proxy's own certificate. Changing it rolls the pods. |
 | ironProxy.clusterIP | string | `""` | Required. A free address in the cluster's Service range; sandboxes use it as their DNS server. `bun run k8s:install` picks one. |
 | ironProxy.extraAllowlist | list | `[]` | Extra allowlist rules ({host, methods, paths}), appended as-is. |
 | ironProxy.image.repository | string | `"ironsh/iron-proxy"` |  |
@@ -77,7 +79,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | postgresql.enabled | bool | `true` | A minimal bundled Postgres for trying devbox: no backups, HA or automated upgrades. |
 | postgresql.image | string | `"postgres:18"` |  |
 | postgresql.size | string | `"10Gi"` | Size of the database volume. |
-| repos | list | `[]` | Required. Repos the agent works on: [{url: "https://github.com/<owner>/<repo>.git", branch: main}]. `bun run k8s:install` fills this from devbox.config.json. |
+| repos | list | `[]` | Required. Repos the agent works on: [{url: "https://github.com/<owner>/<repo>.git", branch: main}]. With gitlab.baseUrl, a repo may also be "<gitlab.baseUrl>/<group>[/<subgroup>]/<project>.git". `bun run k8s:install` fills this from devbox.config.json. |
 | sandbox.cpu | string | `"2"` | CPU of each sandbox. |
 | sandbox.extraVolumeMounts | list | `[]` | Extra mounts for the sandbox container. |
 | sandbox.extraVolumes | list | `[]` | Extra volumes for sandbox pods. |
@@ -89,6 +91,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | sandbox.tolerations | list | `[]` | Tolerations for sandbox pods. |
 | secrets.github | object | `{"existingSecret":""}` | Name your own Secret instead of the installer's `devbox-github` (key `token`). Only with integrations.githubApp.tokens external, or without the App. Every key in it reaches the control plane, iron-proxy and the snapshot builder: put only `token` (and `expires-at`) in it, never the App's private key. |
 | secrets.githubApp | object | `{"existingSecret":""}` | Name your own Secret instead of the installer's `devbox-github-app` (key `private-key`, the GitHub App's private key), for integrations.githubApp.tokens devbox. |
+| secrets.gitlab | object | `{"existingSecret":""}` | Required with gitlab.baseUrl: a Secret (key `token`) holding a GitLab group or project access token with the api, read_repository and write_repository scopes. iron-proxy swaps it into sandboxes' requests and the snapshot builder clones with it. You keep it fresh. |
 | secrets.integrations | object | `{"existingSecret":""}` | Optional Secret instead of `devbox-integrations`; its keys become control-plane env. |
 | secrets.llm | object | `{"existingSecret":""}` | Name your own Secret instead of `devbox-llm` (key `api-key`). |
 | snapshotBuilder.keep | int | `3` | Number of repo snapshots kept. |

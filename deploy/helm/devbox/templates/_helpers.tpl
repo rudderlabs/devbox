@@ -29,6 +29,8 @@ imagePullSecrets: {{- toYaml $secrets | nindent 2 }}
 {{- define "devbox.llmSecret" -}}{{ .Values.secrets.llm.existingSecret | default "devbox-llm" }}{{- end }}
 {{- define "devbox.githubAppSecret" -}}{{ .Values.secrets.githubApp.existingSecret | default "devbox-github-app" }}{{- end }}
 {{- define "devbox.integrationsSecret" -}}{{ .Values.secrets.integrations.existingSecret | default "devbox-integrations" }}{{- end }}
+{{/* The GitLab token Secret: always the user's own, never created by the chart. */}}
+{{- define "devbox.gitlabSecret" -}}{{ .Values.secrets.gitlab.existingSecret }}{{- end }}
 
 {{- define "devbox.publicBaseUrl" -}}
 {{- if .Values.controlPlane.publicBaseUrl -}}
@@ -70,6 +72,26 @@ derives them: <baseUrl>/responses for openai, <baseUrl>/v1/messages for anthropi
 {{- define "devbox.repoOwner" -}}{{ regexReplaceAll "^https://github\\.com/([^/]+)/([^/]+)\\.git$" . "${1}" }}{{- end }}
 {{- define "devbox.repoName" -}}{{ regexReplaceAll "^https://github\\.com/([^/]+)/([^/]+)\\.git$" . "${2}" }}{{- end }}
 
+{{/* The GitLab instance: gitlab.baseUrl without a trailing slash, its host, and the
+path prefix of a relative URL root ("" at the root). Empty when GitLab is off. */}}
+{{- define "devbox.gitlabBaseUrl" -}}{{ .Values.gitlab.baseUrl | default "" | trimSuffix "/" }}{{- end }}
+{{- define "devbox.gitlabHost" -}}{{ with include "devbox.gitlabBaseUrl" . }}{{ (urlParse .).host }}{{ end }}{{- end }}
+{{- define "devbox.gitlabPrefix" -}}{{ with include "devbox.gitlabBaseUrl" . }}{{ (urlParse .).path | trimSuffix "/" }}{{ end }}{{- end }}
+
+{{/* "true" when a repo URL is under gitlab.baseUrl. The argument is a dict of ctx (the
+root context) and url. */}}
+{{- define "devbox.repoIsGitlab" -}}
+{{- $base := include "devbox.gitlabBaseUrl" .ctx -}}
+{{- if and $base (hasPrefix (printf "%s/" $base) .url) }}true{{ end -}}
+{{- end }}
+
+{{/* The project path of a GitLab repo URL, group[/subgroup]/project without .git; same
+argument as repoIsGitlab. */}}
+{{- define "devbox.gitlabProjectPath" -}}
+{{- $base := include "devbox.gitlabBaseUrl" .ctx -}}
+{{- .url | trimPrefix (printf "%s/" $base) | trimSuffix ".git" -}}
+{{- end }}
+
 {{/* The repo list as one "<url> <branch>" line per repo; toJson keeps the newlines escaped. */}}
 {{- define "devbox.reposEnv" -}}
 {{- range .Values.repos }}{{ printf "%s %s\n" .url (.branch | default "main") }}{{- end }}
@@ -94,6 +116,10 @@ spec:
         - { name: RELEASE_NAMESPACE, value: {{ .Release.Namespace | quote }} }
         - { name: SANDBOX_NAMESPACE, value: {{ include "devbox.sandboxNamespace" . | quote }} }
         - { name: GITHUB_SECRET, value: {{ include "devbox.githubSecret" . | quote }} }
+        {{- if include "devbox.gitlabBaseUrl" . }}
+        - { name: GITLAB_BASE_URL, value: {{ include "devbox.gitlabBaseUrl" . | quote }} }
+        - { name: GITLAB_SECRET, value: {{ include "devbox.gitlabSecret" . | quote }} }
+        {{- end }}
         - { name: SCRATCH_PVC, value: devbox-repos-scratch }
         - { name: SNAPSHOT_CLASS, value: {{ .Values.storage.volumeSnapshotClass | quote }} }
         - { name: KEEP, value: {{ .Values.snapshotBuilder.keep | quote }} }
@@ -123,7 +149,8 @@ is a dict of the root context (ctx), the component name and the command. */}}
 {{- $names := list -}}
 {{- /* Narrowed unless the whole installation is asked for. */ -}}
 {{- if ne ($app.tokenScope | default "") "installation" -}}
-{{- range $.Values.repos }}{{ $names = append $names (include "devbox.repoName" .url) }}{{ end -}}
+{{- /* GitHub repos only: a GitLab repo has no place in the App's token. */ -}}
+{{- range $.Values.repos }}{{ if not (include "devbox.repoIsGitlab" (dict "ctx" $ "url" .url)) }}{{ $names = append $names (include "devbox.repoName" .url) }}{{ end }}{{ end -}}
 {{- end -}}
 metadata:
   labels: {{- include "devbox.selectorLabels" .component | nindent 4 }}

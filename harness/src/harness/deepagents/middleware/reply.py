@@ -28,7 +28,7 @@ after your change is committed and pushed, or after you concluded that no
 change is needed. Never reply about work you are about to do.
 
 The user sees only what you pushed. For a code change, link the commit you
-pushed (its GitHub `.../commit/<sha>` URL), not the pull request. If you
+pushed (its `.../commit/<sha>` URL on the code host), not the pull request. If you
 opened a new pull request, link that pull request instead.
 
 If you could not push or open the pull request, say so and say why: a rejected

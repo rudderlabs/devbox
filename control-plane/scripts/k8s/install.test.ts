@@ -46,7 +46,13 @@ const { privateKey: PEM } = generateKeyPairSync("rsa", {
 });
 const config = (): DevboxConfig => ({
   repos: [
-    { url: "https://github.com/acme/widgets.git", branch: "main", owner: "acme", name: "widgets" },
+    {
+      url: "https://github.com/acme/widgets.git",
+      branch: "main",
+      host: "github",
+      owner: "acme",
+      name: "widgets",
+    },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "m" },
   github: { trustedOrgs: [], trustedUsers: [] },
@@ -2702,6 +2708,30 @@ devbox is installed in context kind-devbox. The CLI uses profile "k8s-kind-devbo
       s.f.done();
       expect(calls).toEqual([]);
       expect(s.written).toEqual({});
+    });
+
+    it("refuses tokenScope repos with GitLab repos only, before minting an installation-wide token", async () => {
+      const tgt = appTarget();
+      const s = setup([], { target: tgt, env: APP_ENV });
+      s.deps.cfg = {
+        ...config(),
+        gitlab: { baseUrl: "https://gitlab.example.com" },
+        repos: [
+          {
+            url: "https://gitlab.example.com/acme/app.git",
+            branch: "main",
+            host: "gitlab",
+            owner: "acme",
+            name: "app",
+          },
+        ],
+      };
+      const calls = appFetch(s);
+      await expect(install(s.deps, OPTS, OVERLAY)).rejects.toThrow(
+        "tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation)",
+      );
+      s.f.done();
+      expect(calls).toEqual([]);
     });
   });
 });

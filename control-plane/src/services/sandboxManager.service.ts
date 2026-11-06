@@ -100,6 +100,9 @@ export type SandboxManagerOptions = {
   // HARNESS_TRUSTED_USERS; undefined → not set on the sandbox.
   trustedOrgs?: string;
   trustedUsers?: string;
+  // The configured GitLab instance (config.gitlab.baseUrl), forwarded as
+  // GITLAB_BASE_URL so the harness recognises its remotes; undefined → not set.
+  gitlabBaseUrl?: string;
 };
 
 // Contract with the sandbox image (harness/Dockerfile): it installs the task
@@ -130,6 +133,9 @@ export class SandboxManager {
   private readonly forwardedEnv: Record<string, string>;
   private readonly trustedOrgs: string | undefined;
   private readonly trustedUsers: string | undefined;
+  private readonly gitlabBaseUrl: string | undefined;
+  // Hosts a pr_opened URL may name: github.com, plus the GitLab instance.
+  private readonly prUrlHosts: ReadonlySet<string>;
 
   constructor(opts: SandboxManagerOptions) {
     this.connectionConfig = new ConnectionConfig({
@@ -159,6 +165,8 @@ export class SandboxManager {
     this.forwardedEnv = opts.forwardedEnv;
     this.trustedOrgs = opts.trustedOrgs;
     this.trustedUsers = opts.trustedUsers;
+    this.gitlabBaseUrl = opts.gitlabBaseUrl;
+    this.prUrlHosts = prUrlHostsFor(opts.gitlabBaseUrl);
   }
 
   // Mint a per-task workspace volume: a PVC hydrated from the latest ready
@@ -446,6 +454,10 @@ export class SandboxManager {
     if (this.trustedUsers !== undefined) {
       env.HARNESS_TRUSTED_USERS = this.trustedUsers;
     }
+    // Never from forwardedEnv: the sandbox learns the GitLab instance only
+    // from the control plane's validated setting (sandboxConfig.ts).
+    delete env.GITLAB_BASE_URL;
+    if (this.gitlabBaseUrl !== undefined) env.GITLAB_BASE_URL = this.gitlabBaseUrl;
     if (this.sandboxRuntime === "k8s") Object.assign(env, K8S_EGRESS_ENV);
     if (this.gitIdentity) {
       const { name, email } = this.gitIdentity;
@@ -682,7 +694,7 @@ export class SandboxManager {
         continue;
       }
 
-      const event = validateHarnessEvent(parsed);
+      const event = validateHarnessEvent(parsed, this.prUrlHosts);
       if (!event) {
         logger.warn("readEvents: dropping malformed events.jsonl event", {
           sandboxId,
@@ -825,10 +837,20 @@ function capString(v: unknown, maxLen: number): string | undefined {
   return v.length > maxLen ? storable(`${v.slice(0, maxLen)}…`) : v;
 }
 
+export const GITHUB_PR_HOSTS: ReadonlySet<string> = new Set(["github.com"]);
+
+// The hosts a pr_opened URL may name: github.com, plus the configured GitLab
+// instance's host (a merge request's web_url lives there).
+export function prUrlHostsFor(gitlabBaseUrl: string | undefined): ReadonlySet<string> {
+  if (!gitlabBaseUrl) return GITHUB_PR_HOSTS;
+  return new Set([...GITHUB_PR_HOSTS, new URL(gitlabBaseUrl).hostname]);
+}
+
 // A `pr_url` is rendered into a Linear comment and persisted to tasks.pr_urls
-// (which the GitHub webhook lookup keys off). Only accept a well-formed
-// https://github.com/... URL — anything else is dropped.
-function isGithubPrUrl(v: unknown): v is string {
+// (which the webhook lookups key off). Only a well-formed https URL on a known
+// code host is accepted; anything else is dropped. https only: gitlab.baseUrl
+// is https only, and the harness's merge request parser recognises nothing else.
+function isCodeHostPrUrl(v: unknown, hosts: ReadonlySet<string>): v is string {
   if (typeof v !== "string") return false;
   let url: URL;
   try {
@@ -836,13 +858,16 @@ function isGithubPrUrl(v: unknown): v is string {
   } catch {
     return false;
   }
-  return url.protocol === "https:" && url.hostname === "github.com";
+  return url.protocol === "https:" && hosts.has(url.hostname);
 }
 
 // Runtime discriminated-union shape check for one parsed events.jsonl line.
 // Returns a typed HarnessEvent on success, or null when the object does not
 // match any known event shape — the caller quarantines a null result.
-export function validateHarnessEvent(raw: unknown): HarnessEvent | null {
+export function validateHarnessEvent(
+  raw: unknown,
+  prUrlHosts: ReadonlySet<string> = GITHUB_PR_HOSTS,
+): HarnessEvent | null {
   if (!isObject(raw)) return null;
   const parsed = Object.fromEntries(
     Object.entries(raw).map(([k, v]) => [k, typeof v === "string" ? storable(v) : v]),
@@ -885,9 +910,9 @@ export function validateHarnessEvent(raw: unknown): HarnessEvent | null {
     case "pr_opened": {
       if (!isNonEmptyString(parsed.inbox_id)) return null;
       if (typeof parsed.repo !== "string") return null;
-      // pr_url must be a well-formed github.com URL — it is both persisted and
-      // rendered. A malformed value drops the whole event.
-      if (!isGithubPrUrl(parsed.pr_url)) return null;
+      // pr_url must be a well-formed URL on a known code host — it is both
+      // persisted and rendered. A malformed value drops the whole event.
+      if (!isCodeHostPrUrl(parsed.pr_url, prUrlHosts)) return null;
       if (typeof parsed.branch !== "string") return null;
       if (typeof parsed.commit_sha !== "string") return null;
       return {

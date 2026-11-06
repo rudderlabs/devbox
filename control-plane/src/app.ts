@@ -61,6 +61,7 @@ export function createApp(integrationConfigs: ReadonlyMap<string, unknown>): App
     forwardedEnv: config.opensandbox.forwardedEnv,
     trustedOrgs: joinIfAny(config.codeHost.trustedOrgs),
     trustedUsers: joinIfAny(config.codeHost.trustedUsers),
+    gitlabBaseUrl: config.gitlab.baseUrl,
   });
 
   // Work that outlives its caller (hooks, Slack posts, a restart's sandbox

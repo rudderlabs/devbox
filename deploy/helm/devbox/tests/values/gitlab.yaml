@@ -1,0 +1,8 @@
+# A self-managed GitLab instance under a relative URL root, with a private CA,
+# next to a GitHub repo.
+repos:
+  - { url: https://github.com/acme/widgets.git, branch: main }
+  - { url: https://git.example.com/gitlab/platform/backend/api.git, branch: develop }
+gitlab: { baseUrl: https://git.example.com/gitlab }
+secrets: { gitlab: { existingSecret: my-gitlab-token } }
+ironProxy: { caBundle: corp-ca-bundle }

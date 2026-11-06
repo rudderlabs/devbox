@@ -18,6 +18,7 @@ mock.module("../config", () => ({
     databaseUrl: TEST_DATABASE_URL,
     podId: "pod-test",
     codeHost: { tokenSettings: { token: "test-token" }, trustedOrgs: [], trustedUsers: [] },
+    gitlab: { baseUrl: undefined },
     opensandbox: { ...parseSandboxRuntimeConfig({}), domain: "localhost:1", forwardedEnv: {} },
     api: parseApiConfig(ENV),
   },

@@ -24,6 +24,50 @@ describe("chart validation", () => {
     [["postgresql.enabled=false"], "database.existingSecret is required when postgresql.enabled is false"],
     [["ingress.webhooks.enabled=true"], "ingress.webhooks.host is required when ingress.webhooks.enabled is true"],
     [["ingress.api.enabled=true"], "ingress.api.host is required when ingress.api.enabled is true"],
+    [
+      ["gitlab.baseUrl=https://gitlab.example.com"],
+      "gitlab.baseUrl is set: secrets.gitlab.existingSecret is required",
+    ],
+    [
+      ["gitlab.baseUrl=https://gitlab.example.com:8443", "secrets.gitlab.existingSecret=s"],
+      "gitlab.baseUrl: must use the default port (443)",
+    ],
+    [
+      ["gitlab.baseUrl=https://user:pw@gitlab.example.com", "secrets.gitlab.existingSecret=s"],
+      "gitlab.baseUrl: must not have a query, fragment or credentials",
+    ],
+    [
+      [
+        "gitlab.baseUrl=https://gitlab.example.com",
+        "secrets.gitlab.existingSecret=s",
+        "repos[1].url=https://gitlab.example.com/api.git",
+      ],
+      // The schema catches a project without a group before validate.yaml does.
+      "'/repos/1/url': 'https://gitlab.example.com/api.git' does not match pattern",
+    ],
+    [
+      [
+        "integrations.githubApp.enabled=true",
+        "integrations.githubApp.appId=1",
+        "integrations.githubApp.installationId=2",
+        "integrations.githubApp.botLogin=bot",
+        "integrations.githubApp.botUserId=3",
+        "integrations.githubApp.tokens=devbox",
+        "github.trustedUsers={frodo}",
+        "gitlab.baseUrl=https://gitlab.example.com",
+        "secrets.gitlab.existingSecret=s",
+        "repos[0].url=https://gitlab.example.com/acme/api.git",
+      ],
+      "tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation)",
+    ],
+    [
+      ["repos[1].url=https://gitlab.example.com/acme/api.git"],
+      "repos[1].url: must be https://github.com/<owner>/<repo>.git (or, with gitlab.baseUrl, a repo under it)",
+    ],
+    [
+      ["gitlab.baseUrl=https://gitlab.example.com", "secrets.gitlab.existingSecret=s", "repos[1].url=https://other.example.com/acme/api.git"],
+      "repos[1].url: must be https://github.com/<owner>/<repo>.git or https://gitlab.example.com/<group>/<project>.git",
+    ],
   ])("refuses %j", async (set, message) => {
     expect(await failure(set)).toContain(message);
   });
