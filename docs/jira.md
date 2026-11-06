@@ -109,15 +109,17 @@ screens use those words. This page keeps saying issue and project.
    customized there, and the fixed default scheme gives these permissions to
    every user with access to Jira, a service account with Jira access
    included ([Jira Free](#jira-free)).
-5. **If you trust groups** ([Trust](#trust)), create each group first if it
-   doesn't exist (Atlassian Administration → Directory → Groups), and give the
-   service account the global permission **Browse users and groups**: in Jira
-   Settings → System → Global permissions, grant it to a group the service
-   account is in. devbox reads each person's groups with it. Without it every
-   group lookup fails, so devbox answers assignments and follow-ups with
-   HTTP 503 (`jira_webhook.trust_unresolved`), and once Jira has retried five
-   times the event is lost. `jira:setup` warns about it, and `jira:status`
-   shows it as `missing USER_PICKER …`.
+5. **Only if you narrow trust to groups** ([Trust](#trust)): create each
+   group first if it doesn't exist (Atlassian Administration → Directory →
+   Groups), and give the service account the global permission **Browse users
+   and groups**: in Jira Settings → System → Global permissions, grant it to a
+   group the service account is in. devbox reads each person's groups with it.
+   Without it every group lookup fails, so devbox answers assignments and
+   follow-ups with HTTP 503 (`jira_webhook.trust_unresolved`), and once Jira
+   has retried five times the event is lost. `jira:setup` warns about it, and
+   `jira:status` shows it as `missing USER_PICKER …`. Without trusted groups,
+   devbox reads no groups and the service account doesn't need this
+   permission.
 
 ### 2. Run `jira:setup`
 
@@ -138,7 +140,7 @@ bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
 | `--site <url>` | The Jira site, `https://example.atlassian.net`: an `https` origin, with no path. |
 | `--email <address>` | The service account's email, shown on its page in Atlassian Administration. |
 | `--projects <KEY,…>` | The keys of the projects devbox works in, comma-separated, such as `ENG,OPS`. Upper-cased. |
-| `--trusted-groups <names>` | Jira groups whose members may assign issues to devbox and ask it to follow up, comma-separated ([Trust](#trust)). |
+| `--trusted-groups <names>` | Only members of these Jira groups may assign issues to devbox and ask it to follow up, comma-separated ([Trust](#trust)). Without this flag and `--trusted-users`, everyone with access to the site may. |
 | `--trusted-users <ids>` | Account IDs of other people who may, comma-separated. |
 | `--token-expires <YYYY-MM-DD>` | When the API token expires. |
 | `--no-keychain` | Never read or write the system keychain. |
@@ -175,12 +177,16 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    workflows use. It warns, and goes on, about a project the bot can't see or
    a permission it lacks.
 6. **The statuses**, on the first run only ([Statuses](#statuses)).
-7. **Trust**, when none is configured:
-   `Jira groups whose members may assign issues to devbox, comma-separated (Enter for none): `,
-   then `Account ids of other people who may, comma-separated (Enter for none): `.
-   At least one group or account ID is required. With trusted groups, it
-   checks that the service account has the global permission Browse users and
-   groups, and warns when it doesn't.
+7. **Trust**, on the first run in a terminal, unless a trust flag is given:
+   `Jira groups whose members may assign issues to devbox, comma-separated (Enter for everyone with access to the site): `,
+   then `Account ids of other people who may, comma-separated (Enter for none): `,
+   or, with no group,
+   `Account ids of the only people who may, comma-separated (Enter for everyone with access to the site): `.
+   No answer is required. With no group or account ID (Enter at both, or no
+   flag without a terminal), it prints
+   `Trust: everyone with access to the site (narrow it with --trusted-groups or --trusted-users)`.
+   With trusted groups, it checks that the service account has the global
+   permission Browse users and groups, and warns when it doesn't.
 8. **The token's expiry**
    (`When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): `),
    asked again whenever a new token was typed. A date in the past is refused.
@@ -215,7 +221,10 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
 
 Running it again is safe: a configured setting is kept unless a flag changes
 it. To change the projects or the trust lists on a re-run, pass the flag or
-edit the config file. To change the statuses, edit the config file.
+edit the config file. To trust everyone with access to the site again, remove
+`trustedGroups` and `trustedUsers` from the config file, or pass
+`--trusted-groups "" --trusted-users ""`. To change the statuses, edit the
+config file.
 
 The secrets are the exception: setup reuses the token and the webhook secret
 only from your environment or the keychain. Otherwise it asks for them again.
@@ -275,7 +284,7 @@ The settings go in `devbox.config.json`:
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "projectKeys": ["ENG", "OPS"], "trustedGroups": ["devbox-users"],
+  "projectKeys": ["ENG", "OPS"],
   "statuses": { "started": "In Progress", "done": "Done" },
   "tokenExpiresAt": "2027-01-31" } }
 ```
@@ -353,9 +362,7 @@ which `jira:status` uses. Then:
 The chart refuses to render `integrations.jira.enabled: true` without each of
 `siteUrl`, `cloudId`, `botEmail`, `botAccountId`, `botName`, `projectKeys` and
 `tokenExpiresAt`
-(`integrations.jira.enabled is true: integrations.jira.<key> is required`),
-or without a trust list
-(`integrations.jira.enabled is true: integrations.jira.trustedGroups or integrations.jira.trustedUsers is required`).
+(`integrations.jira.enabled is true: integrations.jira.<key> is required`).
 
 ### What turns Jira on
 
@@ -368,14 +375,24 @@ nothing while `enabled` is `false` or the block is absent. The fields are in
 ## Trust
 
 An issue's description and its comments become the agent's instructions, so
-devbox acts only on people you trust:
+devbox acts only on people it trusts:
 
 - **An assignment** counts only when both the person who assigned the issue
   to the bot and the issue's reporter are trusted (its creator, when it has no
   reporter). The reporter wrote the description the agent works from.
 - **A follow-up** counts only when the comment's author is trusted.
 
-Trust comes from two lists in `integrations.jira`; at least one is required:
+**By default, devbox trusts everyone with access to the site**, as Linear
+trusts everyone in its workspace. That is everyone your Jira admins let onto
+the site: your colleagues, people from outside your company they invite, such
+as contractors, and, when the site lets people sign up on their own (for
+example anyone with an email address at your company's domain), everyone who
+does. It is never the public: Jira sends events only for what accounts on the
+site do, and devbox checks each webhook's signature. In this mode devbox looks
+nothing up, and the service account needs no extra permission.
+
+Two lists in `integrations.jira` narrow trust. With either set, devbox trusts
+only the people they name:
 
 - **`trustedGroups`**: Jira group names, in any letter case. devbox looks up
   each person's groups as the service account, which needs the global
@@ -386,26 +403,32 @@ Trust comes from two lists in `integrations.jira`; at least one is required:
 - **`trustedUsers`**: account IDs. A person's account ID is the last part of
   their profile URL in Jira.
 
+In every mode, only people are trusted. Accounts of apps, Automation for Jira
+among them, and Jira Service Management customers never are: an action by one
+is ignored with `reason: non_human`, and an issue one reported is ignored with
+`reason: untrusted` and `side: reporter`. So an automation rule that runs as
+Automation for Jira (its default actor) does nothing; a rule set to run as the
+user who triggered it counts as that user. The bot's own events are ignored.
+
 An untrusted action is ignored. devbox answers the webhook, posts nothing on
 the issue, and logs `jira_webhook.ignored` with `reason: untrusted`, `side`
-(`assigner`, `reporter` or `commenter`) and the account ID. Accounts of apps
-and Jira Service Management customers are never trusted
-(`reason: non_human`). So an automation rule that runs as Automation for Jira
-(its default actor) does nothing; a rule set to run as the user who triggered
-it counts as that user. The bot's own events are ignored.
+(`assigner`, `reporter` or `commenter`) and the account ID.
 
-When a group lookup fails, devbox tries that person again at most once a
-minute and meanwhile keeps the last answer for up to 6 more hours. With no
-answer at all, it answers the webhook with HTTP 503, so Jira delivers it again
-later (Jira retries up to five times), and logs
+With trusted groups, when a group lookup fails, devbox tries that person
+again at most once a minute and meanwhile keeps the last answer for up to 6
+more hours. With no answer at all, it answers the webhook with HTTP 503, so
+Jira delivers it again later (Jira retries up to five times), and logs
 `jira_webhook.trust_unresolved`. When the service account lacks Browse users
 and groups, every lookup fails this way.
 
 **Important: devbox checks who reported the issue, not who last edited it.**
 Anyone who can edit an issue can change its description before a trusted
-person assigns it to the bot, and the agent then works from that text.
-**Restrict the Edit work items permission to trusted groups in the projects
-devbox works in.** On Jira Free you can't ([Jira Free](#jira-free)).
+person assigns it to the bot, and the agent then works from that text. By
+default the people who can edit issues are trusted anyway; apps that edit
+issues are not, so an app that copies outside text into descriptions passes
+that text to the agent. **When you narrow trust, restrict the Edit work items
+permission to trusted groups in the projects devbox works in.** On Jira Free
+you can't ([Jira Free](#jira-free)).
 
 ## Restricted issues and comments
 
@@ -545,7 +568,8 @@ Read-only: it never prompts, never reads a Kubernetes Secret and never prints
 a secret. It exits 0 whatever the control plane or the probe report; only a
 config or target file it can't load makes it exit 1. It prints:
 
-1. **The settings**: `site`, `bot` (name and email), `projectKeys`,
+1. **The settings**: `site`, `bot` (name and email), `projectKeys`, `trust`
+   (`everyone with access to the site`, or the trusted groups and users),
    `tokenExpiresAt`, `publicUrl`, and where each Jira secret would come from
    at the next apply: `env`, `keychain` or `missing`, or
    `from Secret "<name>" (not read)` with your own integrations Secret.
@@ -557,7 +581,8 @@ config or target file it can't load makes it exit 1. It prints:
    - `Control plane: bot <name>, auth <ok | rejected | unknown>, last webhook from Jira <time | none yet>`.
      `auth rejected` means Jira refuses the token; it adds what to do.
    - `API token: expires in <n> days`, or `expired <n> days ago`.
-   - `Trust: <groups | users | groups+users>, <n> accounts cached`, and
+   - `Trust: everyone with access to the site` without trust lists. With them,
+     `Trust: <groups | users | groups+users>, <n> accounts cached`, and
      `last lookup failed: <class>` when the last group lookup failed. With
      trusted groups, it adds
      `missing USER_PICKER (the global permission Browse users and groups, needed to trust groups): grant it to a group the service account is in (Jira Settings → System → Global permissions)`
@@ -656,8 +681,12 @@ issue or posting anything to it. So:
   The fixed default scheme gives every user with access to Jira the
   permissions devbox needs, a service account with Jira access included, so
   step 4 of [The service account](#1-the-service-account) needs no action.
-  But you can't restrict who edits issues either ([Trust](#trust)): use
-  devbox on a Free site only when you trust everyone on it.
+  You can't restrict who edits issues either. With the default trust that
+  changes nothing, since everyone with access to the site is trusted anyway.
+  If you narrow trust to groups on Free, the gap in [Trust](#trust) stays
+  open: anyone on the site can edit an issue's description before a trusted
+  person assigns it to the bot, so the groups limit who starts a task, not
+  whose text the agent reads.
 - Each devbox comment notifies the issue's watchers by email, and Jira Free
   sends at most 100 emails a day. Past that, notifications pause until the
   next day.
@@ -673,10 +702,10 @@ issue or posting anything to it. So:
 | same | `can't reach api.atlassian.com: check this machine's egress or proxy` | On Kubernetes, the control plane needs egress to `api.atlassian.com` too. |
 | `jira:setup` | `warning: project <KEY>: the bot can't see this project: check the key, and give the bot access to it` | Check the key, and give the service account a role in the project. |
 | `jira:setup` | `warning: the bot lacks <permissions> in project <KEY>: …` | Give the service account a role there that has them ([The service account](#1-the-service-account)). |
-| `jira:setup` | `warning: the bot lacks USER_PICKER (the global permission Browse users and groups, needed to trust groups): …` | Grant Browse users and groups to a group the service account is in ([The service account](#1-the-service-account)). |
+| `jira:setup` | `warning: the bot lacks USER_PICKER (the global permission Browse users and groups, needed to trust groups): …` | Only with trusted groups. Grant Browse users and groups to a group the service account is in ([The service account](#1-the-service-account)). |
 | `jira:setup` | `warning: project <KEY> has no status "<name>" (statuses.<role>)`, or `warning: no started status: …` | Set `integrations.jira.statuses` to statuses every project has ([Statuses](#statuses)). |
 | `jira:status` | `Project <KEY>: missing …; no status "…"`, or `can't check (http_404)` | As the two rows above. `http_404`: the bot can't see the project. |
-| `jira:status` | `Trust: …, last lookup failed: http_403` (or another `http_4xx`), or `missing USER_PICKER …` | The service account can't read people's groups: grant it Browse users and groups ([The service account](#1-the-service-account)). Until then, assignments and follow-ups by group members fail with `jira_webhook.trust_unresolved`. |
+| `jira:status` | `Trust: …, last lookup failed: http_403` (or another `http_4xx`), or `missing USER_PICKER …` | Only with trusted groups. The service account can't read people's groups: grant it Browse users and groups ([The service account](#1-the-service-account)). Until then, assignments and follow-ups by group members fail with `jira_webhook.trust_unresolved`. |
 | `jira:status` | `auth rejected`, or `API token: expired …` | Rotate the token ([Rotating the API token](#rotating-the-api-token)). |
 | `jira:status` | `Replies held for …`, `Last failed reply to Jira: HTTP <status>` | Jira refuses the bot's comments. 403: the bot lacks Add Comments; 429: Jira's rate limit, which passes. |
 | `jira:status` probe | `got no answer (…): the public URL does not reach devbox` | The tunnel is down, or the Ingress or DNS is not ready yet. With the URL from `ingress.api`, that Ingress may be VPN-only: add a public `ingress.webhooks`. |
@@ -687,7 +716,7 @@ issue or posting anything to it. So:
 | control plane log | `Jira webhook rejected: unsigned (set a secret on the webhook in Jira)` | The webhook has no secret: set one ([Replacing the webhook secret](#replacing-the-webhook-secret)). |
 | Jira | The bot is not offered as an assignee | Give the service account the Assignable User permission in the project. `jira:setup` warns about it, and `jira:status` shows `missing ASSIGNABLE_USER …`. |
 | Jira | Assigning does nothing; `jira:status` shows `last webhook from Jira none yet` | The webhook is missing or disabled, its URL is wrong, its JQL leaves the project out, or its events lack Issue updated. Then read the control plane's logs for a rejected signature. |
-| Jira | Assigning does nothing; webhooks arrive | Read the logs for `jira_webhook.ignored` and its `reason`: `untrusted` with `side: assigner` or `side: reporter` ([Trust](#trust)), `foreign_project` (add the key to `projectKeys` and the JQL), `restricted_issue`, or `non_human` (an app, or an automation rule running as Automation for Jira, assigned it). `jira_webhook.trust_unresolved` means group lookups fail, often because the service account lacks Browse users and groups ([The service account](#1-the-service-account)); Jira retries up to five times. |
+| Jira | Assigning does nothing; webhooks arrive | Read the logs for `jira_webhook.ignored` and its `reason`: `untrusted` with `side: assigner` or `side: reporter` ([Trust](#trust)), `foreign_project` (add the key to `projectKeys` and the JQL), `restricted_issue`, or `non_human` (an app, or an automation rule running as Automation for Jira, assigned it). `jira_webhook.trust_unresolved`, with trusted groups, means group lookups fail, often because the service account lacks Browse users and groups ([The service account](#1-the-service-account)); Jira retries up to five times. |
 | Jira | Assigning does nothing; the log shows `jira webhook failed` with `code: 23505` | The issue's key is already the key of a task from another source, such as a Linear issue with the same key: task keys are unique across sources regardless of case. Jira retries and then gives up; nothing is posted on the issue. Use a project key that no other source uses. |
 | Jira | A comment that mentions the bot does nothing | The author is not trusted, the comment is restricted, the mention is inside a code block, the typed name differs from the bot's name, or the bot was never assigned the issue (`jira_webhook.ignored` with `reason: no_task`). When the bot is the assignee but has no task there, as after an ignored assignment, devbox answers 503 in case the assignment is still on its way, and logs `jira_webhook.task_not_found` at each of Jira's retries. |
 | Jira | The issue doesn't move | See [Statuses](#statuses): no `started` status, the issue was re-assigned or moved, or the logs show `jira transition skipped` or `jira transition refused`. |

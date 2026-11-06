@@ -258,7 +258,7 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "projectKeys": ["ENG", "OPS"], "trustedGroups": ["devbox-users"],
+  "projectKeys": ["ENG", "OPS"],
   "statuses": { "started": "In Progress", "done": "Done" },
   "tokenExpiresAt": "2027-01-31" } }
 ```
@@ -271,8 +271,8 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 | `botEmail` | when `enabled` is `true` | The service account's email. With `JIRA_API_TOKEN`, it signs devbox in to Jira. |
 | `botAccountId`, `botName` | when `enabled` is `true` | The service account's account ID and display name, as Jira reported them to `jira:setup`. People type `@<botName>` to mention the bot. |
 | `projectKeys` | when `enabled` is `true` | A non-empty list of upper-case project keys, such as `["ENG", "OPS"]`. Events from other projects are ignored. |
-| `trustedGroups` | this or `trustedUsers`, when `enabled` is `true` | Jira group names, any letter case, without commas. Their members may assign issues to devbox and ask it to follow up ([docs/jira.md](jira.md#trust)). |
-| `trustedUsers` | this or `trustedGroups`, when `enabled` is `true` | Account IDs of other people who may. |
+| `trustedGroups` | no | Jira group names, any letter case, without commas. Only their members, and `trustedUsers`, may assign issues to devbox and ask it to follow up. Without either list, everyone with access to the site may ([docs/jira.md](jira.md#trust)). |
+| `trustedUsers` | no | Account IDs of other people who may. |
 | `statuses` | no | `started`, `done` and `failed`: the status names devbox moves an issue to, in any letter case. An absent one means no move ([docs/jira.md](jira.md#statuses)). |
 | `tokenExpiresAt` | when `enabled` is `true` | When the API token expires, `YYYY-MM-DD`. devbox warns from 14 days before. |
 | `allowRestrictedIssues` | no, default `false` | `true` acts on issues with a security level too. |
@@ -731,11 +731,11 @@ way.
 | `GITHUB_CI_RESULT_ENABLED` | | `true` sends a failed CI run on a task's pull request to the task. The setting `integrations.githubApp.ciResults` sets it. |
 | `GITHUB_CI_RESULT_MAX_PER_TASK` | `20` | The most CI failures sent to one task; `0` or negative means no cap. Environment only: on Compose, set it in the shell you run `bun run up` from; on Kubernetes, with `extraEnv`. |
 | `SANDBOX_GIT_NAME`, `SANDBOX_GIT_EMAIL` | | The commit identity of the agent in every sandbox. Set both or neither. Unset, the harness image's own identity applies. The chart sets them from `git.name` and `git.email`. |
-| `JIRA_ENABLED` | | `true` turns on Jira and `POST /webhook/jira`. Unset, empty or `false` is off; anything else fails startup. With it on, every `JIRA_*` below is required except the statuses, `JIRA_ALLOW_RESTRICTED_ISSUES`, and one of the two trust lists. Compose and the chart set these from `integrations.jira`. |
+| `JIRA_ENABLED` | | `true` turns on Jira and `POST /webhook/jira`. Unset, empty or `false` is off; anything else fails startup. With it on, every `JIRA_*` below is required except the trust lists, the statuses and `JIRA_ALLOW_RESTRICTED_ISSUES`. Compose and the chart set these from `integrations.jira`. |
 | `JIRA_SITE_URL`, `JIRA_CLOUD_ID` | | The site's `https` origin and its cloud ID (a UUID). |
 | `JIRA_BOT_EMAIL`, `JIRA_BOT_ACCOUNT_ID`, `JIRA_BOT_NAME` | | The service account's email, account ID and display name. |
 | `JIRA_PROJECT_KEYS` | | The project keys devbox acts in. Comma- or space-separated. |
-| `JIRA_TRUSTED_GROUPS` | | Jira groups whose members are trusted. Comma-separated only: group names may hold spaces. |
+| `JIRA_TRUSTED_GROUPS` | | Jira groups whose members are trusted. Comma-separated only: group names may hold spaces. Unset, with `JIRA_TRUSTED_USERS` unset too: everyone with access to the site is trusted. |
 | `JIRA_TRUSTED_USERS` | | Account IDs that are trusted. Comma- or space-separated. |
 | `JIRA_STATUS_STARTED`, `JIRA_STATUS_DONE`, `JIRA_STATUS_FAILED` | | The statuses devbox moves an issue to. Unset: no move. |
 | `JIRA_TOKEN_EXPIRES_AT` | | When the API token expires, an ISO date such as `2027-01-31`. |
@@ -870,8 +870,9 @@ trust. There are no defaults, and with nothing configured it reads none.
   ([customizing.md](kubernetes/customizing.md#integrations)).
 
 With the GitHub App, the trust lists also decide whose `@mentions` and
-reviews reach the agent ([docs/github.md](github.md#trust-lists)). Jira has
-its own trust lists, `integrations.jira.trustedGroups` and `trustedUsers`
+reviews reach the agent ([docs/github.md](github.md#trust-lists)). Jira
+trusts everyone with access to the site unless its own lists,
+`integrations.jira.trustedGroups` and `trustedUsers`, narrow it
 ([docs/jira.md](jira.md#trust)).
 
 In the quickstart, none of these is set. Follow-ups come from
