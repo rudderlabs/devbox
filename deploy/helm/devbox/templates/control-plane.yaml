@@ -155,8 +155,7 @@ spec:
             {{- end }}
             {{- end }}
             {{- /* Jira's settings, only when it is on; its two secrets come from the
-            integrations Secret below. Lists are comma-joined: group names may
-            hold spaces, never commas. */}}
+            integrations Secret below. Lists are comma-joined. */}}
             {{- if $jira.enabled }}
             {{- $statuses := $jira.statuses | default dict }}
             - { name: JIRA_ENABLED, value: "true" }
@@ -166,12 +165,6 @@ spec:
             - { name: JIRA_BOT_ACCOUNT_ID, value: {{ $jira.botAccountId | quote }} }
             - { name: JIRA_BOT_NAME, value: {{ $jira.botName | quote }} }
             - { name: JIRA_PROJECT_KEYS, value: {{ join "," $jira.projectKeys | quote }} }
-            {{- with $jira.trustedGroups }}
-            - { name: JIRA_TRUSTED_GROUPS, value: {{ join "," . | quote }} }
-            {{- end }}
-            {{- with $jira.trustedUsers }}
-            - { name: JIRA_TRUSTED_USERS, value: {{ join "," . | quote }} }
-            {{- end }}
             {{- with $statuses.started }}
             - { name: JIRA_STATUS_STARTED, value: {{ . | quote }} }
             {{- end }}

@@ -72,7 +72,6 @@ const JIRA_ON: Integrations = {
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
     projectKeys: ["ENG"],
-    trustedGroups: ["jira-software-users"],
     tokenExpiresAt: "2027-06-30",
   },
 };

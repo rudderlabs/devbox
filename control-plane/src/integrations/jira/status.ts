@@ -1,8 +1,7 @@
-import { HttpError, withTimeout } from "../http";
+import { errorClass, HttpError, withTimeout } from "../http";
 import type { Logger } from "../types";
-import { GROUPS_PERMISSION, type JiraClient, PERMISSIONS } from "./client";
+import { type JiraClient, PERMISSIONS } from "./client";
 import type { JiraConfig } from "./config";
-import { errorClass, type JiraTrust, type TrustStatus } from "./trust";
 
 // Status calls may wait longer than the webhook's reads.
 const STATUS_TIMEOUT_MS = 5_000;
@@ -20,9 +19,6 @@ export type JiraIntegrationStatus = {
   bot: { accountId: string; name: string };
   auth: "ok" | "rejected" | "unknown";
   tokenDaysLeft: number;
-  // missingPermissions: the global permission trust by group needs, when
-  // groups are trusted and Jira says the bot lacks it.
-  trust: TrustStatus & { missingPermissions?: string[] };
   projects: Record<string, ProjectHealth>;
   lastReplyFailure: { status: number | null; at: string } | null; // status null: no HTTP answer
 };
@@ -40,7 +36,6 @@ export class JiraStatusService {
   constructor(
     private readonly cfg: JiraConfig,
     private readonly client: Pick<JiraClient, "myself" | "myPermissions" | "projectStatuses">,
-    private readonly trust: Pick<JiraTrust, "status">,
     private readonly log: Pick<Logger, "warn">,
     private readonly now: () => number = Date.now,
   ) {}
@@ -62,11 +57,7 @@ export class JiraStatusService {
 
   async status(): Promise<JiraIntegrationStatus> {
     this.warnIfTokenExpiring();
-    const [auth, projects, groupsPermission] = await Promise.all([
-      this.auth(),
-      this.projects(),
-      this.holdsGroupsPermission(),
-    ]);
+    const [auth, projects] = await Promise.all([this.auth(), this.projects()]);
     return {
       configured: true,
       lastWebhookAt:
@@ -74,10 +65,6 @@ export class JiraStatusService {
       bot: { accountId: this.cfg.botAccountId, name: this.cfg.botName },
       auth,
       tokenDaysLeft: this.tokenDaysLeft(),
-      trust: {
-        ...this.trust.status(),
-        ...(groupsPermission === false ? { missingPermissions: [GROUPS_PERMISSION] } : {}),
-      },
       projects,
       lastReplyFailure: this.lastReplyFailure,
     };
@@ -89,21 +76,6 @@ export class JiraStatusService {
       return "ok";
     } catch (err) {
       return err instanceof HttpError && err.status === 401 ? "rejected" : "unknown";
-    }
-  }
-
-  // Whether the bot holds the global permission that reading a person's
-  // groups needs. Undefined without trusted groups, or when the check fails:
-  // only a permission Jira says is missing is reported.
-  private async holdsGroupsPermission(): Promise<boolean | undefined> {
-    if (this.cfg.trustedGroups.length === 0) return undefined;
-    try {
-      const held = await withTimeout(STATUS_TIMEOUT_MS, (signal) =>
-        this.client.myPermissions(undefined, [GROUPS_PERMISSION], signal),
-      );
-      return held[GROUPS_PERMISSION] === true;
-    } catch {
-      return undefined;
     }
   }
 

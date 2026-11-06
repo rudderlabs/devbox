@@ -68,8 +68,6 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | integrations.jira.statuses.failed | string | `""` | The status devbox moves an issue to when the task fails. Empty: no move. |
 | integrations.jira.statuses.started | string | `""` | The status devbox moves an issue to when it starts work. Empty: no move. |
 | integrations.jira.tokenExpiresAt | string | `""` | Required when enabled: when the API token expires (YYYY-MM-DD). |
-| integrations.jira.trustedGroups | list | `[]` | Jira groups whose members may assign issues to devbox and ask it to follow up; the service account then needs the global permission Browse users and groups. Leave this and trustedUsers empty to trust every person with access to the site (never app or customer accounts). |
-| integrations.jira.trustedUsers | list | `[]` | Account IDs of people who may assign issues to devbox and ask it to follow up, besides any groups' members. Leave this and trustedGroups empty to trust every person with access to the site. |
 | integrations.linear.clientId | string | `""` | Required when enabled: the Linear app's client ID; set by bun run linear:setup. |
 | integrations.linear.enabled | bool | `false` | Turns Linear on (LINEAR_ENABLED). Its secrets go in the integrations Secret. |
 | integrations.slack.channelId | string | `""` | Required when enabled: the Slack channel ID. |

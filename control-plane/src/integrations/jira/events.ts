@@ -155,6 +155,15 @@ export function isNonHuman(actor: JiraActor): boolean {
   return actor.accountType === "app" || actor.accountType === "customer";
 }
 
+// Whether an account may drive devbox. As in a Linear workspace, every person
+// on the site may: only accounts with access to the site act there, and the
+// webhook is signed. Only an account Jira marks as a person's ("atlassian")
+// counts, so apps, customers and an account of unknown type never do, and
+// neither does the bot.
+export function isTrusted(actor: JiraActor, botAccountId: string): boolean {
+  return actor.accountType === "atlassian" && actor.accountId !== botAccountId;
+}
+
 function readActor(v: unknown): JiraActor | null {
   const r = record(v);
   if (typeof r?.accountId !== "string" || !ACCOUNT_ID.test(r.accountId)) return null;

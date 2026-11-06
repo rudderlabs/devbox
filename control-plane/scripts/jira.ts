@@ -1,7 +1,6 @@
 // The Jira integration:
 //   bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
 //                      [--email <address>] [--projects <KEY,…>]
-//                      [--trusted-groups <names>] [--trusted-users <ids>]
 //                      [--token-expires <YYYY-MM-DD>] [--no-keychain]
 //   bun run jira:status  [--target <file>] [--no-keychain]
 //   bun run jira:disable [--target <file>] [--no-keychain] [--forget [--yes]]
@@ -30,7 +29,6 @@ const COMMANDS = ["setup", "status", "disable"];
 const USAGE = `Usage:
   bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
                      [--email <address>] [--projects <KEY,…>]
-                     [--trusted-groups <names>] [--trusted-users <ids>]
                      [--token-expires <YYYY-MM-DD>] [--no-keychain]
 
 Connects devbox to a Jira Cloud site through a service account: checks its
@@ -56,9 +54,6 @@ in Jira yourself.
   --site <url>             the Jira site, e.g. https://example.atlassian.net
   --email <address>        the service account's email
   --projects <KEY,…>       the project keys devbox works in, e.g. ENG
-  --trusted-groups <names> only these Jira groups' members may assign issues to
-                           devbox (default: everyone with access to the site)
-  --trusted-users <ids>    account ids of people who may, besides any groups
   --token-expires <date>   when the API token expires, e.g. 2027-01-31
   --no-keychain            never read or write the system keychain
   --forget                 disable: delete the configuration and saved secrets
@@ -75,8 +70,6 @@ const SETUP_FLAGS = {
   site: { type: "string" },
   email: { type: "string" },
   projects: { type: "string" },
-  "trusted-groups": { type: "string" },
-  "trusted-users": { type: "string" },
   "token-expires": { type: "string" },
   "no-keychain": { type: "boolean" },
   help: { type: "boolean", short: "h" },
@@ -124,8 +117,6 @@ async function main(command: string | undefined, argv: string[]): Promise<number
           site: values.site,
           email: values.email,
           projects: values.projects,
-          trustedGroups: values["trusted-groups"],
-          trustedUsers: values["trusted-users"],
           tokenExpires: values["token-expires"],
         },
         {

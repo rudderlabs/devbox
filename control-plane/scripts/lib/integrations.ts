@@ -36,9 +36,7 @@ export type GithubAppIntegration = {
 export type PendingGithubApp = { appId: number; slug: string; org?: string; publicUrl?: string };
 // Jira Cloud through a service account. botAccountId and botName are what
 // GET /myself answered at setup; statuses are the names devbox moves an issue
-// to (an absent one means no move); trustedGroups and trustedUsers (account
-// ids) narrow who may drive devbox, which without them is every person on
-// the site.
+// to (an absent one means no move).
 export type JiraIntegration = {
   enabled: boolean;
   siteUrl?: string;
@@ -47,8 +45,6 @@ export type JiraIntegration = {
   botAccountId?: string;
   botName?: string;
   projectKeys?: string[];
-  trustedGroups?: string[];
-  trustedUsers?: string[];
   statuses?: JiraStatuses;
   // The API token's expiry, YYYY-MM-DD.
   tokenExpiresAt?: string;
@@ -278,7 +274,7 @@ function parsePending(raw: unknown, fail: Fail): PendingGithubApp {
 
 // The shapes the control plane accepts (src/integrations/jira/config.ts).
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
+const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
 export const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\S*)?$/;
 
@@ -311,8 +307,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
       "botAccountId",
       "botName",
       "projectKeys",
-      "trustedGroups",
-      "trustedUsers",
       "statuses",
       "tokenExpiresAt",
       "allowRestrictedIssues",
@@ -379,17 +373,8 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     shaped(isJiraDate, "a date such as 2027-01-31"),
     fail,
   );
-  // Only commas separate group names in JIRA_TRUSTED_GROUPS; names may hold spaces.
   const optional = <T>(key: string, parse: (v: unknown, field: string) => T): T | undefined =>
     b.obj[key] === undefined ? undefined : parse(b.obj[key], `${f}.${key}`);
-  const trustedGroups = optional(
-    "trustedGroups",
-    strings((s) => s.trim() !== "" && !s.includes(","), "group names without commas", false),
-  );
-  const trustedUsers = optional(
-    "trustedUsers",
-    strings((s) => JIRA_ACCOUNT_ID.test(s), "Jira account ids", false),
-  );
   const statuses = optional("statuses", (v, field) => {
     if (!isObject(v)) return fail(`${field}: must be an object`);
     onlyKeys(v, ["started", "done", "failed"], field, fail);
@@ -410,8 +395,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     ...(botAccountId !== undefined ? { botAccountId } : {}),
     ...(botName !== undefined ? { botName } : {}),
     ...(projectKeys !== undefined ? { projectKeys } : {}),
-    ...(trustedGroups !== undefined ? { trustedGroups } : {}),
-    ...(trustedUsers !== undefined ? { trustedUsers } : {}),
     ...(statuses !== undefined ? { statuses } : {}),
     ...(tokenExpiresAt !== undefined ? { tokenExpiresAt } : {}),
     ...(allowRestricted !== undefined ? { allowRestrictedIssues: allowRestricted } : {}),

@@ -34,9 +34,7 @@ variable or the fix. Then the status command for the part that fails.
   for 60 seconds; if it still fails, run the command again a little later.
 - Assigning a Jira issue does nothing: read the control plane's log for
   `jira_webhook.ignored` and its `reason` (`untrusted` assigner or reporter,
-  `foreign_project`, `restricted_issue`, `non_human`), for
-  `jira_webhook.trust_unresolved` (with trusted groups, group lookups fail:
-  the service account needs Browse users and groups), or for a webhook
+  `foreign_project`, `restricted_issue`, `non_human`), or for a webhook
   signature mismatch.
 - Tables of symptoms: [docs/github.md](../../../docs/github.md#troubleshooting),
   [docs/linear.md](../../../docs/linear.md) and

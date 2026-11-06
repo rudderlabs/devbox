@@ -16,7 +16,6 @@ const PUBLIC = "https://hooks.example.com";
 const SITE = "https://example.atlassian.net";
 const CLOUD = "00000000-0000-0000-0000-000000000000";
 const BOT_ID = "712020:00000000-0000-0000-0000-000000000000";
-const USER_ID = "712020:11111111-1111-1111-1111-111111111111";
 const EMAIL = "devbox@example.com";
 const API = `https://api.atlassian.com/ex/jira/${CLOUD}/rest/api/3`;
 const COMPOSE: Deployment = { kind: "compose" };
@@ -45,13 +44,6 @@ const PROJECTS_Q =
 const STARTED_Q =
   "Status devbox moves an issue to when it starts work [In Progress] (- for none): ";
 const DONE_Q = "Status devbox moves an issue to when it finishes [Done] (- for none): ";
-const GROUPS_Q =
-  "Jira groups whose members may assign issues to devbox, comma-separated (Enter for everyone with access to the site): ";
-const USERS_Q = "Account ids of other people who may, comma-separated (Enter for none): ";
-const ONLY_USERS_Q =
-  "Account ids of the only people who may, comma-separated (Enter for everyone with access to the site): ";
-const SITE_TRUST =
-  "Trust: everyone with access to the site (narrow it with --trusted-groups or --trusted-users)";
 const EXPIRY_Q =
   "When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): ";
 const WEBHOOK_Q =
@@ -67,13 +59,11 @@ const TOKEN_HINT = [
   `  ${ADMIN}`,
 ];
 const WEBHOOKS = `${SITE}/plugins/servlet/webhooks`;
-const GLOBAL_PAGE = `${SITE}/secure/admin/GlobalPermissions!default.jspa`;
 const permissionsPage = (key: string) =>
   `${SITE}/plugins/servlet/project-config/${key}/permissions`;
 const ACT_AS = `devbox will act as devbox (account ${BOT_ID}) on ${SITE}`;
 const rejected = (email = EMAIL) =>
   `Jira rejected JIRA_API_TOKEN, or the email ${email} doesn't match it (401): use the service account's API token, with scopes read:jira-work, write:jira-work and read:jira-user, and the service account's email`;
-const GLOBAL_PERMISSIONS = `${API}/mypermissions?permissions=USER_PICKER`;
 const LONG_SECRET = "my-webhook-secret-".repeat(2);
 const webhookBlock = (secret: string, keys = '"ENG"') => [
   "The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):",
@@ -99,7 +89,6 @@ const JIRA: JiraIntegration = {
   botAccountId: BOT_ID,
   botName: "devbox",
   projectKeys: ["ENG"],
-  trustedGroups: ["jira-software-users"],
   statuses: { started: "In Progress", done: "Done" },
   tokenExpiresAt: "2027-06-30",
 };
@@ -131,8 +120,6 @@ function harness(o: {
   hidden?: string[];
   save?: boolean;
   validTokens?: string[];
-  // The global permissions the bot holds.
-  globalHeld?: string[];
   // Per project: the permissions the bot holds and the statuses of its workflow.
   projects?: Record<string, { held?: string[]; statuses?: string[] }>;
   isTTY?: boolean;
@@ -162,12 +149,6 @@ function harness(o: {
     }
     if (url === `${API}/myself`) {
       return Response.json({ accountId: BOT_ID, accountType: "app", displayName: "devbox" });
-    }
-    if (url === GLOBAL_PERMISSIONS) {
-      const held = o.globalHeld ?? ["USER_PICKER"];
-      return Response.json({
-        permissions: Object.fromEntries(held.map((k) => [k, { havePermission: true }])),
-      });
     }
     const perms = /\/mypermissions\?projectKey=(\w+)/.exec(url)?.[1];
     const statuses = /\/project\/(\w+)\/statuses$/.exec(url)?.[1];
@@ -249,15 +230,14 @@ const FLAGS: SetupOptions = {
   site: SITE,
   email: EMAIL,
   projects: "eng",
-  trustedGroups: "jira-software-users",
   tokenExpires: "2027-06-30",
 };
 
 describe("jira setup", () => {
   it("first run on Compose: every question in order, write, save, the webhook, next step", async () => {
     const { d, deps, w } = harness({
-      // URL, site, email, projects, started, done, groups, users, expiry, show.
-      lines: [PUBLIC, SITE, EMAIL, "eng", "", "", "jira-software-users", "", "2027-06-30", ""],
+      // URL, site, email, projects, started, done, expiry, show.
+      lines: [PUBLIC, SITE, EMAIL, "eng", "", "", "2027-06-30", ""],
       hidden: ["jira-token", ""],
     });
     // What was logged and opened before the email was asked for.
@@ -278,8 +258,6 @@ describe("jira setup", () => {
       PROJECTS_Q,
       STARTED_Q,
       DONE_Q,
-      GROUPS_Q,
-      USERS_Q,
       EXPIRY_Q,
       WEBHOOK_Q,
       SAVE_BOTH_Q,
@@ -495,7 +473,7 @@ describe("jira setup", () => {
     expect(w.log).not.toContain(TOKEN_HINT[0]);
   });
 
-  it("rotation: a new token asks for its expiry, flags change settings", async () => {
+  it("rotation: a new token asks for its expiry, the other settings kept", async () => {
     const { d, deps, w } = harness({
       jira: { ...JIRA, allowRestrictedIssues: true },
       saved: { "compose/JIRA_API_TOKEN": "old-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
@@ -503,14 +481,13 @@ describe("jira setup", () => {
       hidden: ["jira-token"],
       lines: ["2026-11-10"],
     });
-    await setup(d, { trustedUsers: USER_ID }, deps);
+    await setup(d, {}, deps);
     expect(w.asked).toEqual([KEEP_TOKEN_Q, EXPIRY_Q, SAVE_TOKEN_Q]);
     expect(w.log).toContain(
       "warning: the Jira API token expires in 6 days (2026-11-10): create a new one for the service account, then run bun run jira:setup",
     );
     expect((readJson(d.configPath).integrations as { jira: JiraIntegration }).jira).toEqual({
       ...JIRA,
-      trustedUsers: [USER_ID],
       tokenExpiresAt: "2026-11-10",
       allowRestrictedIssues: true,
     });
@@ -583,86 +560,25 @@ describe("jira setup", () => {
     expect(ok.w.log).toEqual(expect.arrayContaining(webhookBlock("the secret you entered")));
   });
 
-  it("trusted groups: warns when the bot lacks Browse users and groups; trusted users only: no check", async () => {
-    const env = { JIRA_API_TOKEN: "jira-token", JIRA_WEBHOOK_SECRET: "whsec" };
-    const groups = harness({ isTTY: false, env, globalHeld: [] });
-    await setup(groups.d, FLAGS, groups.deps);
-    expect(groups.w.fetched).toContain(GLOBAL_PERMISSIONS);
-    expect(groups.w.log).toContain(
-      "warning: the bot lacks USER_PICKER (the global permission Browse users and groups, needed to trust groups): grant it to a group the service account is in (Jira Settings → System → Global permissions)",
-    );
-
-    const users = harness({ isTTY: false, env, globalHeld: [] });
-    const { trustedGroups: _, ...rest } = FLAGS;
-    await setup(users.d, { ...rest, trustedUsers: USER_ID }, users.deps);
-    expect(users.w.fetched).not.toContain(GLOBAL_PERMISSIONS);
-    expect(users.w.log.some((l) => l.includes("USER_PICKER"))).toBe(false);
-  });
-
-  it("no trust answer: everyone with access to the site, without the Browse users and groups check", async () => {
-    const { trustedGroups: _, ...noTrust } = JIRA;
-    const typed = harness({
-      // URL, site, email, projects, started, done, groups, users, expiry, show.
-      lines: [PUBLIC, SITE, EMAIL, "eng", "", "", "", "", "2027-06-30", ""],
-      hidden: ["jira-token", ""],
-      globalHeld: [],
-    });
-    await setup(typed.d, {}, typed.deps);
-    expect(typed.w.asked.slice(7, 9)).toEqual([GROUPS_Q, ONLY_USERS_Q]);
-
-    const env = { JIRA_API_TOKEN: "jira-token", JIRA_WEBHOOK_SECRET: "whsec" };
-    const headless = harness({ isTTY: false, env, globalHeld: [] });
-    const { trustedGroups: __, ...noFlag } = FLAGS;
-    await setup(headless.d, noFlag, headless.deps);
-    expect(headless.w.asked).toEqual([]);
-
-    for (const { d, w } of [typed, headless]) {
-      expect(w.log).toContain(SITE_TRUST);
-      expect(w.fetched).not.toContain(GLOBAL_PERMISSIONS);
-      expect(w.log.some((l) => l.includes("USER_PICKER"))).toBe(false);
-      expect((readJson(d.configPath).integrations as { jira: unknown }).jira).toEqual(noTrust);
-    }
-
-    // A re-run keeps it without asking; flags narrow it.
-    const again = harness({ jira: noTrust, isTTY: true, env });
-    await setup(again.d, {}, again.deps);
-    expect(again.w.asked).toEqual([]);
-    expect(again.w.log).toContain(SITE_TRUST);
-    const narrowed = harness({ jira: noTrust, isTTY: false, env });
-    await setup(narrowed.d, { trustedGroups: "jira-software-users" }, narrowed.deps);
-    expect((readJson(narrowed.d.configPath).integrations as { jira: unknown }).jira).toEqual(JIRA);
-
-    // Empty flags switch a narrowed config back to the site.
-    const reset = harness({ jira: { ...JIRA, trustedUsers: [USER_ID] }, isTTY: false, env });
-    await setup(reset.d, { trustedGroups: "", trustedUsers: "" }, reset.deps);
-    expect((readJson(reset.d.configPath).integrations as { jira: unknown }).jira).toEqual(noTrust);
-    expect(reset.w.log).toContain(SITE_TRUST);
-  });
-
   it("opens the permissions pages a failing check points to, the first project's only", async () => {
     const opts = {
       jira: JIRA,
       saved: { "compose/JIRA_API_TOKEN": "jira-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
       hidden: [""],
-      globalHeld: [],
       projects: { ENG: { held: ["BROWSE_PROJECTS"] }, DEV: {} },
     };
     const projects = "ENG,OPS,DEV";
     const tty = harness(opts);
     await setup(tty.d, { projects }, tty.deps);
-    expect(tty.w.opened).toEqual([permissionsPage("ENG"), GLOBAL_PAGE]);
+    expect(tty.w.opened).toEqual([permissionsPage("ENG")]);
     for (const line of [
       `warning: project OPS: the bot can't see this project: check the key, and give the bot access to it`,
       `  ${permissionsPage("ENG")}`,
       `  ${permissionsPage("OPS")}`,
-      `  ${GLOBAL_PAGE}`,
     ]) {
       expect(tty.w.log).toContain(line);
     }
     expect(tty.w.log).not.toContain(`  ${permissionsPage("DEV")}`);
-    // The groups warning comes right before its page.
-    const at = tty.w.log.indexOf(`  ${GLOBAL_PAGE}`);
-    expect(tty.w.log[at - 1]).toStartWith("warning: the bot lacks USER_PICKER");
 
     // Without a terminal: the same links, nothing opened.
     const headless = harness({ ...opts, isTTY: false });
@@ -671,12 +587,6 @@ describe("jira setup", () => {
     expect(headless.w.log.filter((l) => l.startsWith(`  ${SITE}/`))).toEqual(
       tty.w.log.filter((l) => l.startsWith(`  ${SITE}/`)),
     );
-
-    // Trusting no group: no global permissions page.
-    const site = harness({ ...opts, jira: { ...JIRA, trustedGroups: [] } });
-    await setup(site.d, { projects: "DEV" }, site.deps);
-    expect(site.w.opened).toEqual([]);
-    expect(site.w.log.some((l) => l.includes("GlobalPermissions"))).toBe(false);
   });
 
   it("a re-run with a new public URL opens the webhooks page", async () => {
@@ -748,10 +658,6 @@ describe("jira setup", () => {
       [
         { projects: "ENG,my-space" },
         '"MY-SPACE" is not a project key: use the key of each space, e.g. ENG',
-      ],
-      [
-        { trustedUsers: "someone@example.com" },
-        '"someone@example.com" is not a Jira account id: use the id at the end of the person\'s profile URL in Jira',
       ],
       [{ tokenExpires: "next year" }, "the token expiry must be a date such as 2027-01-31"],
       [

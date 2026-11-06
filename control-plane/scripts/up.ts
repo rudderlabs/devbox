@@ -144,8 +144,6 @@ const JIRA_ENV_NAMES = [
   "JIRA_BOT_ACCOUNT_ID",
   "JIRA_BOT_NAME",
   "JIRA_PROJECT_KEYS",
-  "JIRA_TRUSTED_GROUPS",
-  "JIRA_TRUSTED_USERS",
   "JIRA_STATUS_STARTED",
   "JIRA_STATUS_DONE",
   "JIRA_STATUS_FAILED",
@@ -156,8 +154,7 @@ const JIRA_ENV_NAMES = [
 ] as const;
 
 // The Jira values for Compose: every one empty unless `integrations.jira` is
-// enabled, whatever the shell or the secrets say. Lists are comma-joined
-// (group names may hold spaces, never commas).
+// enabled, whatever the shell or the secrets say. Lists are comma-joined.
 export function jiraComposeEnv(
   jira: JiraIntegration | undefined,
   secrets?: JiraSecrets,
@@ -177,8 +174,6 @@ export function jiraComposeEnv(
     JIRA_BOT_ACCOUNT_ID: on.botAccountId,
     JIRA_BOT_NAME: on.botName,
     JIRA_PROJECT_KEYS: on.projectKeys.join(","),
-    JIRA_TRUSTED_GROUPS: (on.trustedGroups ?? []).join(","),
-    JIRA_TRUSTED_USERS: (on.trustedUsers ?? []).join(","),
     JIRA_STATUS_STARTED: on.statuses?.started ?? "",
     JIRA_STATUS_DONE: on.statuses?.done ?? "",
     JIRA_STATUS_FAILED: on.statuses?.failed ?? "",

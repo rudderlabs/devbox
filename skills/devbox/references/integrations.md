@@ -71,8 +71,7 @@ starts a task; comments that `@mention` the bot are follow-ups; replies are
 comments. A Jira admin creates the webhook that `jira:setup` prints. In a
 terminal, setup opens the page each step needs and always prints the link:
 Atlassian Administration for a new token, a failing project's permissions,
-the global permissions when trusted groups lack Browse users and groups, and
-the webhooks page on a first run or with a new webhook secret.
+and the webhooks page on a first run or with a new webhook secret.
 
 ```bash
 bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>] [--projects <KEY,…>]
@@ -86,14 +85,12 @@ bun run jira:status [--target <file>]
 - Secrets: `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET`. Unlike
   `linear:setup`, `jira:setup` uses them from the environment when they are
   set.
-- Trust: by default everyone with access to the site, people only (never
-  apps such as Automation for Jira, or service-desk customer accounts). On a
-  site with Jira Service Management, help-center users who sign in with an
-  Atlassian account count as people: keep service projects out of
-  `projectKeys`, or narrow trust. Both the person who assigns the issue and
-  its reporter must be trusted.
-  `trustedGroups` or `trustedUsers` narrow it; trusting groups needs the
-  global permission Browse users and groups. Untrusted events are ignored
+- Trust: every person with access to the site, as with Linear; never apps
+  such as Automation for Jira, service-desk customer accounts or the bot.
+  There are no trust lists. On a site with Jira Service Management,
+  help-center users who sign in with an Atlassian account count as people:
+  keep service projects out of `projectKeys`. Both the person who assigns the
+  issue and its reporter must be people. Untrusted events are ignored
   silently.
 - When the project keys change, the webhook's JQL in Jira must change too.
 

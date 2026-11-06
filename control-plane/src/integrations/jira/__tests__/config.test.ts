@@ -12,7 +12,6 @@ const JIRA_ENV = {
   JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-4000-8000-0000000000b0",
   JIRA_BOT_NAME: "devbox",
   JIRA_PROJECT_KEYS: "DEMO",
-  JIRA_TRUSTED_GROUPS: "developers",
   JIRA_TOKEN_EXPIRES_AT: "2027-01-31",
   JIRA_API_TOKEN: "jira-test-token",
   JIRA_WEBHOOK_SECRET: "webhook-test-secret",
@@ -39,9 +38,6 @@ describe("parseJiraConfig", () => {
         ...JIRA_ENV,
         JIRA_SITE_URL: "https://example.atlassian.net/",
         JIRA_PROJECT_KEYS: "demo, OPS_2",
-        JIRA_TRUSTED_GROUPS: "developers, Site Admins",
-        JIRA_TRUSTED_USERS:
-          "712020:00000000-0000-4000-8000-000000000001 712020:00000000-0000-4000-8000-000000000002",
         JIRA_STATUS_STARTED: "In Progress",
         JIRA_STATUS_DONE: " In Review ",
         JIRA_TOKEN_EXPIRES_AT: "2027-01-31T12:00:00Z",
@@ -54,11 +50,6 @@ describe("parseJiraConfig", () => {
       botAccountId: "712020:00000000-0000-4000-8000-0000000000b0",
       botName: "devbox",
       projectKeys: ["DEMO", "OPS_2"],
-      trustedGroups: ["developers", "Site Admins"],
-      trustedUsers: [
-        "712020:00000000-0000-4000-8000-000000000001",
-        "712020:00000000-0000-4000-8000-000000000002",
-      ],
       statuses: { started: "In Progress", done: "In Review", failed: undefined },
       tokenExpiresAt: new Date("2027-01-31T12:00:00Z"),
       allowRestrictedIssues: true,
@@ -70,7 +61,6 @@ describe("parseJiraConfig", () => {
   it("JIRA: optional settings default to no transitions and no restricted issues", () => {
     expect(parseJiraConfig(JIRA_ENV)).toMatchObject({
       statuses: { started: undefined, done: undefined, failed: undefined },
-      trustedUsers: [],
       allowRestrictedIssues: false,
     });
   });
@@ -95,28 +85,6 @@ describe("parseJiraConfig", () => {
     }
   });
 
-  it("JIRA: no trust list trusts the site; trusted users alone narrow it", () => {
-    const { JIRA_TRUSTED_GROUPS: _g, ...noGroups } = JIRA_ENV;
-    for (const env of [
-      noGroups,
-      { ...noGroups, JIRA_TRUSTED_GROUPS: " , ", JIRA_TRUSTED_USERS: "" },
-    ]) {
-      expect(parseJiraConfig(env)).toMatchObject({ trustedGroups: [], trustedUsers: [] });
-    }
-    expect(() =>
-      parseJiraConfig({ ...noGroups, JIRA_TRUSTED_USERS: "someone@example.com" }),
-    ).toThrow(new Error("JIRA_TRUSTED_USERS must list Jira account ids"));
-    expect(
-      parseJiraConfig({
-        ...noGroups,
-        JIRA_TRUSTED_USERS: "712020:00000000-0000-4000-8000-000000000001",
-      }),
-    ).toMatchObject({
-      trustedGroups: [],
-      trustedUsers: ["712020:00000000-0000-4000-8000-000000000001"],
-    });
-  });
-
   it.each([
     ["JIRA_SITE_URL", "http://example.atlassian.net", "JIRA_SITE_URL must be an https origin"],
     ["JIRA_SITE_URL", "https://example.atlassian.net/jira", "JIRA_SITE_URL must be an https"],
@@ -124,7 +92,6 @@ describe("parseJiraConfig", () => {
     ["JIRA_SITE_URL", "example.atlassian.net", "JIRA_SITE_URL must be an https origin"],
     ["JIRA_CLOUD_ID", "not-a-uuid", "JIRA_CLOUD_ID must be a UUID"],
     ["JIRA_BOT_ACCOUNT_ID", "bot@example.com", "JIRA_BOT_ACCOUNT_ID is not a Jira account id"],
-    ["JIRA_TRUSTED_USERS", "someone@example.com", "JIRA_TRUSTED_USERS must list Jira account ids"],
     ["JIRA_PROJECT_KEYS", "DEMO, ../x", 'JIRA_PROJECT_KEYS: "../X" is not a Jira project key'],
     ["JIRA_TOKEN_EXPIRES_AT", "next year", "JIRA_TOKEN_EXPIRES_AT must be an ISO date"],
     ["JIRA_TOKEN_EXPIRES_AT", "2027-02-31x", "JIRA_TOKEN_EXPIRES_AT must be an ISO date"],
@@ -134,19 +101,14 @@ describe("parseJiraConfig", () => {
   });
 
   it("JIRA: an error never echoes a secret, email or account id", () => {
-    for (const [name, value] of [
-      ["JIRA_BOT_ACCOUNT_ID", "bot@example.com"],
-      ["JIRA_TRUSTED_USERS", "someone@example.com"],
-    ]) {
-      let message = "";
-      try {
-        parseJiraConfig({ ...JIRA_ENV, [name as string]: value });
-      } catch (err) {
-        message = (err as Error).message;
-      }
-      expect(message).not.toContain(value as string);
-      expect(message).not.toContain("jira-test-token");
+    let message = "";
+    try {
+      parseJiraConfig({ ...JIRA_ENV, JIRA_BOT_ACCOUNT_ID: "bot@example.com" });
+    } catch (err) {
+      message = (err as Error).message;
     }
+    expect(message).not.toContain("bot@example.com");
+    expect(message).not.toContain("jira-test-token");
   });
 
   it("JIRA: no setting reaches a sandbox, secrets included", async () => {
@@ -156,7 +118,6 @@ describe("parseJiraConfig", () => {
     // A scan that finds nothing would pass vacuously.
     expect(names).toContain("JIRA_API_TOKEN");
     expect(names).toContain("JIRA_WEBHOOK_SECRET");
-    expect(names).toContain("JIRA_TRUSTED_GROUPS");
     expect(pickForwardedEnv(Object.fromEntries(names.map((name) => [name, "real"])))).toEqual({});
   });
 });

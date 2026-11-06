@@ -3,7 +3,6 @@ import { DrizzleQueryError } from "drizzle-orm/errors";
 import { logger } from "../../../logger";
 import { HttpError } from "../../http";
 import type { TaskService } from "../../types";
-import { TRUST_RETRY_MS, TRUST_TTL_MS } from "../trust";
 import { isJiraSpec } from "../webhook";
 import {
   assignmentEvent,
@@ -122,8 +121,8 @@ describe("Jira webhook: assignment", () => {
       spec: { kind: "jira_issue", issueId: "10042" },
     });
     expect(isJiraSpec(target.spec)).toBe(true);
-    // The assigner and reporter were looked up; nothing was posted.
-    expect(jiraCalls).toEqual([`userGroups ${HUMAN}`, `userGroups ${REPORTER}`]);
+    // Nothing was looked up or posted.
+    expect(jiraCalls).toEqual([]);
   });
 
   it.each(["restarted", "duplicate"] as const)("answers 200 to a %s assignment", async (result) => {
@@ -146,12 +145,16 @@ describe("Jira webhook: assignment", () => {
     expect(jiraCalls).toEqual([]);
   });
 
+  // Only a person's account is trusted: never an app, a customer, one of
+  // unknown type or the bot, and an issue with neither reporter nor creator
+  // has no author to trust.
   it.each([
-    ["assigner", { actor: user(STRANGER) }, STRANGER],
-    ["reporter", { reporter: user(STRANGER) }, STRANGER],
-    ["reporter", { reporter: null, creator: user(STRANGER) }, STRANGER],
-    ["reporter", { reporter: null, creator: null }, null],
+    ["assigner", { actor: user(STRANGER, "unknown") }, STRANGER],
     ["reporter", { reporter: user(REPORTER, "app") }, REPORTER],
+    ["reporter", { reporter: user(REPORTER, "customer") }, REPORTER],
+    ["reporter", { reporter: user(BOT) }, BOT],
+    ["reporter", { reporter: null, creator: user(REPORTER, "app") }, REPORTER],
+    ["reporter", { reporter: null, creator: null }, null],
   ] as const)("ignores an untrusted %s silently", async (side, opts, accountId) => {
     const { signed, taskCalls, jiraCalls } = setup();
     const res = await signed(assignmentEvent(opts));
@@ -159,22 +162,13 @@ describe("Jira webhook: assignment", () => {
     expect(await res.json()).toEqual({ status: "ignored", reason: "untrusted" });
     expect(ignoredLog()).toEqual({ reason: "untrusted", issueId: "10042", side, accountId });
     expect(taskCalls).toEqual([]);
-    expect(jiraCalls.filter((c) => !c.startsWith("userGroups"))).toEqual([]);
-  });
-
-  it("falls back to a trusted creator when the issue has no reporter", async () => {
-    const { signed, taskCalls } = setup();
-    await signed(assignmentEvent({ reporter: null, creator: user(REPORTER) }));
-    expect(taskCalls.map((c) => c.method)).toEqual(["assign"]);
-  });
-
-  it("trusts a listed account without a lookup", async () => {
-    const { signed, taskCalls, jiraCalls } = setup({
-      cfg: { trustedGroups: [], trustedUsers: [HUMAN, REPORTER] },
-    });
-    await signed(assignmentEvent());
-    expect(taskCalls.map((c) => c.method)).toEqual(["assign"]);
     expect(jiraCalls).toEqual([]);
+  });
+
+  it("falls back to a person who created the issue when it has no reporter", async () => {
+    const { signed, taskCalls } = setup();
+    await signed(assignmentEvent({ reporter: null, creator: user(STRANGER) }));
+    expect(taskCalls.map((c) => c.method)).toEqual(["assign"]);
   });
 
   it("ignores an issue with a security level unless restricted issues are allowed", async () => {
@@ -220,100 +214,8 @@ describe("Jira webhook: assignment", () => {
   });
 });
 
-describe("Jira webhook: no trust list, so every person on the site", () => {
-  const site = { cfg: { trustedGroups: [], trustedUsers: [] } };
-  // No group is ever looked up.
-  const lookups = (calls: string[]) => calls.filter((c) => c.startsWith("userGroups"));
-
-  it("starts a task for a person's assignment of a person's issue, groups aside", async () => {
-    const { signed, taskCalls, jiraCalls } = setup(site);
-    const res = await signed(assignmentEvent({ actor: user(STRANGER), reporter: user(STRANGER) }));
-    expect(await res.json()).toEqual({ status: "ok" });
-    expect(taskCalls.map((c) => c.method)).toEqual(["assign"]);
-    expect(lookups(jiraCalls)).toEqual([]);
-  });
-
-  it.each([
-    ["an app assigner", { actor: user(HUMAN, "app") }, "non_human", {}],
-    ["a customer assigner", { actor: user(HUMAN, "customer") }, "non_human", {}],
-    ["an app reporter", { reporter: user(REPORTER, "app") }, "untrusted", { side: "reporter" }],
-    [
-      "a customer reporter",
-      { reporter: user(REPORTER, "customer") },
-      "untrusted",
-      { side: "reporter" },
-    ],
-    [
-      "an app creator with no reporter",
-      { reporter: null, creator: user(REPORTER, "app") },
-      "untrusted",
-      { side: "reporter" },
-    ],
-  ] as const)("ignores %s", async (_, opts, reason, extra) => {
-    const { signed, taskCalls, jiraCalls } = setup(site);
-    const res = await signed(assignmentEvent(opts));
-    expect(await res.json()).toEqual({ status: "ignored", reason });
-    expect(ignoredLog()).toMatchObject({ reason, ...extra });
-    expect(taskCalls).toEqual([]);
-    expect(lookups(jiraCalls)).toEqual([]);
-  });
-
-  it("takes a person's mention as a follow-up", async () => {
-    const { signed, taskCalls, jiraCalls } = setup(site);
-    await signed(commentEvent("@devbox do it", { author: user(STRANGER) }));
-    expect(taskCalls.map((c) => c.method)).toEqual(["findTask", "enqueueRound"]);
-    expect(lookups(jiraCalls)).toEqual([]);
-  });
-
-  it.each(["app", "customer"])("ignores a mention by an %s account", async (type) => {
-    const { signed, taskCalls } = setup(site);
-    const res = await signed(commentEvent("@devbox do it", { author: user(STRANGER, type) }));
-    expect(await res.json()).toEqual({ status: "ignored", reason: "non_human" });
-    expect(taskCalls).toEqual([]);
-  });
-});
-
-describe("Jira webhook: trust lookup failures", () => {
-  it("answers 503, retries at most once a minute, then serves the last good answer", async () => {
-    let up = false;
-    const lookups: string[] = [];
-    const { signed, taskCalls, clock } = setup({
-      client: {
-        userGroups: async (id: string) => {
-          lookups.push(id);
-          if (!up) throw new HttpError("Jira GET /user/groups failed: HTTP 503", 503);
-          return [{ name: "developers", groupId: null }];
-        },
-      },
-    });
-
-    const res = await signed(assignmentEvent());
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "trust_unresolved" });
-    expect(logged(warn).some(([msg]) => msg === "jira_webhook.trust_unresolved")).toBe(true);
-    expect(lookups).toEqual([HUMAN, REPORTER]);
-
-    // Jira's retry inside the minute: no new lookups, still 503.
-    clock.t += TRUST_RETRY_MS - 1;
-    expect((await signed(assignmentEvent())).status).toBe(503);
-    expect(lookups).toHaveLength(2);
-
-    up = true;
-    clock.t += 1;
-    expect((await signed(assignmentEvent())).status).toBe(200);
-    expect(lookups).toHaveLength(4);
-
-    // Past the TTL with Jira down again: the last answer still counts.
-    up = false;
-    clock.t += TRUST_TTL_MS;
-    expect((await signed(assignmentEvent({ changelogId: "10102" }))).status).toBe(200);
-    expect(lookups).toHaveLength(6);
-    expect(taskCalls.map((c) => c.method)).toEqual(["assign", "assign"]);
-  });
-});
-
 describe("Jira webhook: comment", () => {
-  it("queues a comment round for a trusted mention, replying to the comment", async () => {
+  it("queues a comment round for a person's mention, replying to the comment", async () => {
     const { signed, taskCalls } = setup();
     const res = await signed(commentEvent(`[~accountid:${BOT}] please *also* fix the footer`));
     expect(res.status).toBe(200);
@@ -370,6 +272,7 @@ describe("Jira webhook: comment", () => {
       "restricted_comment",
     ],
     ["a customer's comment", { author: user(HUMAN, "customer") }, "non_human"],
+    ["an app's comment", { author: user(HUMAN, "app") }, "non_human"],
     ["a comment in another project", { project: "OTHER" }, "foreign_project"],
   ] as const)("ignores %s", async (_, opts, reason) => {
     const { signed, taskCalls } = setup();
@@ -421,9 +324,9 @@ describe("Jira webhook: comment", () => {
     expect(taskCalls.map((c) => c.method)).toEqual(["findTask"]);
   });
 
-  it("ignores an untrusted commenter silently", async () => {
+  it("ignores a commenter of unknown account type silently", async () => {
     const { signed, taskCalls, jiraCalls } = setup();
-    const res = await signed(commentEvent("@devbox do it", { author: user(STRANGER) }));
+    const res = await signed(commentEvent("@devbox do it", { author: user(STRANGER, "unknown") }));
     expect(await res.json()).toEqual({ status: "ignored", reason: "untrusted" });
     expect(ignoredLog()).toEqual({
       reason: "untrusted",
@@ -433,7 +336,7 @@ describe("Jira webhook: comment", () => {
       side: "commenter",
     });
     expect(taskCalls).toEqual([]);
-    expect(jiraCalls).toEqual([`userGroups ${STRANGER}`]);
+    expect(jiraCalls).toEqual([]);
   });
 
   it("answers 503 for the bot's issue with no task yet, so Jira retries", async () => {
@@ -467,27 +370,13 @@ describe("Jira webhook: comment", () => {
       expect(logged(warn)).toEqual([]);
     },
   );
-
-  it("answers 503 when the commenter's trust can't be resolved", async () => {
-    const { signed, taskCalls } = setup({
-      client: {
-        userGroups: async () => {
-          throw new Error("timed out after 3000 ms");
-        },
-      },
-    });
-    const res = await signed(commentEvent("@devbox do it"));
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "trust_unresolved" });
-    expect(taskCalls).toEqual([]);
-  });
 });
 
 describe("Jira webhook: logs", () => {
   it("never carry a name or an email", async () => {
     const { signed } = setup();
     await signed(assignmentEvent());
-    await signed(assignmentEvent({ actor: user(STRANGER) }));
+    await signed(assignmentEvent({ actor: user(STRANGER, "unknown") }));
     await signed(assignmentEvent({ actor: user(BOT) }));
     await signed(commentEvent("@devbox x", { visibility: { type: "group", value: "staff" } }));
     await signed(commentEvent("@devbox x"));

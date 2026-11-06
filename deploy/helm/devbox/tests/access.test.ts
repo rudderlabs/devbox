@@ -322,7 +322,6 @@ describe("Jira env", () => {
       JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-0000-0000-000000000000",
       JIRA_BOT_NAME: "devbox",
       JIRA_PROJECT_KEYS: "ENG,OPS",
-      JIRA_TRUSTED_GROUPS: "jira-software-users,Site admins",
       JIRA_STATUS_STARTED: "In Progress",
       JIRA_STATUS_DONE: "Done",
       JIRA_TOKEN_EXPIRES_AT: "2027-06-30",
@@ -333,21 +332,14 @@ describe("Jira env", () => {
   });
 
   it("the optional settings when set", async () => {
-    const env = await jiraEnv(
-      ["integrations.jira.statuses.failed=Blocked", "integrations.jira.allowRestrictedIssues=true"],
-      ['integrations.jira.trustedUsers=["712020:1","712020:2"]'],
-    );
+    const env = await jiraEnv([
+      "integrations.jira.statuses.failed=Blocked",
+      "integrations.jira.allowRestrictedIssues=true",
+    ]);
     expect(env).toMatchObject({
-      JIRA_TRUSTED_USERS: "712020:1,712020:2",
       JIRA_STATUS_FAILED: "Blocked",
       JIRA_ALLOW_RESTRICTED_ISSUES: "true",
     });
-  });
-
-  it("no trust list: neither trust variable renders", async () => {
-    const env = await jiraEnv([], ["integrations.jira.trustedGroups=[]"]);
-    expect(env.JIRA_ENABLED).toBe("true");
-    expect(Object.keys(env).filter((k) => k.startsWith("JIRA_TRUSTED_"))).toEqual([]);
   });
 
   it("off: none of the block renders, settings included", async () => {

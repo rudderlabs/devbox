@@ -741,10 +741,6 @@
                   "value": "ENG,OPS"
                 },
                 {
-                  "name": "JIRA_TRUSTED_GROUPS",
-                  "value": "jira-software-users,Site admins"
-                },
-                {
                   "name": "JIRA_STATUS_STARTED",
                   "value": "In Progress"
                 },

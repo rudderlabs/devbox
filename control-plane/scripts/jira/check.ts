@@ -4,7 +4,7 @@
 // gateway, as the control plane's do. Each failure names the cause and the
 // next action; the token never appears in a message.
 import { HttpError } from "../../src/integrations/http";
-import { GROUPS_PERMISSION, jiraClient, PERMISSIONS } from "../../src/integrations/jira/client";
+import { jiraClient, PERMISSIONS } from "../../src/integrations/jira/client";
 import type { EnabledJira } from "../lib/integrations";
 import { checkWithRetry, offerSave, type Resolved, type ResolverDeps } from "../lib/secrets";
 import { CredentialRejected, type Fetch, PreflightError } from "../up/preflight";
@@ -162,49 +162,13 @@ export async function checkProjects(
   );
 }
 
-// Whether the bot holds Browse users and groups, the global permission that
-// reading a person's groups needs: without it trust by group never resolves.
-// Global permissions are asked for without a project key. A warning when it
-// is missing or can't be read.
-export async function checkGroupsPermission(
-  c: { cloudId: string; email: string },
-  token: string,
-  fetch: Fetch,
-): Promise<string | undefined> {
-  const client = jiraClient({ cloudId: c.cloudId, email: c.email, token }, fetch);
-  try {
-    const held = await client.myPermissions(
-      undefined,
-      [GROUPS_PERMISSION],
-      AbortSignal.timeout(TIMEOUT_MS),
-    );
-    if (held[GROUPS_PERMISSION]) return undefined;
-    return GROUPS_PERMISSION_MISSING;
-  } catch (err) {
-    const why = err instanceof HttpError ? `HTTP ${err.status}` : GATEWAY_UNREACHABLE;
-    return `warning: can't check the bot's global permission ${GROUPS_PERMISSION}: ${why}`;
-  }
-}
-
-export const GRANT_GROUPS_PERMISSION =
-  "grant it to a group the service account is in (Jira Settings → System → Global permissions)";
-
-// Missing permission keys for a message, the ones whose key doesn't say it
-// with what they are for. ASSIGNABLE_USER reads like ASSIGN_ISSUES (assigning
-// others), which devbox doesn't need.
+// Missing permission keys for a message, ASSIGNABLE_USER with what it is
+// for: it reads like ASSIGN_ISSUES (assigning others), which devbox doesn't
+// need.
 export const permissionList = (missing: string[]): string =>
   missing
-    .map((p) =>
-      p === "ASSIGNABLE_USER"
-        ? `${p} (needed to assign issues to the bot)`
-        : p === GROUPS_PERMISSION
-          ? `${p} (the global permission Browse users and groups, needed to trust groups)`
-          : p,
-    )
+    .map((p) => (p === "ASSIGNABLE_USER" ? `${p} (needed to assign issues to the bot)` : p))
     .join(", ");
-
-// checkGroupsPermission's warning when Jira says the bot lacks the permission.
-export const GROUPS_PERMISSION_MISSING = `warning: the bot lacks ${permissionList([GROUPS_PERMISSION])}: ${GRANT_GROUPS_PERMISSION}`;
 
 // Whole days until the token expires (negative once it has), as the control
 // plane counts them.

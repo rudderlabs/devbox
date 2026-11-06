@@ -4,10 +4,10 @@
 // email:token.
 //
 // Every URL is built from config plus values checked here: the cloud id is a
-// UUID, project keys are letters, digits and underscores, issue and
-// transition ids are plain numbers, and account ids are encoded. So no value
-// can add or climb a path segment (encodeURIComponent alone lets "." and ".."
-// through), and nothing from a webhook payload is ever followed as a URL.
+// UUID, project keys are letters, digits and underscores, and issue and
+// transition ids are plain numbers. So no value can add or climb a path
+// segment (encodeURIComponent alone lets "." and ".." through), and nothing
+// from a webhook payload is ever followed as a URL.
 //
 // A non-2xx answer is an HttpError, so integrations/http.ts decides what may
 // be retried (a 429 honours Retry-After). Error messages carry the method,
@@ -18,7 +18,6 @@ import type { AdfDoc } from "./adf";
 
 export type JiraClientConfig = { cloudId: string; email: string; token: string };
 export type JiraUser = { accountId: string; accountType: string; displayName: string };
-export type JiraGroup = { name: string; groupId: string | null };
 export type JiraStatus = { id: string; name: string };
 export type JiraTransition = { id: string; name: string; to: JiraStatus };
 export type JiraIssue = { id: string; key: string; fields: Record<string, unknown> };
@@ -36,10 +35,6 @@ export const PERMISSIONS = [
   "LINK_ISSUES",
   "ASSIGNABLE_USER",
 ];
-
-// The global permission Browse users and groups: GET /user/groups needs it,
-// so trust by group can't read anyone's groups without it.
-export const GROUPS_PERMISSION = "USER_PICKER";
 
 const NUMERIC = /^[1-9]\d{0,14}$/;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/i;
@@ -106,20 +101,6 @@ export function jiraClient(cfg: JiraClientConfig, fetchFn?: Fetch) {
         accountType: str(r.accountType),
         displayName: str(r.displayName),
       };
-    },
-
-    // GET /user/groups: the groups one account is in. Listing a group's
-    // members needs more than the bot's scopes; reading one account's groups
-    // doesn't.
-    async userGroups(accountId: string, signal: AbortSignal): Promise<JiraGroup[]> {
-      const json = await call("GET", `/user/groups?${query({ accountId })}`, signal);
-      return list(json)
-        .map(record)
-        .filter((g) => typeof g.name === "string")
-        .map((g) => ({
-          name: str(g.name),
-          groupId: typeof g.groupId === "string" ? g.groupId : null,
-        }));
     },
 
     // POST /issue/{id}/comment with an ADF body. Returns the new comment's id.

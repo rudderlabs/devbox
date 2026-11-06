@@ -3,7 +3,6 @@ import { MemoryKeychain } from "../lib/keychain";
 import { type Resolved, type ResolverDeps, SecretError } from "../lib/secrets";
 import { CredentialRejected, type Fetch } from "../up/preflight";
 import {
-  checkGroupsPermission,
   checkJira,
   checkJiraBot,
   checkProjects,
@@ -159,31 +158,6 @@ describe("checkProjects", () => {
   });
 });
 
-describe("checkGroupsPermission", () => {
-  const answer = (held: boolean) =>
-    fakeFetch(() => Response.json({ permissions: { USER_PICKER: { havePermission: held } } }));
-
-  it("asks for the global permission without a project; nothing to say when held", async () => {
-    const f = answer(true);
-    expect(await checkGroupsPermission(CFG, "t", f.fetch)).toBeUndefined();
-    expect(f.requests.map((r) => r.url)).toEqual([`${API}/mypermissions?permissions=USER_PICKER`]);
-  });
-
-  it("warns when it is missing, or can't be read", async () => {
-    expect(await checkGroupsPermission(CFG, "t", answer(false).fetch)).toBe(
-      "warning: the bot lacks USER_PICKER (the global permission Browse users and groups, needed to trust groups): grant it to a group the service account is in (Jira Settings → System → Global permissions)",
-    );
-    const refused = fakeFetch(() => new Response("", { status: 400 }));
-    expect(await checkGroupsPermission(CFG, "t", refused.fetch)).toBe(
-      "warning: can't check the bot's global permission USER_PICKER: HTTP 400",
-    );
-    const down = fakeFetch(() => new TypeError("fetch failed"));
-    expect(await checkGroupsPermission(CFG, "t", down.fetch)).toBe(
-      "warning: can't check the bot's global permission USER_PICKER: can't reach api.atlassian.com: check this machine's egress or proxy",
-    );
-  });
-});
-
 describe("token expiry", () => {
   const now = new Date("2026-11-03T12:00:00Z");
 
@@ -213,7 +187,6 @@ describe("checkJiraBot and jiraPreflight", () => {
     botAccountId: BOT_ID,
     botName: "devbox",
     projectKeys: ["ENG"],
-    trustedGroups: ["jira-software-users"],
     tokenExpiresAt: "2027-06-30",
   };
   const NOW = new Date("2026-11-03T12:00:00Z");
@@ -334,11 +307,10 @@ describe("checkJiraBot and jiraPreflight", () => {
     expect(r.keychain.entries()).toEqual(saved);
   });
 
-  it("without trust lists, checks only the token: no Browse users and groups", async () => {
-    const { trustedGroups: _, ...site } = JIRA;
+  it("checks only the token", async () => {
     const r = resolver({ isTTY: false });
     const f = jiraFetch();
-    await jiraPreflight(site, secrets("env"), r.deps, { skip: false, fetch: f.fetch, now: NOW });
+    await jiraPreflight(JIRA, secrets("env"), r.deps, { skip: false, fetch: f.fetch, now: NOW });
     expect(f.requests.map((q) => q.url)).toEqual([`${API}/myself`]);
     expect(r.log).toEqual([`Jira: devbox acts as devbox on ${SITE}`]);
   });

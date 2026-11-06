@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import { parseExperimentalFlags } from "../../services/experimentalFlags";
-import { withTimeout } from "../http";
+import { errorClass, withTimeout } from "../http";
 import type { Logger, ReplyTarget, TaskService } from "../types";
 import type { JiraClient } from "./client";
 import type { JiraConfig } from "./config";
@@ -8,6 +8,7 @@ import {
   delegation,
   isNonHuman,
   issueContext,
+  isTrusted,
   type JiraActor,
   type JiraAssignment,
   type JiraComment,
@@ -15,7 +16,6 @@ import {
   parseComment,
   verifySignature,
 } from "./events";
-import { errorClass, type JiraTrust } from "./trust";
 import { wikiToMarkdown } from "./wiki";
 
 // The issue read on the webhook request is kept short.
@@ -46,11 +46,11 @@ export function commentExternalId(commentId: string): string {
   return `comment:${commentId}`;
 }
 
-// POST /webhook/jira. Answers fast: the only calls out are the cached trust
-// lookup and, when the payload leaves it out, a read of the issue's security
-// level. Jira retries a 5xx, which is how an unresolved trust lookup or a
-// comment that beats its task's creation gets another try. Jira appends
-// ?triggeredByUser= to the URL; it is ignored, the signed body is what counts.
+// POST /webhook/jira. Answers fast: the only call out is, when the payload
+// leaves it out, a read of the issue's security level. Jira retries a 5xx,
+// which is how a comment that beats its task's creation gets another try.
+// Jira appends ?triggeredByUser= to the URL; it is ignored, the signed body is
+// what counts.
 // Untrusted actors are answered 200 and ignored, with a log line by account
 // id and nothing posted, as on GitHub.
 export class JiraWebhookController {
@@ -58,7 +58,6 @@ export class JiraWebhookController {
     private readonly tasks: Pick<TaskService, "assign" | "findTask" | "enqueueRound">,
     private readonly cfg: JiraConfig,
     private readonly client: Pick<JiraClient, "getIssue">,
-    private readonly trust: Pick<JiraTrust, "check">,
     private readonly log: Logger,
     private readonly onSignedWebhook: () => void,
   ) {}
@@ -116,25 +115,17 @@ export class JiraWebhookController {
     const skip = this.skipReason(payload, a.actor);
     if (skip) return this.ignored(c, skip, { ...meta, accountId: a.actor.accountId });
 
-    const reporter = a.reporter ?? issueContext(payload).creator;
-    const [assigner, author] = await Promise.all([
-      this.trust.check(a.actor),
-      reporter ? this.trust.check(reporter) : false,
-    ]);
-    if (assigner === false) {
+    if (!isTrusted(a.actor, cfg.botAccountId)) {
       return this.ignored(c, "untrusted", {
         ...meta,
         side: "assigner",
         accountId: a.actor.accountId,
       });
     }
-    if (author === false) {
+    const reporter = a.reporter ?? issueContext(payload).creator;
+    if (!reporter || !isTrusted(reporter, cfg.botAccountId)) {
       const accountId = reporter?.accountId ?? null;
       return this.ignored(c, "untrusted", { ...meta, side: "reporter", accountId });
-    }
-    if (assigner === "unresolved" || author === "unresolved") {
-      const accountIds = [a.actor.accountId, reporter?.accountId];
-      return this.unavailable(c, "trust_unresolved", { ...meta, accountIds });
     }
 
     const restricted = await this.restricted(a.issueId, a.securityLevel);
@@ -179,9 +170,9 @@ export class JiraWebhookController {
     if (!comment.mentionsBot) return c.json({ status: "ignored" }, 200);
     if (comment.restricted) return this.ignored(c, "restricted_comment", meta);
 
-    const trusted = await this.trust.check(comment.author);
-    if (trusted === false) return this.ignored(c, "untrusted", { ...meta, side: "commenter" });
-    if (trusted === "unresolved") return this.unavailable(c, "trust_unresolved", meta);
+    if (!isTrusted(comment.author, cfg.botAccountId)) {
+      return this.ignored(c, "untrusted", { ...meta, side: "commenter" });
+    }
 
     const task = await this.tasks.findTask(issueId);
     if (!task) {

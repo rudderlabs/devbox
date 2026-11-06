@@ -215,7 +215,7 @@ describe("JiraIntegration deliver", () => {
 });
 
 describe("JiraIntegration status", () => {
-  it("reports auth, token, trust, projects and reply failures without secrets", async () => {
+  it("reports auth, token, projects and reply failures without secrets", async () => {
     const { jira, signed } = setup();
     await signed(assignmentEvent());
     const status = await jira.status();
@@ -225,7 +225,6 @@ describe("JiraIntegration status", () => {
       bot: { accountId: BOT, name: "devbox" },
       auth: "ok",
       tokenDaysLeft: 90,
-      trust: { source: "groups", cachedAccounts: 2 },
       projects: { DEMO: { missingPermissions: ["ASSIGNABLE_USER"], missingStatuses: ["Done"] } },
       lastReplyFailure: null,
     });
@@ -233,32 +232,6 @@ describe("JiraIntegration status", () => {
     for (const secret of [CFG.apiToken, CFG.webhookSecret, CFG.botEmail]) {
       expect(json).not.toContain(secret);
     }
-  });
-
-  it("only with trusted groups, shows Browse users and groups as missing when the bot lacks it", async () => {
-    const asked: Array<string | undefined> = [];
-    const client = {
-      myPermissions: async (key: string | undefined, perms: string[]) => {
-        asked.push(key);
-        return Object.fromEntries(perms.map((p) => [p, key !== undefined]));
-      },
-    };
-    const groups = setup({ client });
-    expect(await groups.jira.status()).toMatchObject({
-      trust: { source: "groups", cachedAccounts: 0, missingPermissions: ["USER_PICKER"] },
-    });
-    expect(asked).toContain(undefined);
-
-    asked.length = 0;
-    const users = setup({ client, cfg: { trustedGroups: [], trustedUsers: [HUMAN] } });
-    const status = await users.jira.status();
-    expect(status.trust).toEqual({ source: "users", cachedAccounts: 0 });
-    expect(asked).toEqual(["DEMO"]);
-
-    asked.length = 0;
-    const site = setup({ client, cfg: { trustedGroups: [], trustedUsers: [] } });
-    expect((await site.jira.status()).trust).toEqual({ source: "site", cachedAccounts: 0 });
-    expect(asked).toEqual(["DEMO"]);
   });
 
   it("shows a rejected token and failures as a class, never upstream text", async () => {

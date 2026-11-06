@@ -1,6 +1,6 @@
 // `bun run jira:status`: what is configured, where each secret would come
-// from, what the running control plane reports (the token, trust, each
-// project, failed and held replies) and whether the webhook URL reaches it.
+// from, what the running control plane reports (the token, each project,
+// failed and held replies) and whether the webhook URL reaches it.
 // Read-only, never prompts, never prints a secret value; a control plane or
 // URL that cannot be reached is reported, not a failure.
 import { deploymentScope } from "../lib/keychain";
@@ -8,12 +8,10 @@ import { errorMessage } from "../lib/knownError";
 import { probeWebhook } from "../lib/probe";
 import { type PeekDeps, peekSecret } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
-import { GRANT_GROUPS_PERMISSION, permissionList, TOKEN_WARN_DAYS } from "./check";
+import { permissionList, TOKEN_WARN_DAYS } from "./check";
 import type { JiraDeployment } from "./deployment";
 
 export const STATUS_PATH = "/api/integrations/jira";
-// Trust without trustedGroups or trustedUsers.
-const EVERYONE = "everyone with access to the site";
 
 type ProjectHealth = { missingPermissions?: string[]; missingStatuses?: string[]; error?: string };
 
@@ -23,12 +21,6 @@ export type JiraStatusBody = {
   bot?: { accountId?: string; name?: string };
   auth?: "ok" | "rejected" | "unknown";
   tokenDaysLeft?: number;
-  trust?: {
-    source?: string;
-    cachedAccounts?: number;
-    lastError?: string;
-    missingPermissions?: string[];
-  };
   projects?: Record<string, ProjectHealth>;
   lastReplyFailure?: { status: number | null; at: string } | null;
   holds?: { heldTasks?: number; oldestHoldAgeMs?: number };
@@ -82,17 +74,6 @@ function controlPlaneLines(d: JiraDeployment, s: JiraStatusBody): string[] {
         : `API token: expires in ${days} days${days < TOKEN_WARN_DAYS ? `: rotate it soon (create a new one, then run ${setup})` : ""}`,
     );
   }
-  if (s.trust?.source === "site") {
-    // Nothing is looked up, so there is no cache or lookup failure to show.
-    lines.push(`Trust: ${EVERYONE}`);
-  } else if (s.trust) {
-    const cached = `${s.trust.cachedAccounts ?? 0} accounts cached`;
-    const failed = s.trust.lastError ? `, last lookup failed: ${s.trust.lastError}` : "";
-    const missing = s.trust.missingPermissions?.length
-      ? `, missing ${permissionList(s.trust.missingPermissions)}: ${GRANT_GROUPS_PERMISSION}`
-      : "";
-    lines.push(`Trust: ${s.trust.source ?? "unknown"}, ${cached}${failed}${missing}`);
-  }
   for (const [key, p] of Object.entries(s.projects ?? {})) lines.push(projectLine(key, p));
   const failure = s.lastReplyFailure;
   if (failure) {
@@ -127,11 +108,6 @@ export async function status(d: JiraDeployment, deps: StatusDeps): Promise<void>
   log(`  site            ${j.siteUrl}`);
   log(`  bot             ${j.botName} (${j.botEmail})`);
   log(`  projectKeys     ${j.projectKeys?.join(", ")}`);
-  const trust = [
-    ...(j.trustedGroups?.length ? [`groups ${j.trustedGroups.join(", ")}`] : []),
-    ...(j.trustedUsers?.length ? [`users ${j.trustedUsers.join(", ")}`] : []),
-  ];
-  log(`  trust           ${trust.join("; ") || EVERYONE}`);
   log(`  tokenExpiresAt  ${j.tokenExpiresAt}`);
   log(`  publicUrl       ${d.publicUrl ?? "not set"}`);
   for (const name of ["JIRA_API_TOKEN", "JIRA_WEBHOOK_SECRET"] as const) {

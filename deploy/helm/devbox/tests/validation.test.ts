@@ -188,21 +188,6 @@ describe("chart validation", () => {
       },
     );
 
-    it("needs no trust list when enabled: without one, the site is trusted", async () => {
-      for (const users of ["[]", '["712020:1"]']) {
-        const r = await helmTemplate([
-          ...BASE,
-          "-f",
-          JIRA,
-          "--set-json",
-          "integrations.jira.trustedGroups=[]",
-          "--set-json",
-          `integrations.jira.trustedUsers=${users}`,
-        ]);
-        expect(r.code).toBe(0);
-      }
-    });
-
     it("a disabled block needs none of them", async () => {
       const r = await helmTemplate([...BASE, "--set", "integrations.jira.siteUrl=https://example.atlassian.net"]);
       expect(r.code).toBe(0);

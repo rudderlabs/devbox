@@ -16,7 +16,6 @@ import { adfComments, adfShortComment } from "./adf";
 import { type JiraClient, jiraClient } from "./client";
 import { type JiraConfig, parseJiraConfig } from "./config";
 import { type JiraIntegrationStatus, JiraStatusService } from "./status";
-import { JiraTrust } from "./trust";
 import { isJiraSpec, JiraWebhookController } from "./webhook";
 
 // How Jira refuses a transition it won't make: a required field or a
@@ -36,7 +35,6 @@ export const jira: IntegrationDefinition<JiraConfig> = {
 export type Client = Pick<
   JiraClient,
   | "myself"
-  | "userGroups"
   | "addComment"
   | "getIssue"
   | "myPermissions"
@@ -55,9 +53,8 @@ export function createJira(
   const now = deps.now ?? Date.now;
   const client =
     deps.client ?? jiraClient({ cloudId: cfg.cloudId, email: cfg.botEmail, token: cfg.apiToken });
-  const trust = new JiraTrust(cfg, (id, signal) => client.userGroups(id, signal), core.log, now);
-  const status = new JiraStatusService(cfg, client, trust, core.log, now);
-  const controller = new JiraWebhookController(core.tasks, cfg, client, trust, core.log, () =>
+  const status = new JiraStatusService(cfg, client, core.log, now);
+  const controller = new JiraWebhookController(core.tasks, cfg, client, core.log, () =>
     status.recordWebhook(),
   );
   return new JiraIntegration(cfg, client, status, controller);

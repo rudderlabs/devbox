@@ -14,11 +14,6 @@ export type JiraConfig = {
   botName: string;
   // Upper-case project keys whose issues devbox acts on.
   projectKeys: string[];
-  // Who may assign the bot or ask it to follow up: members of these groups
-  // (by name, any case) and these account ids. With both empty, every person
-  // on the site (never an app or customer account).
-  trustedGroups: string[];
-  trustedUsers: string[];
   // Status names devbox moves an issue to; an absent one means no transition.
   statuses: { started?: string; done?: string; failed?: string };
   // When the API token expires (Atlassian tokens last at most a year).
@@ -37,12 +32,10 @@ const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\S*)?$/;
 
 // Jira is on only with JIRA_ENABLED=true; then every setting read with need()
-// is required, and each value is checked. JIRA_TRUSTED_GROUPS and
-// JIRA_TRUSTED_USERS are optional: they narrow trust, which is otherwise every
-// person on the site. JIRA_STATUS_STARTED, JIRA_STATUS_DONE and
-// JIRA_STATUS_FAILED are optional. With the switch off the settings are
-// ignored. Errors never echo a secret, an email or an account id. No JIRA_*
-// name is forwarded to sandboxes.
+// is required, and each value is checked. JIRA_STATUS_STARTED,
+// JIRA_STATUS_DONE and JIRA_STATUS_FAILED are optional. With the switch off
+// the settings are ignored. Errors never echo a secret, an email or an
+// account id. No JIRA_* name is forwarded to sandboxes.
 export function parseJiraConfig(env: Record<string, string | undefined>): JiraConfig | undefined {
   if (!parseSwitch(env, "JIRA_ENABLED")) return undefined;
   const missing: string[] = [];
@@ -62,20 +55,11 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
   const expiresAt = need("JIRA_TOKEN_EXPIRES_AT");
   const apiToken = need("JIRA_API_TOKEN");
   const webhookSecret = need("JIRA_WEBHOOK_SECRET");
-  // Group names may hold spaces, so only commas separate them.
-  const trustedGroups = (env.JIRA_TRUSTED_GROUPS ?? "")
-    .split(",")
-    .map((g) => g.trim())
-    .filter(Boolean);
-  const trustedUsers = parseTrustList(env.JIRA_TRUSTED_USERS);
   if (missing.length > 0) throw missingError("JIRA_ENABLED", missing);
 
   if (!UUID.test(cloudId)) throw new Error("JIRA_CLOUD_ID must be a UUID");
   if (!JIRA_ACCOUNT_ID.test(botAccountId)) {
     throw new Error("JIRA_BOT_ACCOUNT_ID is not a Jira account id");
-  }
-  if (!trustedUsers.every((id) => JIRA_ACCOUNT_ID.test(id))) {
-    throw new Error("JIRA_TRUSTED_USERS must list Jira account ids");
   }
   const badKey = projectKeys.find((k) => !JIRA_PROJECT_KEY.test(k));
   if (badKey !== undefined) {
@@ -92,8 +76,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
     botAccountId,
     botName,
     projectKeys,
-    trustedGroups,
-    trustedUsers,
     statuses: {
       started: present(env, "JIRA_STATUS_STARTED"),
       done: present(env, "JIRA_STATUS_DONE"),

@@ -70,24 +70,6 @@ describe("jiraClient: requests", () => {
     expect(String(await rejection(client().myself(signal())))).toContain("no accountId");
   });
 
-  it("encodes the account id when reading its groups", async () => {
-    const accountId = "557058:0f1e2d3c-aaaa-bbbb-cccc-111122223333/../x";
-    const captured = stubFetch(
-      json([
-        { name: "devbox-users", groupId: "aaaaaaaa-0000-4000-8000-000000000001", self: "x" },
-        { name: "legacy", groupId: null },
-        { groupId: "no-name" },
-      ]),
-    );
-    expect(await client().userGroups(accountId, signal())).toEqual([
-      { name: "devbox-users", groupId: "aaaaaaaa-0000-4000-8000-000000000001" },
-      { name: "legacy", groupId: null },
-    ]);
-    expect(captured[0]?.url).toBe(
-      `${BASE}/user/groups?accountId=557058%3A0f1e2d3c-aaaa-bbbb-cccc-111122223333%2F..%2Fx`,
-    );
-  });
-
   it("posts a comment as an ADF body", async () => {
     const captured = stubFetch(json({ id: "10077", body: doc }, 201));
     expect(await client().addComment("10042", doc, signal())).toEqual({ id: "10077" });

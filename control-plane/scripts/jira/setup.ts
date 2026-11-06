@@ -1,6 +1,6 @@
 // `bun run jira:setup`: gathers the Jira settings (the public URL, the site,
-// the service account's email, the project keys, who is trusted and when the
-// API token expires), reads the token, finds the site's cloud id, asks Jira
+// the service account's email, the project keys and when the API token
+// expires), reads the token, finds the site's cloud id, asks Jira
 // whose token it is and what the bot may do in each project, proposes the
 // statuses devbox moves issues to, records the settings in the deployment's
 // config, optionally saves the secrets in the system keychain, and prints the
@@ -16,7 +16,6 @@
 import { writeConfigKeys } from "../lib/configFile";
 import {
   isJiraDate,
-  JIRA_ACCOUNT_ID,
   JIRA_PROJECT_KEY,
   type JiraIntegration,
   type JiraStatuses,
@@ -33,11 +32,9 @@ import {
 } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
 import {
-  checkGroupsPermission,
   checkJira,
   checkProjects,
   cloudIdOf,
-  GROUPS_PERMISSION_MISSING,
   type ProjectCheck,
   permissionList,
   SCOPES,
@@ -55,8 +52,6 @@ export type SetupOptions = {
   site?: string;
   email?: string;
   projects?: string;
-  trustedGroups?: string;
-  trustedUsers?: string;
   tokenExpires?: string;
 };
 
@@ -226,46 +221,6 @@ async function chooseStatuses(ctx: Ctx, checks: ProjectCheck[]): Promise<JiraSta
   return out;
 }
 
-// Who may assign issues to devbox and ask it to follow up: the groups and
-// account ids from the flags, else the configured ones. With none, every
-// person with access to the site. A first run in a terminal asks, and Enter
-// keeps that default.
-async function chooseTrust(ctx: Ctx): Promise<{ groups: string[]; users: string[] }> {
-  const { opts, d, deps } = ctx;
-  let groups =
-    opts.trustedGroups !== undefined ? list(opts.trustedGroups) : (d.jira?.trustedGroups ?? []);
-  let users =
-    opts.trustedUsers !== undefined ? list(opts.trustedUsers) : (d.jira?.trustedUsers ?? []);
-  const flagged = opts.trustedGroups !== undefined || opts.trustedUsers !== undefined;
-  if (!flagged && d.jira === undefined && deps.resolver.isTTY) {
-    const everyone = "Enter for everyone with access to the site";
-    groups = list(
-      await deps.promptLine(
-        `Jira groups whose members may assign issues to devbox, comma-separated (${everyone}): `,
-      ),
-    );
-    users = list(
-      await deps.promptLine(
-        groups.length > 0
-          ? "Account ids of other people who may, comma-separated (Enter for none): "
-          : `Account ids of the only people who may, comma-separated (${everyone}): `,
-      ),
-    );
-  }
-  const bad = users.find((u) => !JIRA_ACCOUNT_ID.test(u));
-  if (bad !== undefined) {
-    throw new SetupError(
-      `"${bad}" is not a Jira account id: use the id at the end of the person's profile URL in Jira`,
-    );
-  }
-  if (groups.length === 0 && users.length === 0) {
-    deps.log(
-      "Trust: everyone with access to the site (narrow it with --trusted-groups or --trusted-users)",
-    );
-  }
-  return { groups, users };
-}
-
 // The token's expiry: --token-expires, else the configured one while the token
 // is not new, else a prompt.
 async function tokenExpiry(ctx: Ctx, newToken: boolean): Promise<string> {
@@ -431,19 +386,7 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   }
   const statuses = await chooseStatuses(ctx, checks);
 
-  // 4. Trust, the token's expiry and the webhook's secret.
-  const trust = await chooseTrust(ctx);
-  if (trust.groups.length > 0) {
-    const warning = await checkGroupsPermission(
-      { cloudId, email: botEmail },
-      token.value,
-      deps.fetch,
-    );
-    if (warning) log(warning);
-    if (warning === GROUPS_PERMISSION_MISSING) {
-      page(ctx, `${siteUrl}/secure/admin/GlobalPermissions!default.jspa`);
-    }
-  }
+  // 4. The token's expiry and the webhook's secret.
   const tokenExpiresAt = await tokenExpiry(ctx, token.source === "prompt");
   const webhook = byo ? undefined : await webhookSecret(ctx);
 
@@ -475,8 +418,6 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
       botAccountId: bot.accountId,
       botName: bot.displayName,
       projectKeys: keys,
-      ...(trust.groups.length > 0 ? { trustedGroups: trust.groups } : {}),
-      ...(trust.users.length > 0 ? { trustedUsers: trust.users } : {}),
       statuses,
       tokenExpiresAt,
       ...(cur?.allowRestrictedIssues !== undefined

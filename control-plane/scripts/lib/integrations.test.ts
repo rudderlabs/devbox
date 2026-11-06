@@ -400,8 +400,6 @@ describe("integrations.jira", () => {
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
     projectKeys: ["ENG", "OPS"],
-    trustedGroups: ["jira-software-users", "Site admins"],
-    trustedUsers: ["712020:11111111-1111-1111-1111-111111111111"],
     statuses: { started: "In Progress", done: "Done", failed: "Blocked" },
     tokenExpiresAt: "2027-06-30",
     allowRestrictedIssues: false,
@@ -438,13 +436,6 @@ describe("integrations.jira", () => {
     }
   });
 
-  it("needs no trust list: without one, every person on the site is trusted", () => {
-    const { trustedGroups: _, trustedUsers: __, ...rest } = JIRA;
-    expect(parseIntegrations({ jira: rest }, fail, K8S).jira).toEqual(rest);
-    const empty = { ...rest, trustedGroups: [], trustedUsers: [] };
-    expect(parseIntegrations({ jira: empty }, fail, COMPOSE).jira).toEqual(empty);
-  });
-
   it("checks each value, also with Jira off", () => {
     const cases: Array<[string, unknown, string]> = [
       [
@@ -463,8 +454,6 @@ describe("integrations.jira", () => {
       ["botName", " ", "must be a non-empty string"],
       ["projectKeys", [], "must be a non-empty list of project keys such as ENG"],
       ["projectKeys", ["eng"], "must be a non-empty list of project keys such as ENG"],
-      ["trustedGroups", ["a,b"], "must be a list of group names without commas"],
-      ["trustedUsers", ["someone@example.com"], "must be a list of Jira account ids"],
       ["statuses", "Done", "must be an object"],
       ["tokenExpiresAt", "soon", "must be a date such as 2027-01-31"],
       ["tokenExpiresAt", "2027-02-30x", "must be a date such as 2027-01-31"],
@@ -484,7 +473,7 @@ describe("integrations.jira", () => {
 
   it("refuses unknown keys, a secret above all", () => {
     expect(failure({ jira: { ...JIRA, apiToken: "t" } })).toBe(
-      'integrations.jira: unknown key "apiToken" (allowed: enabled, siteUrl, cloudId, botEmail, botAccountId, botName, projectKeys, trustedGroups, trustedUsers, statuses, tokenExpiresAt, allowRestrictedIssues)',
+      'integrations.jira: unknown key "apiToken" (allowed: enabled, siteUrl, cloudId, botEmail, botAccountId, botName, projectKeys, statuses, tokenExpiresAt, allowRestrictedIssues)',
     );
     expect(failure({ jira: { ...JIRA, statuses: { review: "In Review" } } })).toBe(
       'integrations.jira.statuses: unknown key "review" (allowed: started, done, failed)',

@@ -7,14 +7,14 @@ import { logger } from "../../../logger";
 import { createWebhookRoutes } from "../../../routes/webhook";
 import type { TaskService } from "../../types";
 import type { AdfDoc } from "../adf";
-import type { JiraGroup, JiraTransition, RemoteLink } from "../client";
+import type { JiraTransition, RemoteLink } from "../client";
 import type { JiraConfig } from "../config";
 import { type Client, createJira } from "../index";
 
 export const BOT = "5e0f1a2b3c4d5e6f7a8b9c0d";
-export const HUMAN = "5c3e2f1a9b8d7c6e5f4a3b21"; // in a trusted group
-export const REPORTER = "5d4c3b2a1f0e9d8c7b6a5f43"; // in a trusted group
-export const STRANGER = "5f6e5d4c3b2a1f0e9d8c7b6a"; // in no trusted group
+export const HUMAN = "5c3e2f1a9b8d7c6e5f4a3b21";
+export const REPORTER = "5d4c3b2a1f0e9d8c7b6a5f43";
+export const STRANGER = "5f6e5d4c3b2a1f0e9d8c7b6a";
 export const SECRET = "webhook-test-secret";
 export const NAME = "Some Person";
 export const EMAIL = "some.person@example.com";
@@ -28,8 +28,6 @@ export const CFG: JiraConfig = {
   botAccountId: BOT,
   botName: "devbox",
   projectKeys: ["DEMO"],
-  trustedGroups: ["developers"],
-  trustedUsers: [],
   statuses: { started: "In Progress", done: "Done" },
   tokenExpiresAt: new Date(NOW + 90 * DAY),
   allowRestrictedIssues: false,
@@ -131,15 +129,9 @@ export const TRANSITIONS: JiraTransition[] = [
 export const sign = (body: string, secret = SECRET) =>
   `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 
-// A fake Jira that records its calls. Everyone is in the site's default
-// group; only some in a trusted one.
+// A fake Jira that records its calls.
 export function fakeClient(calls: string[], posted: Array<{ issueId: string; doc: AdfDoc }>) {
   return {
-    async userGroups(id: string): Promise<JiraGroup[]> {
-      calls.push(`userGroups ${id}`);
-      const groups = [{ name: "jira-users", groupId: null }];
-      return id === STRANGER ? groups : [...groups, { name: "Developers", groupId: null }];
-    },
     async getIssue(id: string, fields: string[]) {
       calls.push(`getIssue ${id} ${fields.join(",")}`);
       return { id, key: "DEMO-7", fields: { security: null } as Record<string, unknown> };
