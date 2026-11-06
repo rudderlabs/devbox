@@ -62,7 +62,6 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | integrations.jira.botName | string | `""` | Required when enabled: the service account's display name, which people @-mention. |
 | integrations.jira.cloudId | string | `""` | Required when enabled: the site's cloud ID (a UUID, from the site's /_edge/tenant_info). |
 | integrations.jira.enabled | bool | `false` | Turns Jira on (JIRA_ENABLED). JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET go in the integrations Secret. Set by bun run jira:setup through bun run k8s:install. Off, none of the block renders. |
-| integrations.jira.projectKeys | list | `[]` | Required when enabled: the keys of the projects devbox works in, for example `ENG`. |
 | integrations.jira.siteUrl | string | `""` | Required when enabled: the site's https origin, for example https://example.atlassian.net. |
 | integrations.jira.statuses.done | string | `""` | The status devbox moves an issue to when it finishes. Empty: no move. |
 | integrations.jira.statuses.failed | string | `""` | The status devbox moves an issue to when the task fails. Empty: no move. |

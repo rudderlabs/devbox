@@ -215,7 +215,7 @@ describe("JiraIntegration deliver", () => {
 });
 
 describe("JiraIntegration status", () => {
-  it("reports auth, token, projects and reply failures without secrets", async () => {
+  it("reports auth, token, permissions and reply failures without secrets", async () => {
     const { jira, signed } = setup();
     await signed(assignmentEvent());
     const status = await jira.status();
@@ -225,7 +225,8 @@ describe("JiraIntegration status", () => {
       bot: { accountId: BOT, name: "devbox" },
       auth: "ok",
       tokenDaysLeft: 90,
-      projects: { DEMO: { missingPermissions: ["ASSIGNABLE_USER"], missingStatuses: ["Done"] } },
+      // Held in no project.
+      permissions: { missing: ["ASSIGNABLE_USER"] },
       lastReplyFailure: null,
     });
     const json = JSON.stringify(status);
@@ -241,13 +242,13 @@ describe("JiraIntegration status", () => {
         myself: async () => {
           throw new HttpError(`Jira GET /myself failed: ${upstream}`, 401);
         },
-        projectStatuses: async () => {
-          throw new HttpError(`Jira GET failed: ${upstream}`, 404);
+        myPermissions: async () => {
+          throw new HttpError(`Jira GET failed: ${upstream}`, 403);
         },
       },
     });
     const status = await jira.status();
-    expect(status).toMatchObject({ auth: "rejected", projects: { DEMO: { error: "http_404" } } });
+    expect(status).toMatchObject({ auth: "rejected", permissions: { error: "http_403" } });
     expect(JSON.stringify(status)).not.toContain("abc123");
   });
 

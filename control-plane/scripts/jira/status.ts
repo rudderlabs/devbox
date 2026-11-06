@@ -1,6 +1,6 @@
 // `bun run jira:status`: what is configured, where each secret would come
-// from, what the running control plane reports (the token, each project,
-// failed and held replies) and whether the webhook URL reaches it.
+// from, what the running control plane reports (the token, the bot's
+// permissions, failed and held replies) and whether the webhook URL reaches it.
 // Read-only, never prompts, never prints a secret value; a control plane or
 // URL that cannot be reached is reported, not a failure.
 import { deploymentScope } from "../lib/keychain";
@@ -13,15 +13,13 @@ import type { JiraDeployment } from "./deployment";
 
 export const STATUS_PATH = "/api/integrations/jira";
 
-type ProjectHealth = { missingPermissions?: string[]; missingStatuses?: string[]; error?: string };
-
 export type JiraStatusBody = {
   configured?: boolean;
   lastWebhookAt?: string | null;
   bot?: { accountId?: string; name?: string };
   auth?: "ok" | "rejected" | "unknown";
   tokenDaysLeft?: number;
-  projects?: Record<string, ProjectHealth>;
+  permissions?: { missing?: string[]; error?: string };
   lastReplyFailure?: { status: number | null; at: string } | null;
   holds?: { heldTasks?: number; oldestHoldAgeMs?: number };
 };
@@ -44,17 +42,6 @@ export async function readStatus(
   }
 }
 
-function projectLine(key: string, p: ProjectHealth): string {
-  if (p.error) return `Project ${key}: can't check (${p.error})`;
-  const problems = [
-    ...(p.missingPermissions?.length ? [`missing ${permissionList(p.missingPermissions)}`] : []),
-    ...(p.missingStatuses?.length
-      ? [`no status ${p.missingStatuses.map((s) => `"${s}"`).join(", ")}`]
-      : []),
-  ];
-  return `Project ${key}: ${problems.length > 0 ? problems.join("; ") : "ok"}`;
-}
-
 // The control plane's view, in a few lines.
 function controlPlaneLines(d: JiraDeployment, s: JiraStatusBody): string[] {
   const setup = `bun run jira:setup${d.flag}`;
@@ -74,7 +61,16 @@ function controlPlaneLines(d: JiraDeployment, s: JiraStatusBody): string[] {
         : `API token: expires in ${days} days${days < TOKEN_WARN_DAYS ? `: rotate it soon (create a new one, then run ${setup})` : ""}`,
     );
   }
-  for (const [key, p] of Object.entries(s.projects ?? {})) lines.push(projectLine(key, p));
+  const p = s.permissions;
+  if (p) {
+    lines.push(
+      p.error
+        ? `Permissions: can't check (${p.error})`
+        : p.missing?.length
+          ? `Permissions: missing ${permissionList(p.missing)} in every project`
+          : "Permissions: ok",
+    );
+  }
   const failure = s.lastReplyFailure;
   if (failure) {
     const what = failure.status === null ? "no answer" : `HTTP ${failure.status}`;
@@ -107,7 +103,6 @@ export async function status(d: JiraDeployment, deps: StatusDeps): Promise<void>
   log(`Jira (${scope})`);
   log(`  site            ${j.siteUrl}`);
   log(`  bot             ${j.botName} (${j.botEmail})`);
-  log(`  projectKeys     ${j.projectKeys?.join(", ")}`);
   log(`  tokenExpiresAt  ${j.tokenExpiresAt}`);
   log(`  publicUrl       ${d.publicUrl ?? "not set"}`);
   for (const name of ["JIRA_API_TOKEN", "JIRA_WEBHOOK_SECRET"] as const) {

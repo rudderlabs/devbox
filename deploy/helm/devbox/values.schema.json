@@ -146,7 +146,6 @@
             "botEmail": { "type": "string" },
             "botAccountId": { "type": "string", "pattern": "^[A-Za-z0-9:_-]{0,128}$" },
             "botName": { "type": "string" },
-            "projectKeys": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" } },
             "statuses": {
               "type": "object",
               "additionalProperties": false,

@@ -27,7 +27,6 @@ export const CFG: JiraConfig = {
   botEmail: "devbox-bot@example.com",
   botAccountId: BOT,
   botName: "devbox",
-  projectKeys: ["DEMO"],
   statuses: { started: "In Progress", done: "Done" },
   tokenExpiresAt: new Date(NOW + 90 * DAY),
   allowRestrictedIssues: false,
@@ -51,7 +50,6 @@ type AssignmentOpts = {
   reporter?: ReturnType<typeof user> | null;
   creator?: ReturnType<typeof user> | null;
   security?: unknown; // "absent" leaves the field out
-  project?: string;
   changelogId?: string;
   issueId?: string;
   issueKey?: string;
@@ -61,7 +59,7 @@ export function assignmentEvent(o: AssignmentOpts = {}) {
   const fields: Record<string, unknown> = {
     summary: "Fix the login page",
     description: `[~accountid:${BOT}] the button is *broken* #devbox:exp:FAST_MODE`,
-    project: { id: "10000", key: o.project ?? "DEMO", name: "Demo" },
+    project: { id: "10000", key: "DEMO", name: "Demo" },
     reporter: o.reporter === undefined ? user(REPORTER) : o.reporter,
     creator: o.creator === undefined ? user(REPORTER) : o.creator,
     assignee: user(BOT, "app"),
@@ -88,7 +86,6 @@ export function assignmentEvent(o: AssignmentOpts = {}) {
 
 type CommentOpts = {
   author?: ReturnType<typeof user>;
-  project?: string;
   visibility?: unknown;
   commentId?: string;
   issueId?: string;
@@ -112,7 +109,7 @@ export function commentEvent(body: string, o: CommentOpts = {}) {
       key: "DEMO-7",
       fields: {
         summary: "Fix the login page",
-        project: { key: o.project ?? "DEMO" },
+        project: { key: "DEMO" },
         assignee: o.assignee === null ? null : user(o.assignee ?? BOT, "app"),
       },
     },
@@ -145,14 +142,8 @@ export function fakeClient(calls: string[], posted: Array<{ issueId: string; doc
       calls.push("myself");
       return { accountId: BOT, accountType: "app", displayName: "devbox" };
     },
-    async myPermissions(_key: string | undefined, perms: string[]) {
+    async myPermissions(perms: string[]) {
       return Object.fromEntries(perms.map((p) => [p, p !== "ASSIGNABLE_USER"]));
-    },
-    async projectStatuses() {
-      return [
-        { id: "1", name: "To Do" },
-        { id: "3", name: "in progress" },
-      ];
     },
     async transitions(id: string) {
       calls.push(`transitions ${id}`);

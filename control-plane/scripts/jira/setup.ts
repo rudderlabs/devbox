@@ -1,13 +1,12 @@
 // `bun run jira:setup`: gathers the Jira settings (the public URL, the site,
-// the service account's email, the project keys and when the API token
-// expires), reads the token, finds the site's cloud id, asks Jira
-// whose token it is and what the bot may do in each project, proposes the
-// statuses devbox moves issues to, records the settings in the deployment's
-// config, optionally saves the secrets in the system keychain, and prints the
-// admin webhook's settings. In a terminal it opens the Atlassian or Jira page
-// a step needs; Jira takes nothing prefilled from a link, so it prints what to
-// do there, and the link too. setup never applies and never touches the
-// cluster.
+// the service account's email and when the API token expires), reads the
+// token, finds the site's cloud id, asks Jira whose token it is and what the
+// bot may do, proposes the statuses devbox moves issues to, records the
+// settings in the deployment's config, optionally saves the secrets in the
+// system keychain, and prints the admin webhook's settings. In a terminal it
+// opens the Atlassian or Jira page a step needs; Jira takes nothing prefilled
+// from a link, so it prints what to do there, and the link too. setup never
+// applies and never touches the cluster.
 // Re-running is safe: a configured setting is kept unless a flag changes it,
 // and a newly entered token asks for its expiry again. The secrets are kept
 // only from the environment or the keychain; otherwise they are asked for
@@ -16,7 +15,6 @@
 import { writeConfigKeys } from "../lib/configFile";
 import {
   isJiraDate,
-  JIRA_PROJECT_KEY,
   type JiraIntegration,
   type JiraStatuses,
   jiraSiteOrigin,
@@ -33,25 +31,21 @@ import {
 import type { Fetch } from "../up/preflight";
 import {
   checkJira,
-  checkProjects,
+  checkPermissions,
   cloudIdOf,
-  type ProjectCheck,
-  permissionList,
   SCOPES,
   tokenDaysLeft,
   tokenExpiryWarning,
-  UNSEEN_PROJECT,
 } from "./check";
 import type { JiraDeployment } from "./deployment";
 
 export class SetupError extends Error {}
 
-// The flags; a comma-separated list for each list.
+// The flags.
 export type SetupOptions = {
   publicUrl?: string;
   site?: string;
   email?: string;
-  projects?: string;
   tokenExpires?: string;
 };
 
@@ -83,13 +77,6 @@ const STATUS_ROLES = [
   { key: "started", proposal: "In Progress", when: "when it starts work" },
   { key: "done", proposal: "Done", when: "when it finishes" },
 ] as const;
-
-const list = (raw: string): string[] =>
-  raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 // The link to a page a step needs, always printed; in a terminal, and unless
 // `open` is false, the browser opens it too.
@@ -154,52 +141,24 @@ async function readToken(ctx: Ctx, found: Resolved | undefined): Promise<Resolve
   );
 }
 
-// The project keys, upper-cased and checked.
-async function projectKeys(ctx: Ctx): Promise<string[]> {
-  const raw = await setting(ctx, {
-    flag: ctx.opts.projects,
-    current: ctx.d.jira?.projectKeys?.join(","),
-    question:
-      "Jira project keys devbox works in, comma-separated (the key of each space, e.g. ENG): ",
-    what: "Jira project keys",
-    flagName: "--projects <KEY,…>",
-  });
-  const keys = [...new Set(list(raw).map((k) => k.toUpperCase()))];
-  const bad = keys.find((k) => !JIRA_PROJECT_KEY.test(k));
-  if (bad !== undefined || keys.length === 0) {
-    throw new SetupError(
-      `${bad === undefined ? "no project key given" : `"${bad}" is not a project key`}: use the key of each space, e.g. ENG`,
-    );
-  }
-  return keys;
-}
-
 // The statuses devbox moves issues to. Proposed only while the config has
-// none: a status every readable project has, "In Progress" when it starts
-// and "Done" when it finishes, which a terminal may change ("-" for none).
-async function chooseStatuses(ctx: Ctx, checks: ProjectCheck[]): Promise<JiraStatuses> {
+// none: "In Progress" when it starts and "Done" when it finishes, which a
+// terminal may change ("-" for none). A project without the status is
+// skipped, with a warning, when devbox moves an issue there.
+async function chooseStatuses(ctx: Ctx): Promise<JiraStatuses> {
   const { deps, d } = ctx;
-  const readable = checks.flatMap((c) => ("error" in c ? [] : [c]));
   const current = d.jira?.statuses;
   const out: JiraStatuses = { ...current };
   if (current === undefined) {
-    const common = (readable[0]?.statuses ?? []).filter((name) =>
-      readable.every((c) => c.statuses.some((s) => sameName(s, name))),
-    );
-    if (deps.resolver.isTTY && common.length > 0) {
-      deps.log(`Statuses every project has: ${common.join(", ")}`);
-    }
     for (const role of STATUS_ROLES) {
-      const proposal = common.find((s) => sameName(s, role.proposal));
-      let chosen = proposal;
+      let chosen: string | undefined = role.proposal;
       if (deps.resolver.isTTY) {
-        const q = `Status devbox moves an issue to ${role.when}`;
         const answer = (
           await deps.promptLine(
-            proposal ? `${q} [${proposal}] (- for none): ` : `${q} (Enter for none): `,
+            `Status devbox moves an issue to ${role.when} [${role.proposal}] (- for none): `,
           )
         ).trim();
-        chosen = answer === "-" ? undefined : answer || proposal;
+        chosen = answer === "-" ? undefined : answer || role.proposal;
       }
       if (chosen) out[role.key] = chosen;
     }
@@ -207,15 +166,8 @@ async function chooseStatuses(ctx: Ctx, checks: ProjectCheck[]): Promise<JiraSta
   for (const role of STATUS_ROLES) {
     if (!out[role.key]) {
       deps.log(
-        `warning: no ${role.key} status: devbox won't move issues ${role.when}. Set integrations.jira.statuses.${role.key} in ${d.configPath} to a status every project has`,
+        `warning: no ${role.key} status: devbox won't move issues ${role.when}. Set integrations.jira.statuses.${role.key} in ${d.configPath}`,
       );
-    }
-  }
-  for (const [key, name] of Object.entries(out)) {
-    for (const c of readable) {
-      if (!c.statuses.some((s) => sameName(s, name))) {
-        deps.log(`warning: project ${c.key} has no status "${name}" (statuses.${key})`);
-      }
     }
   }
   return out;
@@ -366,25 +318,11 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   }
   log(`devbox will act as ${bot.displayName} (account ${bot.accountId}) on ${siteUrl}`);
 
-  // 3. Projects: what the bot may do there, and their statuses.
-  const keys = await projectKeys(ctx);
-  const checks = await checkProjects({ cloudId, email: botEmail }, token.value, keys, deps.fetch);
-  // Each failing project's permissions page; only the first one opens.
-  let opened = false;
-  for (const c of checks) {
-    if ("error" in c) log(`warning: project ${c.key}: ${c.error}`);
-    else if (c.missingPermissions.length > 0) {
-      log(
-        `warning: the bot lacks ${permissionList(c.missingPermissions)} in project ${c.key}: give the service account a role there that has them`,
-      );
-    }
-    if ("error" in c ? c.error === UNSEEN_PROJECT : c.missingPermissions.length > 0) {
-      const key = encodeURIComponent(c.key);
-      page(ctx, `${siteUrl}/plugins/servlet/project-config/${key}/permissions`, !opened);
-      opened = true;
-    }
-  }
-  const statuses = await chooseStatuses(ctx, checks);
+  // 3. What the bot may do, and the statuses it moves issues to. devbox works
+  // in every project the service account can use.
+  const warning = await checkPermissions({ cloudId, email: botEmail }, token.value, deps.fetch);
+  if (warning) log(warning);
+  const statuses = await chooseStatuses(ctx);
 
   // 4. The token's expiry and the webhook's secret.
   const tokenExpiresAt = await tokenExpiry(ctx, token.source === "prompt");
@@ -417,7 +355,6 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
       botEmail,
       botAccountId: bot.accountId,
       botName: bot.displayName,
-      projectKeys: keys,
       statuses,
       tokenExpiresAt,
       ...(cur?.allowRestrictedIssues !== undefined
@@ -460,10 +397,10 @@ export async function setup(d: JiraDeployment, opts: SetupOptions, deps: SetupDe
   log(`  URL     ${publicUrl}/webhook/jira`);
   log(`  Secret  ${secretWhere}`);
   log("  Events  Issue: created, updated; Comment: created");
-  // Quoted: keys such as GO, IF or NEXT are JQL reserved words. A key is
-  // letters, digits and underscores, so quoting is safe.
-  log(`  JQL     project in (${keys.map((key) => `"${key}"`).join(", ")})`);
-  log("Update the webhook's JQL whenever the project keys change.");
+  // Quoted: keys such as GO, IF or NEXT are JQL reserved words.
+  log(
+    '  JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")',
+  );
   if (webhook?.generated) {
     await deps.promptLine(
       "Press Enter to show the webhook secret, to paste into the webhook's Secret field ",

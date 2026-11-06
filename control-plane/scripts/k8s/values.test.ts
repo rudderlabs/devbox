@@ -149,7 +149,6 @@ describe("chartValues", () => {
       botEmail: "devbox@example.com",
       botAccountId: "712020:00000000-0000-0000-0000-000000000000",
       botName: "devbox",
-      projectKeys: ["ENG"],
       statuses: { started: "In Progress", done: "Done" },
       tokenExpiresAt: "2027-06-30",
       allowRestrictedIssues: false,

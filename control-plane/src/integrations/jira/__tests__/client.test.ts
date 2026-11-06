@@ -124,7 +124,7 @@ describe("jiraClient: requests", () => {
     });
   });
 
-  it("reads which permissions the bot holds in a project", async () => {
+  it("reads which permissions the bot holds, without a project", async () => {
     const captured = stubFetch(
       json({
         permissions: {
@@ -134,44 +134,11 @@ describe("jiraClient: requests", () => {
       }),
     );
     expect(
-      await client().myPermissions(
-        "DEMO",
-        ["BROWSE_PROJECTS", "ADD_COMMENTS", "LINK_ISSUES"],
-        signal(),
-      ),
+      await client().myPermissions(["BROWSE_PROJECTS", "ADD_COMMENTS", "LINK_ISSUES"], signal()),
     ).toEqual({ BROWSE_PROJECTS: true, ADD_COMMENTS: false, LINK_ISSUES: false });
     expect(captured[0]?.url).toBe(
-      `${BASE}/mypermissions?projectKey=DEMO&permissions=BROWSE_PROJECTS%2CADD_COMMENTS%2CLINK_ISSUES`,
+      `${BASE}/mypermissions?permissions=BROWSE_PROJECTS%2CADD_COMMENTS%2CLINK_ISSUES`,
     );
-  });
-
-  it("reads global permissions without a project key", async () => {
-    const captured = stubFetch(json({ permissions: { USER_PICKER: { havePermission: true } } }));
-    expect(await client().myPermissions(undefined, ["USER_PICKER"], signal())).toEqual({
-      USER_PICKER: true,
-    });
-    expect(captured[0]?.url).toBe(`${BASE}/mypermissions?permissions=USER_PICKER`);
-  });
-
-  it("lists a project's statuses once each", async () => {
-    const captured = stubFetch(
-      json([
-        {
-          id: "10001",
-          name: "Task",
-          statuses: [
-            { id: "1", name: "To Do" },
-            { id: "3", name: "Done" },
-          ],
-        },
-        { id: "10002", name: "Bug", statuses: [{ id: "1", name: "To Do" }] },
-      ]),
-    );
-    expect(await client().projectStatuses("DEMO", signal())).toEqual([
-      { id: "1", name: "To Do" },
-      { id: "3", name: "Done" },
-    ]);
-    expect(captured[0]?.url).toBe(`${BASE}/project/DEMO/statuses`);
   });
 
   it("refuses an issue or transition id that isn't numeric, before sending anything", async () => {
@@ -191,20 +158,6 @@ describe("jiraClient: requests", () => {
       expect(await rejection(c.transition("10042", bad, signal()))).toBeInstanceOf(Error);
     }
     expect(captured).toHaveLength(0);
-  });
-
-  it("refuses a project key that could add or climb a path segment, before sending anything", async () => {
-    const captured = stubFetch(json([]));
-    const c = client();
-    for (const bad of [".", "..", "DEMO/..", "DEMO%2F..", "", "1DEMO", "DE MO", "DEMO?x=1"]) {
-      expect(await rejection(c.projectStatuses(bad, signal()))).toBeInstanceOf(Error);
-      expect(await rejection(c.myPermissions(bad, ["BROWSE_PROJECTS"], signal()))).toBeInstanceOf(
-        Error,
-      );
-    }
-    expect(captured).toHaveLength(0);
-    await c.projectStatuses("Demo_2", signal());
-    expect(captured[0]?.url).toBe(`${BASE}/project/Demo_2/statuses`);
   });
 
   it("refuses a cloud id that isn't a UUID", () => {

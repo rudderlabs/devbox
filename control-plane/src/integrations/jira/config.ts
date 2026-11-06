@@ -1,4 +1,4 @@
-import { missingError, parseSwitch, parseTrustList, present } from "../env";
+import { missingError, parseSwitch, present } from "../env";
 
 export type JiraConfig = {
   // https://<site>.atlassian.net: where people open issues (task URLs).
@@ -12,8 +12,6 @@ export type JiraConfig = {
   botEmail: string;
   botAccountId: string;
   botName: string;
-  // Upper-case project keys whose issues devbox acts on.
-  projectKeys: string[];
   // Status names devbox moves an issue to; an absent one means no transition.
   statuses: { started?: string; done?: string; failed?: string };
   // When the API token expires (Atlassian tokens last at most a year).
@@ -28,7 +26,6 @@ export type JiraConfig = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // The shapes the Jira module accepts in payloads and URLs.
 const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
-const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\S*)?$/;
 
 // Jira is on only with JIRA_ENABLED=true; then every setting read with need()
@@ -49,9 +46,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
   const botEmail = need("JIRA_BOT_EMAIL");
   const botAccountId = need("JIRA_BOT_ACCOUNT_ID");
   const botName = need("JIRA_BOT_NAME");
-  // A list of only separators (",") names no project, which would ignore every event.
-  const projectKeys = parseTrustList(env.JIRA_PROJECT_KEYS).map((k) => k.toUpperCase());
-  if (projectKeys.length === 0) missing.push("JIRA_PROJECT_KEYS");
   const expiresAt = need("JIRA_TOKEN_EXPIRES_AT");
   const apiToken = need("JIRA_API_TOKEN");
   const webhookSecret = need("JIRA_WEBHOOK_SECRET");
@@ -60,10 +54,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
   if (!UUID.test(cloudId)) throw new Error("JIRA_CLOUD_ID must be a UUID");
   if (!JIRA_ACCOUNT_ID.test(botAccountId)) {
     throw new Error("JIRA_BOT_ACCOUNT_ID is not a Jira account id");
-  }
-  const badKey = projectKeys.find((k) => !JIRA_PROJECT_KEY.test(k));
-  if (badKey !== undefined) {
-    throw new Error(`JIRA_PROJECT_KEYS: "${badKey}" is not a Jira project key`);
   }
   const tokenExpiresAt = new Date(expiresAt);
   if (!ISO_DATE.test(expiresAt) || Number.isNaN(tokenExpiresAt.getTime())) {
@@ -75,7 +65,6 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
     botEmail,
     botAccountId,
     botName,
-    projectKeys,
     statuses: {
       started: present(env, "JIRA_STATUS_STARTED"),
       done: present(env, "JIRA_STATUS_DONE"),

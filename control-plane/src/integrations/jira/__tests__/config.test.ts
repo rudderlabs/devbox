@@ -11,7 +11,6 @@ const JIRA_ENV = {
   JIRA_BOT_EMAIL: "devbox-bot@example.com",
   JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-4000-8000-0000000000b0",
   JIRA_BOT_NAME: "devbox",
-  JIRA_PROJECT_KEYS: "DEMO",
   JIRA_TOKEN_EXPIRES_AT: "2027-01-31",
   JIRA_API_TOKEN: "jira-test-token",
   JIRA_WEBHOOK_SECRET: "webhook-test-secret",
@@ -37,7 +36,6 @@ describe("parseJiraConfig", () => {
       parseJiraConfig({
         ...JIRA_ENV,
         JIRA_SITE_URL: "https://example.atlassian.net/",
-        JIRA_PROJECT_KEYS: "demo, OPS_2",
         JIRA_STATUS_STARTED: "In Progress",
         JIRA_STATUS_DONE: " In Review ",
         JIRA_TOKEN_EXPIRES_AT: "2027-01-31T12:00:00Z",
@@ -49,7 +47,6 @@ describe("parseJiraConfig", () => {
       botEmail: "devbox-bot@example.com",
       botAccountId: "712020:00000000-0000-4000-8000-0000000000b0",
       botName: "devbox",
-      projectKeys: ["DEMO", "OPS_2"],
       statuses: { started: "In Progress", done: "In Review", failed: undefined },
       tokenExpiresAt: new Date("2027-01-31T12:00:00Z"),
       allowRestrictedIssues: true,
@@ -68,21 +65,13 @@ describe("parseJiraConfig", () => {
   it("JIRA: on with settings missing, the secrets included", () => {
     expect(() => parseJiraConfig({ JIRA_ENABLED: "true" })).toThrow(
       new Error(
-        "JIRA_ENABLED is true but these are missing: JIRA_SITE_URL, JIRA_CLOUD_ID, JIRA_BOT_EMAIL, JIRA_BOT_ACCOUNT_ID, JIRA_BOT_NAME, JIRA_PROJECT_KEYS, JIRA_TOKEN_EXPIRES_AT, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET",
+        "JIRA_ENABLED is true but these are missing: JIRA_SITE_URL, JIRA_CLOUD_ID, JIRA_BOT_EMAIL, JIRA_BOT_ACCOUNT_ID, JIRA_BOT_NAME, JIRA_TOKEN_EXPIRES_AT, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET",
       ),
     );
     const { JIRA_API_TOKEN: _t, JIRA_WEBHOOK_SECRET: _s, ...noSecrets } = JIRA_ENV;
     expect(() => parseJiraConfig({ ...noSecrets, JIRA_API_TOKEN: " " })).toThrow(
       new Error("JIRA_ENABLED is true but these are missing: JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET"),
     );
-  });
-
-  it("JIRA: a project list of separators only counts as missing", () => {
-    for (const keys of [",", " , ,"]) {
-      expect(() => parseJiraConfig({ ...JIRA_ENV, JIRA_PROJECT_KEYS: keys })).toThrow(
-        new Error("JIRA_ENABLED is true but these are missing: JIRA_PROJECT_KEYS"),
-      );
-    }
   });
 
   it.each([
@@ -92,7 +81,6 @@ describe("parseJiraConfig", () => {
     ["JIRA_SITE_URL", "example.atlassian.net", "JIRA_SITE_URL must be an https origin"],
     ["JIRA_CLOUD_ID", "not-a-uuid", "JIRA_CLOUD_ID must be a UUID"],
     ["JIRA_BOT_ACCOUNT_ID", "bot@example.com", "JIRA_BOT_ACCOUNT_ID is not a Jira account id"],
-    ["JIRA_PROJECT_KEYS", "DEMO, ../x", 'JIRA_PROJECT_KEYS: "../X" is not a Jira project key'],
     ["JIRA_TOKEN_EXPIRES_AT", "next year", "JIRA_TOKEN_EXPIRES_AT must be an ISO date"],
     ["JIRA_TOKEN_EXPIRES_AT", "2027-02-31x", "JIRA_TOKEN_EXPIRES_AT must be an ISO date"],
     ["JIRA_ALLOW_RESTRICTED_ISSUES", "yes", "JIRA_ALLOW_RESTRICTED_ISSUES must be true or false"],

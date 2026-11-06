@@ -4,10 +4,9 @@
 // email:token.
 //
 // Every URL is built from config plus values checked here: the cloud id is a
-// UUID, project keys are letters, digits and underscores, and issue and
-// transition ids are plain numbers. So no value can add or climb a path
-// segment (encodeURIComponent alone lets "." and ".." through), and nothing
-// from a webhook payload is ever followed as a URL.
+// UUID and issue and transition ids are plain numbers. So no value can add
+// or climb a path segment (encodeURIComponent alone lets "." and ".."
+// through), and nothing from a webhook payload is ever followed as a URL.
 //
 // A non-2xx answer is an HttpError, so integrations/http.ts decides what may
 // be retried (a 429 honours Retry-After). Error messages carry the method,
@@ -25,9 +24,9 @@ export type RemoteLink = { globalId: string; url: string; title: string };
 export type JiraClient = ReturnType<typeof jiraClient>;
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
-// What devbox needs in each project: see issues, comment, move them between
-// statuses, link the pull request, and be assigned issues (ASSIGNABLE_USER:
-// without it Jira won't let anyone assign the bot).
+// What devbox needs in each project it works in: see issues, comment, move
+// them between statuses, link the pull request, and be assigned issues
+// (ASSIGNABLE_USER: without it Jira won't let anyone assign the bot).
 export const PERMISSIONS = [
   "BROWSE_PROJECTS",
   "ADD_COMMENTS",
@@ -37,7 +36,6 @@ export const PERMISSIONS = [
 ];
 
 const NUMERIC = /^[1-9]\d{0,14}$/;
-const PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The credentials live in this closure only, so a logged client shows none.
@@ -143,35 +141,19 @@ export function jiraClient(cfg: JiraClientConfig, fetchFn?: Fetch) {
       });
     },
 
-    // GET /mypermissions for one project, or with no project key for global
-    // permissions (Jira answers 400 when one request mixes the two): each
-    // asked-for key and whether the bot holds it (a key Jira leaves out counts
-    // as not held).
+    // GET /mypermissions with no project: each asked-for key and whether the
+    // bot holds it (a key Jira leaves out counts as not held). Asked this way,
+    // Jira says a project permission is held when the bot has it in at least
+    // one project.
     async myPermissions(
-      projectKey: string | undefined,
       permissions: string[],
       signal: AbortSignal,
     ): Promise<Record<string, boolean>> {
-      const params = {
-        ...(projectKey === undefined ? {} : { projectKey: key(projectKey) }),
-        permissions: permissions.join(","),
-      };
-      const path = `/mypermissions?${query(params)}`;
+      const path = `/mypermissions?${query({ permissions: permissions.join(",") })}`;
       const held = record(record(await call("GET", path, signal)).permissions);
       return Object.fromEntries(
         permissions.map((p) => [p, record(held[p]).havePermission === true]),
       );
-    },
-
-    // GET /project/{key}/statuses: every status any issue type in the project
-    // uses, once each.
-    async projectStatuses(projectKey: string, signal: AbortSignal): Promise<JiraStatus[]> {
-      const path = `/project/${key(projectKey)}/statuses`;
-      const byId = new Map<string, JiraStatus>();
-      for (const type of list(await call("GET", path, signal))) {
-        for (const s of list(record(type).statuses).map(status)) byId.set(s.id, s);
-      }
-      return [...byId.values()];
     },
   };
 }
@@ -180,11 +162,6 @@ export function jiraClient(cfg: JiraClientConfig, fetchFn?: Fetch) {
 function id(value: string): string {
   if (!NUMERIC.test(value)) throw new Error("Jira id must be numeric");
   return value;
-}
-
-function key(projectKey: string): string {
-  if (!PROJECT_KEY.test(projectKey)) throw new Error("Jira project key is malformed");
-  return projectKey;
 }
 
 function query(params: Record<string, string>): string {

@@ -399,7 +399,6 @@ describe("integrations.jira", () => {
     botEmail: "devbox@example.com",
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
-    projectKeys: ["ENG", "OPS"],
     statuses: { started: "In Progress", done: "Done", failed: "Blocked" },
     tokenExpiresAt: "2027-06-30",
     allowRestrictedIssues: false,
@@ -422,7 +421,6 @@ describe("integrations.jira", () => {
       "botEmail",
       "botAccountId",
       "botName",
-      "projectKeys",
       "tokenExpiresAt",
     ]) {
       const { [key as keyof typeof JIRA]: _, ...rest } = JIRA;
@@ -452,8 +450,6 @@ describe("integrations.jira", () => {
       ["botEmail", "devbox", "must be an email address"],
       ["botAccountId", "bad id!", "must be a Jira account id"],
       ["botName", " ", "must be a non-empty string"],
-      ["projectKeys", [], "must be a non-empty list of project keys such as ENG"],
-      ["projectKeys", ["eng"], "must be a non-empty list of project keys such as ENG"],
       ["statuses", "Done", "must be an object"],
       ["tokenExpiresAt", "soon", "must be a date such as 2027-01-31"],
       ["tokenExpiresAt", "2027-02-30x", "must be a date such as 2027-01-31"],
@@ -473,7 +469,7 @@ describe("integrations.jira", () => {
 
   it("refuses unknown keys, a secret above all", () => {
     expect(failure({ jira: { ...JIRA, apiToken: "t" } })).toBe(
-      'integrations.jira: unknown key "apiToken" (allowed: enabled, siteUrl, cloudId, botEmail, botAccountId, botName, projectKeys, statuses, tokenExpiresAt, allowRestrictedIssues)',
+      'integrations.jira: unknown key "apiToken" (allowed: enabled, siteUrl, cloudId, botEmail, botAccountId, botName, statuses, tokenExpiresAt, allowRestrictedIssues)',
     );
     expect(failure({ jira: { ...JIRA, statuses: { review: "In Review" } } })).toBe(
       'integrations.jira.statuses: unknown key "review" (allowed: started, done, failed)',

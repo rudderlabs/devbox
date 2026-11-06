@@ -15,7 +15,6 @@ const JIRA: JiraIntegration = {
   botEmail: "devbox@example.com",
   botAccountId: BOT_ID,
   botName: "devbox",
-  projectKeys: ["ENG", "OPS"],
   statuses: { started: "In Progress", done: "Done" },
   tokenExpiresAt: "2027-06-30",
 };
@@ -25,13 +24,7 @@ const BODY = {
   bot: { accountId: BOT_ID, name: "devbox" },
   auth: "ok",
   tokenDaysLeft: 238,
-  projects: {
-    ENG: { missingPermissions: [], missingStatuses: [] },
-    OPS: {
-      missingPermissions: ["LINK_ISSUES", "ASSIGNABLE_USER"],
-      missingStatuses: ["In Progress"],
-    },
-  },
+  permissions: { missing: [] },
   lastReplyFailure: null,
   holds: { heldTasks: 0, oldestHoldAgeMs: 0 },
 };
@@ -79,7 +72,6 @@ const HEAD = [
   "Jira (compose)",
   "  site            https://example.atlassian.net",
   "  bot             devbox (devbox@example.com)",
-  "  projectKeys     ENG, OPS",
   "  tokenExpiresAt  2027-06-30",
   "  publicUrl       https://hooks.example.com",
   "  JIRA_API_TOKEN       keychain",
@@ -88,8 +80,7 @@ const HEAD = [
 const CP = [
   "Control plane: bot devbox, auth ok, last webhook from Jira 2026-11-02T07:55:25.031Z",
   "API token: expires in 238 days",
-  "Project ENG: ok",
-  'Project OPS: missing LINK_ISSUES, ASSIGNABLE_USER (needed to assign issues to the bot); no status "In Progress"',
+  "Permissions: ok",
 ];
 const OK_LINE = `Webhook URL ${PROBE_URL}: reaches devbox with Jira on`;
 
@@ -111,7 +102,7 @@ describe("jira status", () => {
     expect(r.probed).toEqual([PROBE_URL]);
   });
 
-  it("a rejected token, a short expiry, a project error, failed and held replies", async () => {
+  it("a rejected token, a short expiry, a permissions error, failed and held replies", async () => {
     const r = await run({
       jira: JIRA,
       api: async () =>
@@ -120,7 +111,7 @@ describe("jira status", () => {
           lastWebhookAt: null,
           auth: "rejected",
           tokenDaysLeft: 5,
-          projects: { ENG: { error: "TimeoutError" } },
+          permissions: { error: "timeout" },
           lastReplyFailure: { status: 400, at: "2026-11-02T08:00:00.000Z" },
           holds: { heldTasks: 2, oldestHoldAgeMs: 300_000 },
         }),
@@ -129,25 +120,28 @@ describe("jira status", () => {
       "Control plane: bot devbox, auth rejected, last webhook from Jira none yet",
       "Jira rejects JIRA_API_TOKEN: create a new token for the service account, run bun run jira:setup, then bun run up",
       "API token: expires in 5 days: rotate it soon (create a new one, then run bun run jira:setup)",
-      "Project ENG: can't check (TimeoutError)",
+      "Permissions: can't check (timeout)",
       "Last failed reply to Jira: HTTP 400 at 2026-11-02T08:00:00.000Z",
       "Replies held for 2 task(s), the oldest for 5 min: Jira is refusing or rate-limiting them",
       OK_LINE,
     ]);
   });
 
-  it("an expired token and a reply with no answer", async () => {
+  it("an expired token, permissions held in no project, a reply with no answer", async () => {
     const r = await run({
       jira: JIRA,
       api: async () =>
         Response.json({
           ...BODY,
           tokenDaysLeft: -3,
-          projects: {},
+          permissions: { missing: ["LINK_ISSUES", "ASSIGNABLE_USER"] },
           lastReplyFailure: { status: null, at: "2026-11-02T08:00:00.000Z" },
         }),
     });
     expect(r.log).toContain("API token: expired 3 days ago");
+    expect(r.log).toContain(
+      "Permissions: missing LINK_ISSUES, ASSIGNABLE_USER (needed to assign issues to the bot) in every project",
+    );
     expect(r.log).toContain("Last failed reply to Jira: no answer at 2026-11-02T08:00:00.000Z");
   });
 

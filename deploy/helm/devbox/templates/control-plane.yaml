@@ -155,7 +155,7 @@ spec:
             {{- end }}
             {{- end }}
             {{- /* Jira's settings, only when it is on; its two secrets come from the
-            integrations Secret below. Lists are comma-joined. */}}
+            integrations Secret below. */}}
             {{- if $jira.enabled }}
             {{- $statuses := $jira.statuses | default dict }}
             - { name: JIRA_ENABLED, value: "true" }
@@ -164,7 +164,6 @@ spec:
             - { name: JIRA_BOT_EMAIL, value: {{ $jira.botEmail | quote }} }
             - { name: JIRA_BOT_ACCOUNT_ID, value: {{ $jira.botAccountId | quote }} }
             - { name: JIRA_BOT_NAME, value: {{ $jira.botName | quote }} }
-            - { name: JIRA_PROJECT_KEYS, value: {{ join "," $jira.projectKeys | quote }} }
             {{- with $statuses.started }}
             - { name: JIRA_STATUS_STARTED, value: {{ . | quote }} }
             {{- end }}

@@ -35,7 +35,6 @@ const JIRA_OFF = Object.fromEntries(
     "BOT_EMAIL",
     "BOT_ACCOUNT_ID",
     "BOT_NAME",
-    "PROJECT_KEYS",
     "STATUS_STARTED",
     "STATUS_DONE",
     "STATUS_FAILED",
@@ -151,7 +150,6 @@ describe("jiraComposeEnv", () => {
     botEmail: "devbox@example.com",
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
-    projectKeys: ["ENG", "OPS"],
     statuses: { started: "In Progress", done: "Done" },
     tokenExpiresAt: "2027-06-30",
   };
@@ -162,7 +160,7 @@ describe("jiraComposeEnv", () => {
     expect(jiraComposeEnv({ ...JIRA, enabled: false }, SECRETS)).toEqual(JIRA_OFF);
   });
 
-  it("every setting and both secrets when enabled; lists comma-joined", () => {
+  it("every setting and both secrets when enabled", () => {
     expect(jiraComposeEnv(JIRA, SECRETS)).toEqual({
       ...JIRA_OFF,
       JIRA_ENABLED: "true",
@@ -171,7 +169,6 @@ describe("jiraComposeEnv", () => {
       JIRA_BOT_EMAIL: "devbox@example.com",
       JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-0000-0000-000000000000",
       JIRA_BOT_NAME: "devbox",
-      JIRA_PROJECT_KEYS: "ENG,OPS",
       JIRA_STATUS_STARTED: "In Progress",
       JIRA_STATUS_DONE: "Done",
       JIRA_TOKEN_EXPIRES_AT: "2027-06-30",

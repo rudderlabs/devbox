@@ -38,7 +38,6 @@ export type Client = Pick<
   | "addComment"
   | "getIssue"
   | "myPermissions"
-  | "projectStatuses"
   | "transitions"
   | "transition"
   | "upsertRemoteLink"

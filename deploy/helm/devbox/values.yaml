@@ -148,8 +148,6 @@ integrations:
     botAccountId: ""
     # -- Required when enabled: the service account's display name, which people @-mention.
     botName: ""
-    # -- Required when enabled: the keys of the projects devbox works in, for example `ENG`.
-    projectKeys: []
     statuses:
       # -- The status devbox moves an issue to when it starts work. Empty: no move.
       started: ""

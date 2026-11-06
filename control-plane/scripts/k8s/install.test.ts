@@ -1987,7 +1987,6 @@ Check Linear with: bun run linear:status --target devbox.k8s.json`);
         botEmail: "devbox@example.com",
         botAccountId: JIRA_BOT_ID,
         botName: "devbox",
-        projectKeys: ["ENG"],
         statuses: { started: "In Progress", done: "Done" },
         tokenExpiresAt: "2027-06-30",
       },

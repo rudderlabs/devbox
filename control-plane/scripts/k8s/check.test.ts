@@ -71,7 +71,6 @@ const JIRA_ON: Integrations = {
     botEmail: "devbox@example.com",
     botAccountId: "712020:00000000-0000-0000-0000-000000000000",
     botName: "devbox",
-    projectKeys: ["ENG"],
     tokenExpiresAt: "2027-06-30",
   },
 };

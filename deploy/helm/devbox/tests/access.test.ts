@@ -313,7 +313,7 @@ describe("Jira env", () => {
     return Object.fromEntries((c.env as Doc[]).filter((e) => e.name.startsWith("JIRA_")).map((e) => [e.name, e.value]));
   }
 
-  it("on: every setting, lists comma-joined; the secrets come from the integrations Secret", async () => {
+  it("on: every setting; the secrets come from the integrations Secret", async () => {
     expect(await jiraEnv()).toEqual({
       JIRA_ENABLED: "true",
       JIRA_SITE_URL: "https://example.atlassian.net",
@@ -321,7 +321,6 @@ describe("Jira env", () => {
       JIRA_BOT_EMAIL: "devbox@example.com",
       JIRA_BOT_ACCOUNT_ID: "712020:00000000-0000-0000-0000-000000000000",
       JIRA_BOT_NAME: "devbox",
-      JIRA_PROJECT_KEYS: "ENG,OPS",
       JIRA_STATUS_STARTED: "In Progress",
       JIRA_STATUS_DONE: "Done",
       JIRA_TOKEN_EXPIRES_AT: "2027-06-30",

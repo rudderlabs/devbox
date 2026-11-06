@@ -7,7 +7,7 @@ import type { JiraConfig } from "./config";
 import {
   delegation,
   isNonHuman,
-  issueContext,
+  issueCreator,
   isTrusted,
   type JiraActor,
   type JiraAssignment,
@@ -92,7 +92,7 @@ export class JiraWebhookController {
       const assignment = parseAssignment(payload, botAccountId);
       if (assignment) return await this.onAssignment(c, payload, assignment);
       const comment = parseComment(payload, botAccountId, botName);
-      if (comment) return await this.onComment(c, payload, comment);
+      if (comment) return await this.onComment(c, comment);
       return c.json({ status: "ignored" }, 200);
     } catch (err) {
       // The class and the Postgres code only: a database error's message
@@ -112,7 +112,7 @@ export class JiraWebhookController {
   private async onAssignment(c: Context, payload: unknown, a: JiraAssignment): Promise<Response> {
     const { cfg } = this;
     const meta = { issueId: a.issueId };
-    const skip = this.skipReason(payload, a.actor);
+    const skip = this.skipReason(a.actor);
     if (skip) return this.ignored(c, skip, { ...meta, accountId: a.actor.accountId });
 
     if (!isTrusted(a.actor, cfg.botAccountId)) {
@@ -122,7 +122,7 @@ export class JiraWebhookController {
         accountId: a.actor.accountId,
       });
     }
-    const reporter = a.reporter ?? issueContext(payload).creator;
+    const reporter = a.reporter ?? issueCreator(payload);
     if (!reporter || !isTrusted(reporter, cfg.botAccountId)) {
       const accountId = reporter?.accountId ?? null;
       return this.ignored(c, "untrusted", { ...meta, side: "reporter", accountId });
@@ -157,7 +157,7 @@ export class JiraWebhookController {
   // that everyone can read, on an issue everyone can read, counts: the agent's
   // answer is public. A security level can be set after the task started, so
   // the issue is read again for each follow-up.
-  private async onComment(c: Context, payload: unknown, comment: JiraComment): Promise<Response> {
+  private async onComment(c: Context, comment: JiraComment): Promise<Response> {
     const { cfg } = this;
     const { issueId, commentId } = comment;
     const meta = { issueId, commentId, accountId: comment.author.accountId };
@@ -165,7 +165,7 @@ export class JiraWebhookController {
     // don't mention it are not worth a log line. Its own go first: a reply
     // that names the bot must never count as a mention.
     if (comment.author.accountId === cfg.botAccountId) return c.json({ status: "ignored" }, 200);
-    const skip = this.skipReason(payload, comment.author);
+    const skip = this.skipReason(comment.author);
     if (skip) return this.ignored(c, skip, meta);
     if (!comment.mentionsBot) return c.json({ status: "ignored" }, 200);
     if (comment.restricted) return this.ignored(c, "restricted_comment", meta);
@@ -206,13 +206,10 @@ export class JiraWebhookController {
   }
 
   // Why an event by `actor` is not for devbox, if it isn't: the bot's own
-  // (its replies may name it), from an app or customer account, or outside the
-  // configured projects.
-  private skipReason(payload: unknown, actor: JiraActor): string | undefined {
+  // (its replies may name it), or from an app or customer account.
+  private skipReason(actor: JiraActor): string | undefined {
     if (actor.accountId === this.cfg.botAccountId) return "own_event";
     if (isNonHuman(actor)) return "non_human";
-    const { projectKey } = issueContext(payload);
-    if (!projectKey || !this.cfg.projectKeys.includes(projectKey)) return "foreign_project";
     return undefined;
   }
 

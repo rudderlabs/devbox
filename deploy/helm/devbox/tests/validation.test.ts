@@ -165,24 +165,16 @@ describe("chart validation", () => {
 
   describe("integrations.jira", () => {
     const JIRA = join(import.meta.dir, "values", "jira.yaml");
-    const jiraFailure = async (set: string[], setJson: string[] = []) => {
-      const r = await helmTemplate([
-        ...BASE,
-        "-f",
-        JIRA,
-        ...set.flatMap((s) => ["--set", s]),
-        ...setJson.flatMap((s) => ["--set-json", s]),
-      ]);
+    const jiraFailure = async (set: string[]) => {
+      const r = await helmTemplate([...BASE, "-f", JIRA, ...set.flatMap((s) => ["--set", s])]);
       expect(r.code).not.toBe(0);
       return r.stderr;
     };
 
-    it.each(["siteUrl", "cloudId", "botEmail", "botAccountId", "botName", "projectKeys", "tokenExpiresAt"])(
+    it.each(["siteUrl", "cloudId", "botEmail", "botAccountId", "botName", "tokenExpiresAt"])(
       "requires %s when enabled",
       async (key) => {
-        const empty = key === "projectKeys" ? [] : [`integrations.jira.${key}=`];
-        const json = key === "projectKeys" ? ["integrations.jira.projectKeys=[]"] : [];
-        expect(await jiraFailure(empty, json)).toContain(
+        expect(await jiraFailure([`integrations.jira.${key}=`])).toContain(
           `integrations.jira.enabled is true: integrations.jira.${key} is required`,
         );
       },
@@ -198,7 +190,6 @@ describe("chart validation", () => {
       ["integrations.jira.webhookSecret=x", "webhookSecret"],
       ["integrations.jira.siteUrl=http://example.atlassian.net", "siteUrl"],
       ["integrations.jira.cloudId=abc", "cloudId"],
-      ["integrations.jira.projectKeys={eng}", "projectKeys"],
       ["integrations.jira.tokenExpiresAt=soon", "tokenExpiresAt"],
       ["integrations.jira.statuses.review=x", "review"],
     ])("refuses %s through the schema", async (set, key) => {

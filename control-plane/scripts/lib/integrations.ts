@@ -44,7 +44,6 @@ export type JiraIntegration = {
   botEmail?: string;
   botAccountId?: string;
   botName?: string;
-  projectKeys?: string[];
   statuses?: JiraStatuses;
   // The API token's expiry, YYYY-MM-DD.
   tokenExpiresAt?: string;
@@ -88,7 +87,6 @@ export type EnabledJira = JiraIntegration & {
   botEmail: string;
   botAccountId: string;
   botName: string;
-  projectKeys: string[];
   tokenExpiresAt: string;
 };
 
@@ -275,7 +273,6 @@ function parsePending(raw: unknown, fail: Fail): PendingGithubApp {
 // The shapes the control plane accepts (src/integrations/jira/config.ts).
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
-export const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\S*)?$/;
 
 // The site as a bare https origin, as the control plane wants it; undefined
@@ -306,7 +303,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
       "botEmail",
       "botAccountId",
       "botName",
-      "projectKeys",
       "statuses",
       "tokenExpiresAt",
       "allowRestrictedIssues",
@@ -319,15 +315,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
       const s = nonEmpty(fail)(v, field);
       return test(s) ? s : fail(`${field}: must be ${what}`);
     };
-  // A list of strings; `item` checks each.
-  const strings =
-    (item: (v: string) => boolean, what: string, nonEmptyList: boolean) =>
-    (v: unknown, field: string): string[] =>
-      Array.isArray(v) &&
-      (v.length > 0 || !nonEmptyList) &&
-      v.every((x) => typeof x === "string" && item(x))
-        ? (v as string[])
-        : fail(`${field}: must be a ${nonEmptyList ? "non-empty " : ""}list of ${what}`);
   const siteUrl = setting(
     b,
     f,
@@ -359,13 +346,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     fail,
   );
   const botName = setting(b, f, "botName", nonEmpty(fail), fail);
-  const projectKeys = setting(
-    b,
-    f,
-    "projectKeys",
-    strings((s) => JIRA_PROJECT_KEY.test(s), "project keys such as ENG", true),
-    fail,
-  );
   const tokenExpiresAt = setting(
     b,
     f,
@@ -394,7 +374,6 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     ...(botEmail !== undefined ? { botEmail } : {}),
     ...(botAccountId !== undefined ? { botAccountId } : {}),
     ...(botName !== undefined ? { botName } : {}),
-    ...(projectKeys !== undefined ? { projectKeys } : {}),
     ...(statuses !== undefined ? { statuses } : {}),
     ...(tokenExpiresAt !== undefined ? { tokenExpiresAt } : {}),
     ...(allowRestricted !== undefined ? { allowRestrictedIssues: allowRestricted } : {}),

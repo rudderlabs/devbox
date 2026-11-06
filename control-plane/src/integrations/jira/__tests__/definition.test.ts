@@ -12,7 +12,6 @@ const ENV = {
   JIRA_BOT_EMAIL: "devbox-bot@example.com",
   JIRA_BOT_ACCOUNT_ID: "acct-123",
   JIRA_BOT_NAME: "devbox",
-  JIRA_PROJECT_KEYS: "ENG",
   JIRA_TOKEN_EXPIRES_AT: "2027-06-30",
   JIRA_API_TOKEN: "jira-test-token",
   JIRA_WEBHOOK_SECRET: "webhook-test-secret",
@@ -33,7 +32,6 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
       permissions: Object.fromEntries(asked.map((p) => [p, { havePermission: true }])),
     });
   }
-  if (path.endsWith("/statuses")) return json([]);
   throw new Error(`unexpected request to ${url}`);
 }) as typeof fetch;
 
@@ -67,7 +65,7 @@ it("creates Jira from its settings: a webhook signed with its secret shows in it
     bot: { accountId: "acct-123", name: "devbox" },
     auth: "ok",
     tokenDaysLeft: 239,
-    projects: { ENG: { missingPermissions: [], missingStatuses: [] } },
+    permissions: { missing: [] },
     lastReplyFailure: null,
   });
   // Through Atlassian's gateway for the site's cloud id, with Basic email:token.

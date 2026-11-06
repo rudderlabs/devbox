@@ -22,7 +22,6 @@ const COMPOSE: Deployment = { kind: "compose" };
 const K8S: Deployment = { kind: "k8s", context: "kind-devbox", namespace: "devbox" };
 const NOW = new Date("2026-11-03T12:00:00Z");
 const GENERATED = "ab".repeat(32);
-const WORKFLOW = ["To Do", "In Progress", "Done"];
 const ALL_PERMISSIONS = [
   "BROWSE_PROJECTS",
   "ADD_COMMENTS",
@@ -39,8 +38,6 @@ const TOKEN_Q =
   "Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden): ";
 const KEEP_TOKEN_Q =
   "Jira API token with read:jira-work, write:jira-work and read:jira-user (input hidden; press Enter to keep the saved one): ";
-const PROJECTS_Q =
-  "Jira project keys devbox works in, comma-separated (the key of each space, e.g. ENG): ";
 const STARTED_Q =
   "Status devbox moves an issue to when it starts work [In Progress] (- for none): ";
 const DONE_Q = "Status devbox moves an issue to when it finishes [Done] (- for none): ";
@@ -59,21 +56,19 @@ const TOKEN_HINT = [
   `  ${ADMIN}`,
 ];
 const WEBHOOKS = `${SITE}/plugins/servlet/webhooks`;
-const permissionsPage = (key: string) =>
-  `${SITE}/plugins/servlet/project-config/${key}/permissions`;
 const ACT_AS = `devbox will act as devbox (account ${BOT_ID}) on ${SITE}`;
 const rejected = (email = EMAIL) =>
   `Jira rejected JIRA_API_TOKEN, or the email ${email} doesn't match it (401): use the service account's API token, with scopes read:jira-work, write:jira-work and read:jira-user, and the service account's email`;
 const LONG_SECRET = "my-webhook-secret-".repeat(2);
-const webhookBlock = (secret: string, keys = '"ENG"') => [
+const PERMISSIONS = `${API}/mypermissions?permissions=${ALL_PERMISSIONS.join("%2C")}`;
+const webhookBlock = (secret: string) => [
   "The webhook in Jira (a Jira admin creates it once: Settings → System → WebHooks):",
   `  ${WEBHOOKS}`,
   "Click Create there, or edit the webhook you have, and paste these values:",
   `  URL     ${PUBLIC}/webhook/jira`,
   `  Secret  ${secret}`,
   "  Events  Issue: created, updated; Comment: created",
-  `  JQL     project in (${keys})`,
-  "Update the webhook's JQL whenever the project keys change.",
+  '  JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")',
 ];
 const NEXT_COMPOSE = [
   "Next: bun run up (setup applies nothing)",
@@ -88,7 +83,6 @@ const JIRA: JiraIntegration = {
   botEmail: EMAIL,
   botAccountId: BOT_ID,
   botName: "devbox",
-  projectKeys: ["ENG"],
   statuses: { started: "In Progress", done: "Done" },
   tokenExpiresAt: "2027-06-30",
 };
@@ -120,8 +114,8 @@ function harness(o: {
   hidden?: string[];
   save?: boolean;
   validTokens?: string[];
-  // Per project: the permissions the bot holds and the statuses of its workflow.
-  projects?: Record<string, { held?: string[]; statuses?: string[] }>;
+  // The permissions the bot holds in at least one project.
+  held?: string[];
   isTTY?: boolean;
 }): { d: JiraDeployment; deps: SetupDeps; w: World } {
   const deployment = o.deployment ?? COMPOSE;
@@ -136,7 +130,6 @@ function harness(o: {
   const lines = [...(o.lines ?? [])];
   const hidden = [...(o.hidden ?? [])];
   const valid = new Set(o.validTokens ?? ["jira-token"]);
-  const projects = o.projects ?? { ENG: {} };
   const fetch: Fetch = async (url, init) => {
     w.fetched.push(url);
     if (url === `${SITE}/_edge/tenant_info`) return Response.json({ cloudId: CLOUD });
@@ -150,19 +143,13 @@ function harness(o: {
     if (url === `${API}/myself`) {
       return Response.json({ accountId: BOT_ID, accountType: "app", displayName: "devbox" });
     }
-    const perms = /\/mypermissions\?projectKey=(\w+)/.exec(url)?.[1];
-    const statuses = /\/project\/(\w+)\/statuses$/.exec(url)?.[1];
-    const p = projects[perms ?? statuses ?? ""];
-    if (!p) return new Response("No project could be found", { status: 404 });
-    if (perms) {
-      const held = p.held ?? ALL_PERMISSIONS;
+    if (url === PERMISSIONS) {
+      const held = o.held ?? ALL_PERMISSIONS;
       return Response.json({
         permissions: Object.fromEntries(held.map((k) => [k, { havePermission: true }])),
       });
     }
-    return Response.json([
-      { statuses: (p.statuses ?? WORKFLOW).map((name, i) => ({ id: String(i + 1), name })) },
-    ]);
+    return new Response("", { status: 599 });
   };
   const savedUrl = o.publicUrl ?? (o.jira ? PUBLIC : undefined);
   const configPath = join(dir, `c${n++}.json`);
@@ -229,15 +216,14 @@ const FLAGS: SetupOptions = {
   publicUrl: PUBLIC,
   site: SITE,
   email: EMAIL,
-  projects: "eng",
   tokenExpires: "2027-06-30",
 };
 
 describe("jira setup", () => {
   it("first run on Compose: every question in order, write, save, the webhook, next step", async () => {
     const { d, deps, w } = harness({
-      // URL, site, email, projects, started, done, expiry, show.
-      lines: [PUBLIC, SITE, EMAIL, "eng", "", "", "2027-06-30", ""],
+      // URL, site, email, started, done, expiry, show.
+      lines: [PUBLIC, SITE, EMAIL, "", "", "2027-06-30", ""],
       hidden: ["jira-token", ""],
     });
     // What was logged and opened before the email was asked for.
@@ -255,7 +241,6 @@ describe("jira setup", () => {
       SITE_Q,
       EMAIL_Q,
       TOKEN_Q,
-      PROJECTS_Q,
       STARTED_Q,
       DONE_Q,
       EXPIRY_Q,
@@ -267,7 +252,6 @@ describe("jira setup", () => {
       `Public URL: ${PUBLIC}`,
       ...TOKEN_HINT,
       ACT_AS,
-      "Statuses every project has: To Do, In Progress, Done",
       `Wrote integrations.jira to ${d.configPath}`,
       ...webhookBlock("the new secret shown below"),
       ...NEXT_COMPOSE,
@@ -378,50 +362,34 @@ describe("jira setup", () => {
     expect(readFileSync(d.configPath, "utf8")).toBe(before);
   });
 
-  it("warns about missing permissions and a project the bot can't see", async () => {
+  it("warns about a permission the bot holds in no project, and opens no page for it", async () => {
     const { d, deps, w } = harness({
-      isTTY: false,
-      env: { JIRA_API_TOKEN: "jira-token", JIRA_WEBHOOK_SECRET: "whsec" },
-      projects: { ENG: { held: ["BROWSE_PROJECTS", "ADD_COMMENTS"] } },
+      jira: JIRA,
+      saved: { "compose/JIRA_API_TOKEN": "jira-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
+      hidden: [""],
+      held: ["BROWSE_PROJECTS", "ADD_COMMENTS"],
     });
-    await setup(d, { ...FLAGS, projects: "ENG,OPS" }, deps);
+    await setup(d, {}, deps);
+    expect(w.fetched).toContain(PERMISSIONS);
     expect(w.log).toContain(
-      "warning: the bot lacks TRANSITION_ISSUES, LINK_ISSUES, ASSIGNABLE_USER (needed to assign issues to the bot) in project ENG: give the service account a role there that has them",
+      "warning: the bot lacks TRANSITION_ISSUES, LINK_ISSUES, ASSIGNABLE_USER (needed to assign issues to the bot) in every project: give the service account a role that has them in each project devbox works in",
     );
-    expect(w.log).toContain(
-      "warning: project OPS: the bot can't see this project: check the key, and give the bot access to it",
-    );
-    expect(w.log).toContain('  JQL     project in ("ENG", "OPS")');
+    expect(w.opened).toEqual([]);
   });
 
-  it("statuses: none proposed when the workflow lacks them, and a configured one a project lacks", async () => {
-    const proposed = harness({
-      isTTY: false,
-      env: { JIRA_API_TOKEN: "jira-token", JIRA_WEBHOOK_SECRET: "whsec" },
-      projects: { ENG: { statuses: ["Open", "Closed"] } },
+  it("statuses: a terminal may change or drop a proposal; a missing one is warned about", async () => {
+    const { d, deps, w } = harness({
+      // URL, site, email, started, done, expiry, show.
+      lines: [PUBLIC, SITE, EMAIL, "-", "In Review", "2027-06-30", ""],
+      hidden: ["jira-token", ""],
     });
-    await setup(proposed.d, FLAGS, proposed.deps);
-    const configPath = proposed.d.configPath;
-    expect(proposed.w.log).toContain(
-      `warning: no started status: devbox won't move issues when it starts work. Set integrations.jira.statuses.started in ${configPath} to a status every project has`,
+    await setup(d, {}, deps);
+    expect(w.log).toContain(
+      `warning: no started status: devbox won't move issues when it starts work. Set integrations.jira.statuses.started in ${d.configPath}`,
     );
-    expect(proposed.w.log).toContain(
-      `warning: no done status: devbox won't move issues when it finishes. Set integrations.jira.statuses.done in ${configPath} to a status every project has`,
-    );
-    expect((readJson(configPath).integrations as { jira: JiraIntegration }).jira.statuses).toEqual(
-      {},
-    );
-
-    const kept = harness({
-      jira: JIRA,
-      isTTY: false,
-      env: { JIRA_API_TOKEN: "jira-token", JIRA_WEBHOOK_SECRET: "whsec" },
-      projects: { ENG: {}, OPS: { statuses: ["Open", "Done"] } },
-    });
-    await setup(kept.d, { projects: "ENG,OPS" }, kept.deps);
-    expect(kept.w.log).toContain(
-      'warning: project OPS has no status "In Progress" (statuses.started)',
-    );
+    expect(
+      (readJson(d.configPath).integrations as { jira: JiraIntegration }).jira.statuses,
+    ).toEqual({ done: "In Review" });
   });
 
   it("re-run with the saved token: nothing asked, the settings kept", async () => {
@@ -440,7 +408,6 @@ describe("jira setup", () => {
       `Public URL: ${PUBLIC}`,
       "JIRA_API_TOKEN: from the system keychain (compose)",
       ACT_AS,
-      'warning: project ENG has no status "Blocked" (statuses.failed)',
       "JIRA_WEBHOOK_SECRET: from the system keychain (compose)",
       `Wrote integrations.jira to ${d.configPath}`,
       ...webhookBlock(
@@ -560,35 +527,6 @@ describe("jira setup", () => {
     expect(ok.w.log).toEqual(expect.arrayContaining(webhookBlock("the secret you entered")));
   });
 
-  it("opens the permissions pages a failing check points to, the first project's only", async () => {
-    const opts = {
-      jira: JIRA,
-      saved: { "compose/JIRA_API_TOKEN": "jira-token", "compose/JIRA_WEBHOOK_SECRET": "whsec" },
-      hidden: [""],
-      projects: { ENG: { held: ["BROWSE_PROJECTS"] }, DEV: {} },
-    };
-    const projects = "ENG,OPS,DEV";
-    const tty = harness(opts);
-    await setup(tty.d, { projects }, tty.deps);
-    expect(tty.w.opened).toEqual([permissionsPage("ENG")]);
-    for (const line of [
-      `warning: project OPS: the bot can't see this project: check the key, and give the bot access to it`,
-      `  ${permissionsPage("ENG")}`,
-      `  ${permissionsPage("OPS")}`,
-    ]) {
-      expect(tty.w.log).toContain(line);
-    }
-    expect(tty.w.log).not.toContain(`  ${permissionsPage("DEV")}`);
-
-    // Without a terminal: the same links, nothing opened.
-    const headless = harness({ ...opts, isTTY: false });
-    await setup(headless.d, { projects }, headless.deps);
-    expect(headless.w.opened).toEqual([]);
-    expect(headless.w.log.filter((l) => l.startsWith(`  ${SITE}/`))).toEqual(
-      tty.w.log.filter((l) => l.startsWith(`  ${SITE}/`)),
-    );
-  });
-
   it("a re-run with a new public URL opens the webhooks page", async () => {
     const { d, deps, w } = harness({
       jira: JIRA,
@@ -632,10 +570,6 @@ describe("jira setup", () => {
         "no service account email: pass --email <address>, or run `bun run jira:setup` in a terminal",
       ],
       [
-        "projects",
-        "no Jira project keys: pass --projects <KEY,…>, or run `bun run jira:setup` in a terminal",
-      ],
-      [
         "tokenExpires",
         "no API token expiry date: pass --token-expires <YYYY-MM-DD>, or run `bun run jira:setup` in a terminal",
       ],
@@ -655,10 +589,6 @@ describe("jira setup", () => {
         "the Jira site URL must be an https origin such as https://example.atlassian.net",
       ],
       [{ email: "devbox" }, "the service account's email must be an email address"],
-      [
-        { projects: "ENG,my-space" },
-        '"MY-SPACE" is not a project key: use the key of each space, e.g. ENG',
-      ],
       [{ tokenExpires: "next year" }, "the token expiry must be a date such as 2027-01-31"],
       [
         { tokenExpires: "2026-11-01" },
@@ -682,7 +612,7 @@ describe("jira setup", () => {
     const flag = ` --target ${d.configPath}`;
     // No webhook secret asked for and no save offered: the Secret holds them.
     expect(w.asked).toEqual([KEEP_TOKEN_Q, STARTED_Q, DONE_Q]);
-    expect(w.log.slice(-12)).toEqual([
+    expect(w.log.slice(-11)).toEqual([
       ...webhookBlock('JIRA_WEBHOOK_SECRET from Secret "my-integrations"'),
       'Put JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET in Secret "my-integrations" in namespace devbox.',
       `Next: bun run k8s:install${flag} (setup applies nothing)`,

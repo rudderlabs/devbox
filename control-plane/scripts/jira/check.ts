@@ -1,6 +1,6 @@
 // The Jira checks made with the bot's API token: the site's cloud id, the
-// account the token belongs to, and per project the permissions devbox needs
-// and the statuses its workflows have. Calls go through Atlassian's API
+// account the token belongs to, and the permissions devbox needs. Calls go
+// through Atlassian's API
 // gateway, as the control plane's do. Each failure names the cause and the
 // next action; the token never appears in a message.
 import { HttpError } from "../../src/integrations/http";
@@ -12,9 +12,6 @@ import { CredentialRejected, type Fetch, PreflightError } from "../up/preflight"
 export class JiraCheckError extends PreflightError {}
 
 export type JiraBot = { accountId: string; displayName: string };
-export type ProjectCheck =
-  | { key: string; missingPermissions: string[]; statuses: string[] }
-  | { key: string; error: string };
 
 const TIMEOUT_MS = 10_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -23,9 +20,6 @@ export const TOKEN_WARN_DAYS = 14;
 export const SCOPES = "read:jira-work, write:jira-work and read:jira-user";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GATEWAY_UNREACHABLE = "can't reach api.atlassian.com: check this machine's egress or proxy";
-// A project check's answer when the bot can't see the project.
-export const UNSEEN_PROJECT =
-  "the bot can't see this project: check the key, and give the bot access to it";
 
 // GET <site>/_edge/tenant_info: the site's cloud id, which the gateway needs.
 export async function cloudIdOf(siteUrl: string, fetch: Fetch): Promise<string> {
@@ -128,38 +122,24 @@ export async function jiraPreflight(
   return { token, webhook: secrets.webhook };
 }
 
-// Per project, in order: the permissions the bot lacks and the status names
-// its workflows have, or why they can't be read. A project the bot can't see
-// answers 404.
-export async function checkProjects(
+// A warning when the bot holds one of PERMISSIONS in no project, or when that
+// can't be read. Asked without a project, Jira says a project permission is
+// held when the bot has it in at least one project.
+export async function checkPermissions(
   c: { cloudId: string; email: string },
   token: string,
-  keys: string[],
   fetch: Fetch,
-): Promise<ProjectCheck[]> {
+): Promise<string | undefined> {
   const client = jiraClient({ cloudId: c.cloudId, email: c.email, token }, fetch);
-  return Promise.all(
-    keys.map(async (key): Promise<ProjectCheck> => {
-      try {
-        const signal = AbortSignal.timeout(TIMEOUT_MS);
-        const [held, statuses] = await Promise.all([
-          client.myPermissions(key, PERMISSIONS, signal),
-          client.projectStatuses(key, signal),
-        ]);
-        return {
-          key,
-          missingPermissions: PERMISSIONS.filter((p) => !held[p]),
-          statuses: statuses.map((s) => s.name),
-        };
-      } catch (err) {
-        if (err instanceof HttpError && err.status === 404) {
-          return { key, error: UNSEEN_PROJECT };
-        }
-        if (err instanceof HttpError) return { key, error: `HTTP ${err.status}` };
-        return { key, error: GATEWAY_UNREACHABLE };
-      }
-    }),
-  );
+  try {
+    const held = await client.myPermissions(PERMISSIONS, AbortSignal.timeout(TIMEOUT_MS));
+    const missing = PERMISSIONS.filter((p) => !held[p]);
+    if (missing.length === 0) return undefined;
+    return `warning: the bot lacks ${permissionList(missing)} in every project: give the service account a role that has them in each project devbox works in`;
+  } catch (err) {
+    const why = err instanceof HttpError ? `HTTP ${err.status}` : GATEWAY_UNREACHABLE;
+    return `warning: can't check the bot's permissions: ${why}`;
+  }
 }
 
 // Missing permission keys for a message, ASSIGNABLE_USER with what it is

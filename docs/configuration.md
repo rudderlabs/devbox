@@ -258,7 +258,6 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "projectKeys": ["ENG", "OPS"],
   "statuses": { "started": "In Progress", "done": "Done" },
   "tokenExpiresAt": "2027-01-31" } }
 ```
@@ -270,7 +269,6 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 | `cloudId` | when `enabled` is `true` | The site's cloud ID, a UUID. `jira:setup` reads it from the site. |
 | `botEmail` | when `enabled` is `true` | The service account's email. With `JIRA_API_TOKEN`, it signs devbox in to Jira. |
 | `botAccountId`, `botName` | when `enabled` is `true` | The service account's account ID and display name, as Jira reported them to `jira:setup`. People type `@<botName>` to mention the bot. |
-| `projectKeys` | when `enabled` is `true` | A non-empty list of upper-case project keys, such as `["ENG", "OPS"]`. Events from other projects are ignored. Leave service projects out: help-center users with an Atlassian account are trusted ([docs/jira.md](jira.md#trust)). |
 | `statuses` | no | `started`, `done` and `failed`: the status names devbox moves an issue to, in any letter case. An absent one means no move ([docs/jira.md](jira.md#statuses)). |
 | `tokenExpiresAt` | when `enabled` is `true` | When the API token expires, `YYYY-MM-DD`. devbox warns from 14 days before. |
 | `allowRestrictedIssues` | no, default `false` | `true` acts on issues with a security level too. |
@@ -732,7 +730,6 @@ way.
 | `JIRA_ENABLED` | | `true` turns on Jira and `POST /webhook/jira`. Unset, empty or `false` is off; anything else fails startup. With it on, every `JIRA_*` below is required except the statuses and `JIRA_ALLOW_RESTRICTED_ISSUES`. Compose and the chart set these from `integrations.jira`. |
 | `JIRA_SITE_URL`, `JIRA_CLOUD_ID` | | The site's `https` origin and its cloud ID (a UUID). |
 | `JIRA_BOT_EMAIL`, `JIRA_BOT_ACCOUNT_ID`, `JIRA_BOT_NAME` | | The service account's email, account ID and display name. |
-| `JIRA_PROJECT_KEYS` | | The project keys devbox acts in. Comma- or space-separated. |
 | `JIRA_STATUS_STARTED`, `JIRA_STATUS_DONE`, `JIRA_STATUS_FAILED` | | The statuses devbox moves an issue to. Unset: no move. |
 | `JIRA_TOKEN_EXPIRES_AT` | | When the API token expires, an ISO date such as `2027-01-31`. |
 | `JIRA_ALLOW_RESTRICTED_ISSUES` | `false` | `true` acts on issues with a security level too. |

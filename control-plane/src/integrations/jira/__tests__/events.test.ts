@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import {
   delegation,
   isNonHuman,
-  issueContext,
+  issueCreator,
   parseAssignment,
   parseComment,
   verifySignature,
@@ -397,24 +397,21 @@ describe("isNonHuman", () => {
   });
 });
 
-describe("issueContext", () => {
+describe("issueCreator", () => {
   const withFields = (fields: Record<string, unknown>) => ({ issue: { id: "10042", fields } });
 
-  it("reads the project key, upper-cased, and the creator from either event", () => {
-    expect(
-      issueContext(withFields({ project: { key: "demo" }, creator: user(OTHER, "atlassian") })),
-    ).toEqual({ projectKey: "DEMO", creator: { accountId: OTHER, accountType: "atlassian" } });
-    expect(issueContext(commentEvent("hi"))).toEqual({ projectKey: null, creator: null });
+  it("reads the creator from either event", () => {
+    expect(issueCreator(withFields({ creator: user(OTHER, "atlassian") }))).toEqual({
+      accountId: OTHER,
+      accountType: "atlassian",
+    });
+    expect(issueCreator(commentEvent("hi"))).toBeNull();
   });
 
-  it("is null for a missing or malformed key or creator", () => {
-    for (const fields of [
-      {},
-      { project: { key: "../X" }, creator: { accountId: "x]y" } },
-      { project: "DEMO", creator: "someone" },
-    ]) {
-      expect(issueContext(withFields(fields))).toEqual({ projectKey: null, creator: null });
+  it("is null for a missing or malformed creator", () => {
+    for (const fields of [{}, { creator: { accountId: "x]y" } }, { creator: "someone" }]) {
+      expect(issueCreator(withFields(fields))).toBeNull();
     }
-    expect(issueContext(null)).toEqual({ projectKey: null, creator: null });
+    expect(issueCreator(null)).toBeNull();
   });
 });

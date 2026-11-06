@@ -70,11 +70,11 @@ Jira Cloud only. Assign an issue to the bot (a Jira service account) and it
 starts a task; comments that `@mention` the bot are follow-ups; replies are
 comments. A Jira admin creates the webhook that `jira:setup` prints. In a
 terminal, setup opens the page each step needs and always prints the link:
-Atlassian Administration for a new token, a failing project's permissions,
-and the webhooks page on a first run or with a new webhook secret.
+Atlassian Administration for a new token, and the webhooks page on a first
+run or with a new webhook secret.
 
 ```bash
-bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>] [--projects <KEY,…>]
+bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
 bun run up                      # or k8s:kind / k8s:install --target <file>
 bun run jira:status [--target <file>]
 ```
@@ -89,10 +89,15 @@ bun run jira:status [--target <file>]
   such as Automation for Jira, service-desk customer accounts or the bot.
   There are no trust lists. On a site with Jira Service Management,
   help-center users who sign in with an Atlassian account count as people:
-  keep service projects out of `projectKeys`. Both the person who assigns the
-  issue and its reporter must be people. Untrusted events are ignored
-  silently.
-- When the project keys change, the webhook's JQL in Jira must change too.
+  keep service projects out with the webhook's JQL (`project not in ("HELP")`)
+  or by not giving the service account access there. Both the person who
+  assigns the issue and its reporter must be people. Untrusted events are
+  ignored silently.
+- Projects: devbox works in every project where the service account has its
+  role (Browse projects, Assignable user, Add comments, Transition work items,
+  Link work items); there is no project list. To keep it out of a project,
+  don't give the service account access there, or set the webhook's JQL.
+  `jira:setup` and `jira:status` warn about a permission held in no project.
 
 Everything: [docs/jira.md](../../../docs/jira.md).
 

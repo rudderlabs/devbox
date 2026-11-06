@@ -89,10 +89,9 @@ does. After that, its only network calls go to your Jira site and to
 Jira now calls issues *work items* and projects *spaces*, and its permission
 screens use those words. This page keeps saying issue and project.
 
-Run in a terminal, `jira:setup` opens some of these pages for you, and always
-prints their links: Atlassian Administration when no token is in your
-environment or the keychain, and a project's permissions when the check there
-fails. Jira takes nothing prefilled from a link, so setup also says what to do
+Run in a terminal with no token in your environment or the keychain,
+`jira:setup` opens Atlassian Administration for you, and it always prints the
+link. Jira takes nothing prefilled from a link, so setup also says what to do
 on the page.
 
 1. In Atlassian Administration, open Directory → Service accounts and create
@@ -108,8 +107,13 @@ on the page.
 4. In each project devbox works in, give the service account a role that lets
    it browse the project, add comments, transition issues and link issues
    (the permissions Browse projects, Add comments, Transition work items and
-   Link work items), and be assigned issues (Assignable user). `jira:setup`
-   and `jira:status` check all five. Without Assignable user, Jira doesn't
+   Link work items), and be assigned issues (Assignable user). It needs no
+   global permission. **devbox works in every project where the service
+   account has this role.** To keep it out of a project, don't give the
+   service account access there, or limit the webhook's JQL
+   ([below](#3-create-the-webhook-in-jira)). `jira:setup` and `jira:status`
+   warn about a permission the service account holds in no project; they
+   can't tell which projects lack one. Without Assignable user, Jira doesn't
    offer the bot as an assignee, so nobody can start a task. Linking the pull
    request also needs issue linking to be on for the site, which it is by
    default. On Jira Free there is nothing to do: permissions can't be
@@ -124,8 +128,8 @@ once. On Kubernetes, the target file must exist.
 
 ```
 bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
-                   [--email <address>] [--projects <KEY,…>]
-                   [--token-expires <YYYY-MM-DD>] [--no-keychain]
+                   [--email <address>] [--token-expires <YYYY-MM-DD>]
+                   [--no-keychain]
 ```
 
 | Flag | Effect |
@@ -134,7 +138,6 @@ bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
 | `--public-url <url>` | The public HTTPS URL Jira sends webhooks to. Wins over the saved one and the Ingress. |
 | `--site <url>` | The Jira site, `https://example.atlassian.net`: an `https` origin, with no path. |
 | `--email <address>` | The service account's email, shown on its page in Atlassian Administration. |
-| `--projects <KEY,…>` | The keys of the projects devbox works in, comma-separated, such as `ENG,OPS`. Upper-cased. |
 | `--token-expires <YYYY-MM-DD>` | When the API token expires. |
 | `--no-keychain` | Never read or write the system keychain. |
 
@@ -169,13 +172,11 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
    `The saved JIRA_API_TOKEN for <scope> was rejected; keeping it`: Jira
    answers a wrong email with the same 401, and Atlassian shows a token only
    once. Pasting the saved token again counts as keeping it.
-5. **The projects**
-   (`Jira project keys devbox works in, comma-separated (the key of each space, e.g. ENG): `).
-   For each, it checks the five permissions and reads the statuses its
-   workflows use. It warns, and goes on, about a project the bot can't see or
-   a permission it lacks, and prints the link to that project's permissions,
-   `<site>/plugins/servlet/project-config/<KEY>/permissions`. It opens the
-   first such link only.
+5. **The permissions.** It asks Jira once, without a project, whether the
+   service account holds the five permissions. Asked that way, Jira counts a
+   permission as held when the service account has it in at least one
+   project. It warns, and goes on, about any it holds in no project:
+   `warning: the bot lacks <permissions> in every project: give the service account a role that has them in each project devbox works in`.
 6. **The statuses**, on the first run only ([Statuses](#statuses)).
 7. **The token's expiry**
    (`When the API token expires (YYYY-MM-DD, as Atlassian showed when you created it): `),
@@ -210,8 +211,7 @@ empty answer at a prompt with `No <what> entered: nothing was written.`
 #### Running it again
 
 Running it again is safe: a configured setting is kept unless a flag changes
-it. To change the projects on a re-run, pass `--projects` or edit the config
-file. To change the statuses, edit the config file.
+it. To change the statuses, edit the config file.
 
 The secrets are the exception: setup reuses the token and the webhook secret
 only from your environment or the keychain. Otherwise it asks for them again.
@@ -230,8 +230,7 @@ Click Create there, or edit the webhook you have, and paste these values:
   URL     <public-url>/webhook/jira
   Secret  the new secret shown below
   Events  Issue: created, updated; Comment: created
-  JQL     project in ("ENG", "OPS")
-Update the webhook's JQL whenever the project keys change.
+  JQL     optional: leave it empty for every project, or limit devbox to some, e.g. project in ("ENG")
 ```
 
 The `Secret` line says where the secret is: `the new secret shown below`
@@ -251,13 +250,15 @@ create a webhook:
 - **Secret:** the webhook's secret. devbox refuses deliveries without a valid
   signature.
 - **Events:** Issue created and Issue updated, and Comment created.
-- **JQL:** the `JQL` line, `project in ("…")` with the project keys, each
-  quoted: keys such as `GO`, `IF`, `SET` or `NEXT` are JQL reserved words.
+- **JQL:** optional. Empty, Jira sends events for every project. To limit
+  devbox to some projects, or keep it out of some, set it, for example
+  `project in ("ENG", "OPS")` or `project not in ("HELP")`. Quote each key:
+  keys such as `GO`, `IF`, `SET` or `NEXT` are JQL reserved words.
 - Leave **Exclude body** unchecked: devbox reads the body.
 
-**Update the webhook's JQL whenever the project keys change.** Jira sends
-nothing for a project the JQL leaves out, and devbox ignores events from a
-project that is not in `projectKeys`.
+devbox has no list of projects: it works on every issue Jira sends it, in any
+project the service account can use. Jira sends nothing for an issue the JQL
+leaves out.
 
 ### 4. Apply and check
 
@@ -278,7 +279,6 @@ The settings go in `devbox.config.json`:
 "integrations": { "jira": {
   "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
   "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-  "projectKeys": ["ENG", "OPS"],
   "statuses": { "started": "In Progress", "done": "Done" },
   "tokenExpiresAt": "2027-01-31" } }
 ```
@@ -354,7 +354,7 @@ which `jira:status` uses. Then:
    `integrations` block: keep it in step with the chart values.
 
 The chart refuses to render `integrations.jira.enabled: true` without each of
-`siteUrl`, `cloudId`, `botEmail`, `botAccountId`, `botName`, `projectKeys` and
+`siteUrl`, `cloudId`, `botEmail`, `botAccountId`, `botName` and
 `tokenExpiresAt`
 (`integrations.jira.enabled is true: integrations.jira.<key> is required`).
 
@@ -400,7 +400,8 @@ own events are ignored.
 **On a site with Jira Service Management, people who use the help center with
 an Atlassian account count as people**, so devbox trusts them too: an issue
 one of them reported can start a task, and their comments can reach it. Keep
-service projects out of `projectKeys`.
+service projects out with the webhook's JQL, for example
+`project not in ("HELP")`, or by not giving the service account access there.
 
 An untrusted action is ignored. devbox answers the webhook, posts nothing on
 the issue, and logs `jira_webhook.ignored` with `reason: untrusted`, `side`
@@ -435,16 +436,15 @@ restricted content in Jira. So by default devbox skips it:
 `started`, `done` and, optionally, `failed`. Names match in any letter case.
 An absent one means no move.
 
-On its first run, `jira:setup` prints `Statuses every project has: …` and
-proposes `In Progress` for `started` and `Done` for `done`, when every project
-has them:
+On its first run, `jira:setup` proposes `In Progress` for `started` and
+`Done` for `done`:
 `Status devbox moves an issue to when it starts work [In Progress] (- for none): `.
 Press Enter to take the proposal, type another status, or `-` for none.
 Without a terminal it takes the proposals. Once the config has `statuses`,
 setup no longer asks: edit `integrations.jira.statuses` to change them,
 including to set `failed`, then apply. setup warns about a missing `started`
-or `done`, and about a project without a configured status; `jira:status`
-shows the latter too.
+or `done`. In a project whose workflow lacks a configured status, that move
+is skipped and logged.
 
 devbox moves an issue:
 
@@ -550,8 +550,7 @@ Read-only: it never prompts, never reads a Kubernetes Secret and never prints
 a secret. It exits 0 whatever the control plane or the probe report; only a
 config or target file it can't load makes it exit 1. It prints:
 
-1. **The settings**: `site`, `bot` (name and email), `projectKeys`,
-   `tokenExpiresAt`, `publicUrl`, and where each Jira secret would come from
+1. **The settings**: `site`, `bot` (name and email), `tokenExpiresAt`, `publicUrl`, and where each Jira secret would come from
    at the next apply: `env`, `keychain` or `missing`, or
    `from Secret "<name>" (not read)` with your own integrations Secret.
    Without a block: `Jira is not configured for <scope>. Run: bun run jira:setup`.
@@ -562,9 +561,9 @@ config or target file it can't load makes it exit 1. It prints:
    - `Control plane: bot <name>, auth <ok | rejected | unknown>, last webhook from Jira <time | none yet>`.
      `auth rejected` means Jira refuses the token; it adds what to do.
    - `API token: expires in <n> days`, or `expired <n> days ago`.
-   - `Project <KEY>: ok`, or what is wrong there: `missing <permissions>`,
-     `no status "<name>"` for a configured status the project lacks, or
-     `can't check (<class>)`.
+   - `Permissions: ok`, `Permissions: missing <permissions> in every project`
+     for those the service account holds in no project, or
+     `Permissions: can't check (<class>)`.
    - `Last failed reply to Jira: <HTTP status | no answer> at <time>`, after a
      comment failed.
    - `Replies held for <n> task(s), the oldest for <m> min: Jira is refusing or rate-limiting them`:
@@ -671,10 +670,10 @@ issue or posting anything to it. So:
 | `jira:setup`, `up`, `k8s:install`, `k8s:check` | `Jira rejected JIRA_API_TOKEN, or the email <email> doesn't match it (401): use the service account's API token, with scopes read:jira-work, write:jira-work and read:jira-user, and the service account's email` | The token is wrong or expired, it is not a service account's, or `<email>` is not the service account's email. A saved token stays saved. A wrong email: pass `--email` to `jira:setup`. Otherwise create a new token ([Rotating the API token](#rotating-the-api-token)). |
 | `up`, `k8s:install`, `k8s:check` | `JIRA_API_TOKEN belongs to <name> (<id>), not the configured bot <name> (<id>): run bun run jira:setup` | The token is another account's. Use the bot's token, or run `jira:setup` with the new account's token to switch bots. |
 | same | `can't reach api.atlassian.com: check this machine's egress or proxy` | On Kubernetes, the control plane needs egress to `api.atlassian.com` too. |
-| `jira:setup` | `warning: project <KEY>: the bot can't see this project: check the key, and give the bot access to it` | Check the key, and give the service account a role in the project. |
-| `jira:setup` | `warning: the bot lacks <permissions> in project <KEY>: …` | Give the service account a role there that has them ([The service account](#1-the-service-account)). |
-| `jira:setup` | `warning: project <KEY> has no status "<name>" (statuses.<role>)`, or `warning: no started status: …` | Set `integrations.jira.statuses` to statuses every project has ([Statuses](#statuses)). |
-| `jira:status` | `Project <KEY>: missing …; no status "…"`, or `can't check (http_404)` | As the two rows above. `http_404`: the bot can't see the project. |
+| `jira:setup` | `warning: the bot lacks <permissions> in every project: …` | Give the service account a role that has them in each project devbox works in ([The service account](#1-the-service-account)). |
+| `jira:setup` | `warning: can't check the bot's permissions: …` | Jira didn't answer. Check this machine's egress to `api.atlassian.com`, then run `jira:setup` again. |
+| `jira:setup` | `warning: no started status: …` | Set `integrations.jira.statuses` ([Statuses](#statuses)). |
+| `jira:status` | `Permissions: missing … in every project`, or `Permissions: can't check (<class>)` | As the `jira:setup` rows above. |
 | `jira:status` | `auth rejected`, or `API token: expired …` | Rotate the token ([Rotating the API token](#rotating-the-api-token)). |
 | `jira:status` | `Replies held for …`, `Last failed reply to Jira: HTTP <status>` | Jira refuses the bot's comments. 403: the bot lacks Add Comments; 429: Jira's rate limit, which passes. |
 | `jira:status` probe | `got no answer (…): the public URL does not reach devbox` | The tunnel is down, or the Ingress or DNS is not ready yet. With the URL from `ingress.api`, that Ingress may be VPN-only: add a public `ingress.webhooks`. |
@@ -685,7 +684,7 @@ issue or posting anything to it. So:
 | control plane log | `Jira webhook rejected: unsigned (set a secret on the webhook in Jira)` | The webhook has no secret: set one ([Replacing the webhook secret](#replacing-the-webhook-secret)). |
 | Jira | The bot is not offered as an assignee | Give the service account the Assignable User permission in the project. `jira:setup` warns about it, and `jira:status` shows `missing ASSIGNABLE_USER …`. |
 | Jira | Assigning does nothing; `jira:status` shows `last webhook from Jira none yet` | The webhook is missing or disabled, its URL is wrong, its JQL leaves the project out, or its events lack Issue updated. Then read the control plane's logs for a rejected signature. |
-| Jira | Assigning does nothing; webhooks arrive | Read the logs for `jira_webhook.ignored` and its `reason`: `untrusted` with `side: assigner` or `side: reporter` ([Trust](#trust)), `foreign_project` (add the key to `projectKeys` and the JQL), `restricted_issue`, or `non_human` (an app, or an automation rule running as Automation for Jira, assigned it). |
+| Jira | Assigning does nothing; webhooks arrive | Read the logs for `jira_webhook.ignored` and its `reason`: `untrusted` with `side: assigner` or `side: reporter` ([Trust](#trust)), `restricted_issue`, or `non_human` (an app, or an automation rule running as Automation for Jira, assigned it). |
 | Jira | Assigning does nothing; the log shows `jira webhook failed` with `code: 23505` | The issue's key is already the key of a task from another source, such as a Linear issue with the same key: task keys are unique across sources regardless of case. Jira retries and then gives up; nothing is posted on the issue. Use a project key that no other source uses. |
 | Jira | A comment that mentions the bot does nothing | The author is not a person ([Trust](#trust)), the comment is restricted, the mention is inside a code block, the typed name differs from the bot's name, or the bot was never assigned the issue (`jira_webhook.ignored` with `reason: no_task`). When the bot is the assignee but has no task there, as after an ignored assignment, devbox answers 503 in case the assignment is still on its way, and logs `jira_webhook.task_not_found` at each of Jira's retries. |
 | Jira | The issue doesn't move | See [Statuses](#statuses): no `started` status, the issue was re-assigned or moved, or the logs show `jira transition skipped` or `jira transition refused`. |

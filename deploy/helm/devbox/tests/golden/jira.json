@@ -737,10 +737,6 @@
                   "value": "devbox"
                 },
                 {
-                  "name": "JIRA_PROJECT_KEYS",
-                  "value": "ENG,OPS"
-                },
-                {
                   "name": "JIRA_STATUS_STARTED",
                   "value": "In Progress"
                 },

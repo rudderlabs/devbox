@@ -9,17 +9,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // A token with fewer days left than this is warned about.
 const TOKEN_WARN_DAYS = 14;
 
-type ProjectHealth =
-  | { missingPermissions: string[]; missingStatuses: string[] }
-  | { error: string };
-
 export type JiraIntegrationStatus = {
   configured: true;
   lastWebhookAt: string | null;
   bot: { accountId: string; name: string };
   auth: "ok" | "rejected" | "unknown";
   tokenDaysLeft: number;
-  projects: Record<string, ProjectHealth>;
+  // The PERMISSIONS the bot holds in no project, or why that can't be read.
+  permissions: { missing: string[] } | { error: string };
   lastReplyFailure: { status: number | null; at: string } | null; // status null: no HTTP answer
 };
 
@@ -35,7 +32,7 @@ export class JiraStatusService {
 
   constructor(
     private readonly cfg: JiraConfig,
-    private readonly client: Pick<JiraClient, "myself" | "myPermissions" | "projectStatuses">,
+    private readonly client: Pick<JiraClient, "myself" | "myPermissions">,
     private readonly log: Pick<Logger, "warn">,
     private readonly now: () => number = Date.now,
   ) {}
@@ -57,7 +54,7 @@ export class JiraStatusService {
 
   async status(): Promise<JiraIntegrationStatus> {
     this.warnIfTokenExpiring();
-    const [auth, projects] = await Promise.all([this.auth(), this.projects()]);
+    const [auth, permissions] = await Promise.all([this.auth(), this.permissions()]);
     return {
       configured: true,
       lastWebhookAt:
@@ -65,7 +62,7 @@ export class JiraStatusService {
       bot: { accountId: this.cfg.botAccountId, name: this.cfg.botName },
       auth,
       tokenDaysLeft: this.tokenDaysLeft(),
-      projects,
+      permissions,
       lastReplyFailure: this.lastReplyFailure,
     };
   }
@@ -79,33 +76,17 @@ export class JiraStatusService {
     }
   }
 
-  // Per project: the permissions the bot lacks, and the configured status
-  // names the project's workflows don't have (compared in any case).
-  private async projects(): Promise<Record<string, ProjectHealth>> {
-    const { statuses } = this.cfg;
-    const wanted = [statuses.started, statuses.done, statuses.failed].filter(
-      (s): s is string => s !== undefined,
-    );
-    const health = async (key: string): Promise<ProjectHealth> => {
-      try {
-        const [held, available] = await withTimeout(STATUS_TIMEOUT_MS, (signal) =>
-          Promise.all([
-            this.client.myPermissions(key, PERMISSIONS, signal),
-            this.client.projectStatuses(key, signal),
-          ]),
-        );
-        const names = new Set(available.map((s) => s.name.toLowerCase()));
-        return {
-          missingPermissions: PERMISSIONS.filter((p) => !held[p]),
-          missingStatuses: wanted.filter((s) => !names.has(s.toLowerCase())),
-        };
-      } catch (err) {
-        return { error: errorClass(err) };
-      }
-    };
-    const keys = this.cfg.projectKeys;
-    const results = await Promise.all(keys.map(health));
-    return Object.fromEntries(keys.map((key, i) => [key, results[i] as ProjectHealth]));
+  // Asked without a project, Jira says a project permission is held when the
+  // bot has it in at least one project, so a missing one is missing in all.
+  private async permissions(): Promise<JiraIntegrationStatus["permissions"]> {
+    try {
+      const held = await withTimeout(STATUS_TIMEOUT_MS, (signal) =>
+        this.client.myPermissions(PERMISSIONS, signal),
+      );
+      return { missing: PERMISSIONS.filter((p) => !held[p]) };
+    } catch (err) {
+      return { error: errorClass(err) };
+    }
   }
 
   private tokenDaysLeft(): number {

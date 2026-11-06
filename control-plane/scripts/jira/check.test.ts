@@ -5,7 +5,7 @@ import { CredentialRejected, type Fetch } from "../up/preflight";
 import {
   checkJira,
   checkJiraBot,
-  checkProjects,
+  checkPermissions,
   cloudIdOf,
   JiraCheckError,
   jiraPreflight,
@@ -99,62 +99,41 @@ describe("checkJira", () => {
   });
 });
 
-describe("checkProjects", () => {
-  const statuses = [
-    {
-      statuses: [
-        { id: "1", name: "To Do" },
-        { id: "3", name: "In Progress" },
-      ],
-    },
-    {
-      statuses: [
-        { id: "3", name: "In Progress" },
-        { id: "10001", name: "Done" },
-      ],
-    },
-  ];
+describe("checkPermissions", () => {
+  const ALL = "BROWSE_PROJECTS%2CADD_COMMENTS%2CTRANSITION_ISSUES%2CLINK_ISSUES%2CASSIGNABLE_USER";
 
-  it("missing permissions and the workflow's statuses, per project", async () => {
-    const f = fakeFetch((url) => {
-      if (url.includes("/mypermissions")) {
-        return Response.json({
-          permissions: {
-            BROWSE_PROJECTS: { havePermission: true },
-            ADD_COMMENTS: { havePermission: true },
-            TRANSITION_ISSUES: { havePermission: false },
-          },
-        });
-      }
-      if (url.endsWith("/project/ENG/statuses")) return Response.json(statuses);
-      return new Response("", { status: 599 });
-    });
-    expect(await checkProjects(CFG, "t", ["ENG"], f.fetch)).toEqual([
-      {
-        key: "ENG",
-        missingPermissions: ["TRANSITION_ISSUES", "LINK_ISSUES", "ASSIGNABLE_USER"],
-        statuses: ["To Do", "In Progress", "Done"],
-      },
-    ]);
-    expect(f.requests.map((r) => r.url)).toEqual([
-      `${API}/mypermissions?projectKey=ENG&permissions=BROWSE_PROJECTS%2CADD_COMMENTS%2CTRANSITION_ISSUES%2CLINK_ISSUES%2CASSIGNABLE_USER`,
-      `${API}/project/ENG/statuses`,
-    ]);
+  it("asks once, without a project; nothing to say when every permission is held somewhere", async () => {
+    const asked = (url: string) => new URL(url).searchParams.get("permissions")?.split(",") ?? [];
+    const f = fakeFetch((url) =>
+      Response.json({
+        permissions: Object.fromEntries(asked(url).map((p) => [p, { havePermission: true }])),
+      }),
+    );
+    expect(await checkPermissions(CFG, "t", f.fetch)).toBeUndefined();
+    expect(f.requests.map((r) => r.url)).toEqual([`${API}/mypermissions?permissions=${ALL}`]);
   });
 
-  it("a project the bot can't see, and other failures", async () => {
-    const f = fakeFetch((url) =>
-      url.includes("OPS")
-        ? new Response("", { status: 500 })
-        : new Response('{"errorMessages":["No project could be found"]}', { status: 404 }),
+  it("warns about a permission held in no project, or when they can't be read", async () => {
+    const some = fakeFetch(() =>
+      Response.json({
+        permissions: {
+          BROWSE_PROJECTS: { havePermission: true },
+          ADD_COMMENTS: { havePermission: true },
+          TRANSITION_ISSUES: { havePermission: false },
+        },
+      }),
     );
-    expect(await checkProjects(CFG, "t", ["ENG", "OPS"], f.fetch)).toEqual([
-      {
-        key: "ENG",
-        error: "the bot can't see this project: check the key, and give the bot access to it",
-      },
-      { key: "OPS", error: "HTTP 500" },
-    ]);
+    expect(await checkPermissions(CFG, "t", some.fetch)).toBe(
+      "warning: the bot lacks TRANSITION_ISSUES, LINK_ISSUES, ASSIGNABLE_USER (needed to assign issues to the bot) in every project: give the service account a role that has them in each project devbox works in",
+    );
+    const refused = fakeFetch(() => new Response("", { status: 403 }));
+    expect(await checkPermissions(CFG, "t", refused.fetch)).toBe(
+      "warning: can't check the bot's permissions: HTTP 403",
+    );
+    const down = fakeFetch(() => new TypeError("fetch failed"));
+    expect(await checkPermissions(CFG, "t", down.fetch)).toBe(
+      "warning: can't check the bot's permissions: can't reach api.atlassian.com: check this machine's egress or proxy",
+    );
   });
 });
 
@@ -186,7 +165,6 @@ describe("checkJiraBot and jiraPreflight", () => {
     botEmail: "devbox@example.com",
     botAccountId: BOT_ID,
     botName: "devbox",
-    projectKeys: ["ENG"],
     tokenExpiresAt: "2027-06-30",
   };
   const NOW = new Date("2026-11-03T12:00:00Z");

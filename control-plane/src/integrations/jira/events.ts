@@ -10,7 +10,6 @@ import { mentionsBot } from "./wiki";
 const NUMERIC = /^[1-9]\d{0,14}$/;
 const ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
 const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
-const PROJECT_KEY = /^[A-Za-z][A-Za-z0-9_]*$/;
 const HEX_SHA256 = /^[0-9a-f]{64}$/i;
 
 // Who did something: the account id and Jira's account type ("atlassian",
@@ -135,18 +134,9 @@ export function delegation(a: Pick<JiraAssignment, "issueId" | "changelogId">): 
   return { id: `${a.issueId}:${a.changelogId}`, order: Number(a.changelogId) };
 }
 
-// The issue's project key (upper-cased, for the project allowlist) and its
-// creator (who stands in for a missing reporter), from either kind of event.
-export function issueContext(payload: unknown): {
-  projectKey: string | null;
-  creator: JiraActor | null;
-} {
-  const fields = record(record(record(payload)?.issue)?.fields);
-  const key = record(fields?.project)?.key;
-  return {
-    projectKey: typeof key === "string" && PROJECT_KEY.test(key) ? key.toUpperCase() : null,
-    creator: readActor(fields?.creator),
-  };
+// The issue's creator, who stands in for a missing reporter.
+export function issueCreator(payload: unknown): JiraActor | null {
+  return readActor(record(record(record(payload)?.issue)?.fields)?.creator);
 }
 
 // App accounts (integrations, service accounts) and customer accounts

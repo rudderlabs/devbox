@@ -1,7 +1,7 @@
 // The Jira integration:
 //   bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
-//                      [--email <address>] [--projects <KEY,…>]
-//                      [--token-expires <YYYY-MM-DD>] [--no-keychain]
+//                      [--email <address>] [--token-expires <YYYY-MM-DD>]
+//                      [--no-keychain]
 //   bun run jira:status  [--target <file>] [--no-keychain]
 //   bun run jira:disable [--target <file>] [--no-keychain] [--forget [--yes]]
 // Without --target it acts on the Compose deployment (devbox.config.json),
@@ -28,12 +28,12 @@ const COMMANDS = ["setup", "status", "disable"];
 
 const USAGE = `Usage:
   bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
-                     [--email <address>] [--projects <KEY,…>]
-                     [--token-expires <YYYY-MM-DD>] [--no-keychain]
+                     [--email <address>] [--token-expires <YYYY-MM-DD>]
+                     [--no-keychain]
 
 Connects devbox to a Jira Cloud site through a service account: checks its
 API token (from JIRA_API_TOKEN, the system keychain or a hidden prompt) and
-each project, saves the settings in the deployment's config and, if you
+its permissions, saves the settings in the deployment's config and, if you
 choose, the token and the webhook secret in the system keychain, and prints
 the webhook a Jira admin creates. It applies nothing: it names the command
 that does (bun run up, k8s:install with --target, or k8s:kind on kind).
@@ -53,7 +53,6 @@ in Jira yourself.
   --public-url <url>       the public HTTPS URL Jira sends webhooks to
   --site <url>             the Jira site, e.g. https://example.atlassian.net
   --email <address>        the service account's email
-  --projects <KEY,…>       the project keys devbox works in, e.g. ENG
   --token-expires <date>   when the API token expires, e.g. 2027-01-31
   --no-keychain            never read or write the system keychain
   --forget                 disable: delete the configuration and saved secrets
@@ -69,7 +68,6 @@ const SETUP_FLAGS = {
   "public-url": { type: "string" },
   site: { type: "string" },
   email: { type: "string" },
-  projects: { type: "string" },
   "token-expires": { type: "string" },
   "no-keychain": { type: "boolean" },
   help: { type: "boolean", short: "h" },
@@ -116,7 +114,6 @@ async function main(command: string | undefined, argv: string[]): Promise<number
           publicUrl: values["public-url"],
           site: values.site,
           email: values.email,
-          projects: values.projects,
           tokenExpires: values["token-expires"],
         },
         {

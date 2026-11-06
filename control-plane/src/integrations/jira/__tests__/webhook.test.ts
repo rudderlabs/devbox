@@ -134,7 +134,6 @@ describe("Jira webhook: assignment", () => {
     ["the bot's own event", { actor: user(BOT, "atlassian") }, "own_event", BOT],
     ["an app account", { actor: user(HUMAN, "app") }, "non_human", HUMAN],
     ["a customer account", { actor: user(HUMAN, "customer") }, "non_human", HUMAN],
-    ["another project", { project: "OTHER" }, "foreign_project", HUMAN],
   ] as const)("ignores %s with 200 and an id-only log", async (_, opts, reason, accountId) => {
     const { signed, taskCalls, jiraCalls } = setup();
     const res = await signed(assignmentEvent(opts));
@@ -273,7 +272,6 @@ describe("Jira webhook: comment", () => {
     ],
     ["a customer's comment", { author: user(HUMAN, "customer") }, "non_human"],
     ["an app's comment", { author: user(HUMAN, "app") }, "non_human"],
-    ["a comment in another project", { project: "OTHER" }, "foreign_project"],
   ] as const)("ignores %s", async (_, opts, reason) => {
     const { signed, taskCalls } = setup();
     const res = await signed(commentEvent("@devbox do it", opts));
