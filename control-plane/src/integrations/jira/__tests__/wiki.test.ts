@@ -17,6 +17,13 @@ describe("wikiToMarkdown: inline", () => {
     expect(md("a*b*c")).toBe("a*b*c");
   });
 
+  it("keeps formatting-like text inside {{monospace}} as written", () => {
+    expect(md("glob {{src/*.ts*}} and *bold*")).toBe("glob `src/*.ts*` and **bold**");
+    expect(md("use {{*value*}} here")).toBe("use `*value*` here");
+    expect(md("see {{[label|https://example.com]}}")).toBe("see `[label|https://example.com]`");
+    expect(md("tick {{a`b}}")).toBe("tick ``a`b``");
+  });
+
   it("turns {{monospace}} into inline code", () => {
     expect(md("run {{bun test}} now")).toBe("run `bun test` now");
   });

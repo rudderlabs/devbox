@@ -129,12 +129,30 @@ function convertLine(line: string): string {
   return convertInline(line);
 }
 
+// Monospace spans become code exactly as written: the prose conversions
+// (macros, bold, links) run only on the text between them, so a literal such
+// as {{src/*.ts*}} reaches the agent unchanged.
 function convertInline(s: string): string {
-  return s
-    .replace(MONOSPACE, (_, code: string) => `\`${code}\``)
-    .replace(MACRO, "")
-    .replace(BOLD, "$1**$2**")
-    .replace(BRACKETS, link);
+  let out = "";
+  let last = 0;
+  for (const m of s.matchAll(MONOSPACE)) {
+    out += convertProse(s.slice(last, m.index)) + inlineCode(m[1] ?? "");
+    last = m.index + m[0].length;
+  }
+  return out + convertProse(s.slice(last));
+}
+
+function convertProse(s: string): string {
+  return s.replace(MACRO, "").replace(BOLD, "$1**$2**").replace(BRACKETS, link);
+}
+
+// Inline code, its fence longer than any backtick run inside; padded when the
+// code starts or ends with a backtick, as Markdown requires.
+function inlineCode(code: string): string {
+  const longest = (code.match(/`+/g) ?? []).reduce((n, run) => Math.max(n, run.length), 0);
+  const fence = "`".repeat(longest + 1);
+  const pad = code.startsWith("`") || code.endsWith("`") ? " " : "";
+  return `${fence}${pad}${code}${pad}${fence}`;
 }
 
 // [url], [text|url] and [~name] (an old-style mention). A link to anything
