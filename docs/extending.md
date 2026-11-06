@@ -2,10 +2,11 @@
 
 ## Not a stable interface
 
-devbox has no extension or hook interface. This page lists the places in the
-code where hooks would naturally go, so you know where to look if you change
-devbox for your own needs. All of it can change in any commit, without notice
-and without a migration path.
+devbox has no stable extension or hook interface. This page lists the places in
+the code where hooks would naturally go, and the internal interface task
+sources plug into, so you know where to look if you change devbox for your own
+needs. All of it can change in any commit, without notice and without a
+migration path.
 
 ## The repos the agent works on
 
@@ -65,19 +66,71 @@ Follow-up rounds run through `run_followup_round` in
 ## Task sources
 
 The API (`control-plane/src/routes/api.ts`, `control-plane/src/services/apiTask.service.ts`)
-is the documented way to create tasks. A task source:
+is the documented way to create tasks. Every source of tasks and follow-up
+rounds, the API included, is an integration in its own folder under
+`control-plane/src/integrations/`. A new source is one more folder there and
+one entry in the list in `control-plane/src/integrations/index.ts`. Its
+settings must also reach the control plane's process: list them in
+`control-plane/.env.example`, pass them in the `control-plane` service's
+`environment:` in `control-plane/docker-compose.yml`, and set them in the Helm
+chart (`deploy/helm/devbox/templates/control-plane.yaml`, from a value in
+`values.yaml`), or have operators set them with `extraEnv`. The harness,
+though, treats a new source as not live, and sends it no progress messages,
+unless `LIVE_CHANNEL_SOURCES` in `harness/src/harness/handlers/_common.py`
+lists it. It also adds the PR discussion to a follow-up only for `github`
+and `gitlab` rounds (`harness/src/harness/followup.py`).
 
-- creates a row in `tasks`, and an `assignment` row in `inbox` for it;
-- adds an `inbox` row for each follow-up;
-- gives each inbox row the reply targets that say where the harness's answers
-  go (`ReplyTargetSpec` in `control-plane/src/repositories/inbox.repository.ts`).
+- **The definition.** The folder exports an `IntegrationDefinition`
+  (`control-plane/src/integrations/types.ts`). Its `name` is stored as the
+  source of its tasks and rounds, and names its routes, `/webhook/<name>` and
+  `/api/integrations/<name>`. `createsTasks` says whether it creates tasks;
+  `parseConfig` reads its settings from the environment, or returns undefined
+  when it is off; `create` builds it once at startup when it is on; and
+  `disabledStatus` is its status while it is off.
+- **`Core`.** `create` gets its own `TaskService`, bound to its name, and the
+  logger. Through the `TaskService` it creates a task with its assignment
+  round, and queues follow-up rounds. A round's kind and payload are what the
+  harness reads (`InboxMessage` in `control-plane/src/types/inboxMessage.ts`).
+- **The `Integration`.** `create` returns it: an optional webhook, `deliver`
+  for the harness's answers, optional lifecycle hooks, and its status. The
+  control plane calls it only through the registry
+  (`control-plane/src/services/integrationRegistry.ts`), which skips a
+  disabled integration, bounds each `deliver` and hook call with a timeout and
+  an abort signal, and logs a failure. `onTaskStarted` runs before every
+  fresh-provision attempt, so it must be safe to repeat.
+- **The code host.** GitHub is the only code host, and the control plane
+  handles new pull requests itself
+  (`control-plane/src/services/codeHost.service.ts`). It posts a comment on
+  each one explaining @-mentions, but only while an enabled integration sets
+  `prMentionLogin` (the GitHub integration sets its bot login), and it assigns
+  the pull request to the person the task's integration returns from
+  `assignee()`, through that person's `githubAccount`. An integration whose
+  platform links GitHub accounts returns the link as it is, an account id or a
+  login, or `null` when the person hasn't linked one; one that can't link
+  accounts leaves it out. An all-digit `githubAccount` is taken as an account
+  id and anything else as a login. Only github.com pull request URLs get the
+  comment or an assignee. The comment is posted, and the assignee started,
+  before the control plane records the pull request on the task, so a restart
+  before the record repeats them, and the comment can appear twice. The
+  assignee is best-effort: it finishes in the background, and a crash while it
+  is still running is not retried.
+- **Reply targets.** Each round carries reply targets that say where the
+  harness's answers go, each with a `spec` in the integration's own shape. The
+  control plane stores the spec and hands it back to the `deliver` of the
+  round's integration, which checks it and refuses anything else.
+- **The boundary.** A file in the folder imports only its own folder, the
+  shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), its
+  API clients (kept in its own folder, or in `control-plane/src/clients/` under
+  its name when core uses them too, as with GitHub's), the
+  experimental-flag parser, the database row types and packages: never another
+  integration or the rest of the control plane.
+  `control-plane/src/integrations/__tests__/boundary.test.ts` checks this.
 
-The harness sees only the inbox file (`InboxMessage` in
-`control-plane/src/types/inboxMessage.ts`). The control plane routes the
-harness's events back to the source by reply target, in
-`control-plane/src/services/eventDispatcher.ts`. A new source would add a
-`source` value, its routes, and its reply-target kinds. The code has other
-sources, which this repo doesn't document.
+The database and the CLI don't list the sources: `tasks.source` is text, and
+the control plane checks a source against the registered integrations. The
+old `task_source` enum type is still in the database, kept so pods on the
+previous release keep working during an upgrade, until a later migration
+drops it.
 
 ## The sandbox runtime
 

@@ -21,10 +21,10 @@ mock.module("../../../clients/gitlab", () => ({
   parseMrUrl: () => null,
 }));
 
-const { GitlabIntegration } = await import("../index");
-const { WORKSPACE_MISSING_MESSAGE } = await import("../../../services/inbox.service");
+const { GitlabIntegration, gitlab: definition } = await import("../index");
+const { GitlabStatusService } = await import("../status");
 const { HttpError } = await import("../../http");
-const { RetryableError } = await import("../../outbound");
+const { RetryableError, WORKSPACE_MISSING_MESSAGE } = await import("../../outbound");
 
 const ctx: SendCtx = {
   signal: new AbortController().signal,
@@ -38,7 +38,11 @@ const row = (kind: InboxRow["kind"], targets: ReplyTarget[]): InboxRow =>
   ({ id: "row-1", source: "gitlab", kind, reply_targets: targets }) as unknown as InboxRow;
 
 describe("GitlabIntegration.deliver", () => {
-  const gitlab = new GitlabIntegration(true, { ciResults: true, botUsername: "devbox-bot" });
+  const gitlab = new GitlabIntegration(
+    { botUsername: "devbox-bot" },
+    { status: () => ({}) as never },
+    { handleWebhook: async () => new Response() },
+  );
 
   beforeEach(() => {
     for (const m of [postMrNote, postDiscussionNote, findDiscussionIdForNote, awardNoteEmoji]) {
@@ -89,7 +93,7 @@ describe("GitlabIntegration.deliver", () => {
   it("a CI result's target (noteId 0) posts a new top-level note", async () => {
     await gitlab.deliver(
       ctx,
-      { id: "7001", spec: { ...noteTarget().spec, noteId: 0 } as never },
+      { id: "7001", spec: { ...(noteTarget().spec as object), noteId: 0 } as never },
       {
         type: "reply",
         body: "ci fixed",
@@ -121,7 +125,10 @@ describe("GitlabIntegration.deliver", () => {
       ctx.signal,
     );
     postDiscussionNote.mockClear();
-    const ci: ReplyTarget = { id: "7001", spec: { ...noteTarget().spec, noteId: 0 } as never };
+    const ci: ReplyTarget = {
+      id: "7001",
+      spec: { ...(noteTarget().spec as object), noteId: 0 } as never,
+    };
     await gitlab.deliver(ctx, ci, {
       type: "failure",
       cause: "round_failed",
@@ -154,6 +161,7 @@ describe("GitlabIntegration.deliver", () => {
     await gitlab.deliver(ctx, target, {
       type: "failure",
       cause: "workspace_missing",
+      summary: WORKSPACE_MISSING_MESSAGE,
       round: row("comment", [target]),
     });
     expect(postDiscussionNote).toHaveBeenCalledWith(
@@ -166,10 +174,14 @@ describe("GitlabIntegration.deliver", () => {
     expect(awardNoteEmoji).toHaveBeenCalledWith(55, 3, 901, "confused", ctx.signal);
     awardNoteEmoji.mockClear();
     postMrNote.mockClear();
-    const ci: ReplyTarget = { id: "7001", spec: { ...noteTarget().spec, noteId: 0 } as never };
+    const ci: ReplyTarget = {
+      id: "7001",
+      spec: { ...(noteTarget().spec as object), noteId: 0 } as never,
+    };
     await gitlab.deliver(ctx, ci, {
       type: "failure",
       cause: "workspace_missing",
+      summary: WORKSPACE_MISSING_MESSAGE,
       round: row("ci_result", [ci]),
     });
     expect(postMrNote).not.toHaveBeenCalled();
@@ -190,26 +202,38 @@ describe("GitlabIntegration.deliver", () => {
         { id: "x", spec: { kind: "linear_session" } },
         { type: "reply", body: "x" },
       ),
-    ).rejects.toThrow("gitlab cannot deliver to a linear_session target");
+    ).rejects.toThrow("not a GitLab merge request target");
   });
 });
 
-describe("GitlabIntegration.status", () => {
-  it("reports webhooks off without a controller, on with its last delivery", async () => {
-    const off = new GitlabIntegration(false, { ciResults: false, botUsername: undefined });
-    expect(await off.status()).toEqual({
-      token: { configured: false, source: null, readAt: null, lastError: null },
+describe("GitLab status", () => {
+  const token = { configured: false, source: null, readAt: null, lastError: null };
+
+  it("reports webhooks off while GitLab is disabled", () => {
+    expect(definition.disabledStatus()).toEqual({
+      token,
       webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
     });
-    const on = new GitlabIntegration(true, { ciResults: true, botUsername: "devbox-bot" });
-    on.controller = {
-      handleWebhook: async () => new Response(),
+  });
+
+  it("reports its last verified delivery and whether CI results are on", () => {
+    const status = new GitlabStatusService(() => token as never, {
+      enabled: true,
+      ciResults: true,
       lastWebhookAt: () => "2026-11-03T00:00:00.000Z",
-    };
-    expect((await on.status()).webhooks).toEqual({
+    });
+    expect(status.status().webhooks).toEqual({
       enabled: true,
       lastWebhookAt: "2026-11-03T00:00:00.000Z",
       ciResults: true,
     });
+  });
+});
+
+describe("the GitLab definition", () => {
+  it("is off without GITLAB_WEBHOOKS_ENABLED and creates no tasks", () => {
+    expect(definition.name).toBe("gitlab");
+    expect(definition.createsTasks).toBe(false);
+    expect(definition.parseConfig({})).toBeUndefined();
   });
 });

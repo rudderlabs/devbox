@@ -1,326 +1,22 @@
 import { config } from "../config";
 import type { Task } from "../db/schema";
-import { deliverToRound } from "../integrations/http";
-import type { TaskIntake } from "../integrations/intake";
-import type { Integration, IntegrationName } from "../integrations/types";
+import { WORKSPACE_MISSING_MESSAGE } from "../integrations/outbound";
 import { logger } from "../logger";
-import type {
-  InboxRepository,
-  InboxRow,
-  ReplyTarget,
-  ReplyTargetSpec,
-} from "../repositories/inbox.repository";
+import type { InboxRepository, InboxRow } from "../repositories/inbox.repository";
 import type { InboxMessage } from "../types/inboxMessage";
-import type { IntegrationHooks } from "./integrationHooks";
+import type { IntegrationRegistry } from "./integrationRegistry";
 import type { SandboxManager } from "./sandboxManager.service";
 
-// InboxService builds the GitHub and Linear follow-up rounds (comment, review,
-// CI result, Linear comment) and queues them through TaskIntake.followUp; it
-// owns the sweep that delivers pending rows to the sandbox (recreating it from
-// the preserved PVC when it has been reaped), and the PVC-missing per-row
-// dead-letter.
-export const WORKSPACE_MISSING_MESSAGE =
-  "The workspace for this task has been cleaned up and can no longer be resumed. " +
-  "Please reach out to the harness team or open a new ticket to continue.";
-
+// InboxService owns the sweep that delivers pending rows to the sandbox
+// (recreating it from the preserved PVC when it has been reaped), and the
+// PVC-missing per-row dead-letter. Integrations build their own rounds and
+// queue them through their TaskService.
 export class InboxService {
   constructor(
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
-    private integrations: Record<IntegrationName, Integration>,
-    private hooks: IntegrationHooks,
-    private intake: Pick<TaskIntake, "followUp">,
+    private registry: Pick<IntegrationRegistry, "for">,
   ) {}
-
-  // ──── Enqueue paths ────
-
-  // GitHub @harness comment (solo issue_comment or standalone review_comment).
-  async enqueueComment(params: {
-    task: Pick<Task, "id" | "key">;
-    commentId: number;
-    body: string;
-    spec: Extract<ReplyTargetSpec, { kind: "issue_comment" | "review_comment" }>;
-    // ISO-8601 creation time of the comment; "" when unknown.
-    createdAt: string;
-  }): Promise<void> {
-    const externalId = String(params.commentId);
-    const prUrl = `https://github.com/${params.spec.owner}/${params.spec.repo}/pull/${params.spec.prNumber}`;
-    await this.intake.followUp({
-      task: params.task,
-      message: {
-        source: "github",
-        kind: "comment",
-        external_id: externalId,
-        payload: {
-          target_id: externalId, // matches reply_targets[0].id
-          body: params.body,
-          pr: { repo: params.spec.repo, pr_url: prUrl },
-          created_at: params.createdAt,
-          ...(params.spec.kind === "review_comment"
-            ? { path: params.spec.path, line: params.spec.line }
-            : {}),
-        },
-      },
-      targets: [{ id: externalId, spec: params.spec }],
-      prUrl,
-    });
-  }
-
-  // GitHub submitted review — the review body + every inline comment batched
-  // into ONE inbox row with N+1 reply targets.
-  async enqueueReview(params: {
-    task: Pick<Task, "id" | "key">;
-    reviewId: number;
-    reviewBody: string;
-    inlineComments: Array<{
-      id: number;
-      path: string;
-      line: number;
-      startLine?: number;
-      body: string;
-    }>;
-    owner: string;
-    repo: string;
-    prNumber: number;
-    reviewerLogin: string;
-    // ISO-8601 submission time of the review; "" when unknown.
-    createdAt: string;
-  }): Promise<void> {
-    const reviewIdStr = String(params.reviewId);
-    const prUrl = `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`;
-
-    const payload = {
-      review_body: { target_id: reviewIdStr, body: params.reviewBody },
-      inline_comments: params.inlineComments.map((c) => ({
-        target_id: String(c.id),
-        path: c.path,
-        line: c.line,
-        start_line: c.startLine,
-        body: c.body,
-      })),
-      pr: { owner: params.owner, repo: params.repo, prNumber: params.prNumber, pr_url: prUrl },
-      reviewer_login: params.reviewerLogin,
-      created_at: params.createdAt,
-    };
-
-    // reply_targets carry the routing spec. target.id MUST equal the
-    // corresponding payload.*.target_id so a targeted agent_response routes
-    // to the right thread.
-    const replyTargets: ReplyTarget[] = [
-      ...params.inlineComments.map((c) => ({
-        id: String(c.id),
-        spec: {
-          kind: "review_comment" as const,
-          owner: params.owner,
-          repo: params.repo,
-          prNumber: params.prNumber,
-          commentId: c.id,
-          inReplyTo: c.id,
-          path: c.path,
-          line: c.line,
-          startLine: c.startLine,
-        },
-      })),
-      {
-        id: reviewIdStr,
-        spec: {
-          kind: "review_body" as const,
-          owner: params.owner,
-          repo: params.repo,
-          prNumber: params.prNumber,
-          reviewId: params.reviewId,
-        },
-      },
-    ];
-
-    await this.intake.followUp({
-      task: params.task,
-      message: { source: "github", kind: "review", external_id: reviewIdStr, payload },
-      targets: replyTargets,
-      prUrl,
-    });
-  }
-
-  // Linear `prompted` — a follow-up comment on the agent session. Same inbox
-  // path as a GitHub comment; the single reply target routes to the Linear
-  // session. Idempotent on the Linear activity UUID — a duplicate redelivery
-  // is dropped.
-  async enqueueLinearComment(params: {
-    task: Pick<Task, "id" | "key">;
-    agentActivityId: string;
-    agentSessionId: string;
-    body: string;
-  }): Promise<void> {
-    await this.intake.followUp({
-      task: params.task,
-      message: {
-        source: "linear",
-        kind: "comment",
-        // Linear activity UUID — drives idempotency at (source, kind, external_id).
-        external_id: params.agentActivityId,
-        payload: {
-          // Replies route to the Linear agent session — matches reply_targets[0].id.
-          target_id: params.agentSessionId,
-          body: params.body,
-          // Linear comment isn't PR-scoped — lives on the agent session.
-          pr: null,
-          // Linear-sourced → the daemon never injects PR discussion (gated on
-          // source == "github"), so there is no comment timestamp to scope by.
-          created_at: "",
-        },
-      },
-      targets: [{ id: params.agentSessionId, spec: { kind: "linear_session" } }],
-    });
-  }
-
-  // GitHub `workflow_run` completed — one row per task whose PR URL matches.
-  // external_id includes runAttempt (re-runs share runId but bump attempt) and
-  // prNumber (one run can touch multiple PRs). followUp applies the per-task
-  // loop breaker.
-  async enqueueCiResult(params: {
-    task: Pick<Task, "id" | "key">;
-    runId: number;
-    runAttempt: number;
-    workflowName: string;
-    workflowPath: string;
-    conclusion: string;
-    runUrl: string;
-    headSha: string;
-    headBranch: string;
-    owner: string;
-    repo: string;
-    prNumber: number;
-  }): Promise<void> {
-    const runIdStr = String(params.runId);
-    const externalId = `workflow_run:${params.runId}:${params.runAttempt}:${params.prNumber}`;
-    const prUrl = `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`;
-    await this.intake.followUp({
-      task: params.task,
-      message: {
-        source: "github",
-        kind: "ci_result",
-        external_id: externalId,
-        payload: {
-          target_id: runIdStr,
-          workflow_name: params.workflowName,
-          workflow_path: params.workflowPath,
-          conclusion: params.conclusion,
-          run_url: params.runUrl,
-          head_sha: params.headSha,
-          head_branch: params.headBranch,
-          pr: { repo: params.repo, pr_url: prUrl },
-        },
-      },
-      targets: [
-        {
-          id: runIdStr,
-          spec: {
-            kind: "issue_comment",
-            owner: params.owner,
-            repo: params.repo,
-            prNumber: params.prNumber,
-            // commentId: 0 is the sentinel for "post new comment" (no existing
-            // comment to reply to — the dispatcher posts a fresh PR comment).
-            commentId: 0,
-          },
-        },
-      ],
-      prUrl,
-    });
-  }
-
-  // GitLab Note Hook on a merge request the agent opened — one row, one
-  // reply target (the note's thread). Idempotent on the note id.
-  async enqueueGitlabComment(params: {
-    task: Pick<Task, "id" | "key">;
-    noteId: number;
-    body: string;
-    spec: Extract<ReplyTargetSpec, { kind: "mr_note" | "mr_diff_note" }>;
-    // path_with_namespace; its last segment is the checkout directory name.
-    project: string;
-    prUrl: string;
-    // ISO-8601 creation time of the note; "" when unknown.
-    createdAt: string;
-  }): Promise<void> {
-    const externalId = String(params.noteId);
-    await this.intake.followUp({
-      task: params.task,
-      message: {
-        source: "gitlab",
-        kind: "comment",
-        external_id: externalId,
-        payload: {
-          target_id: externalId, // matches reply_targets[0].id
-          body: params.body,
-          pr: { repo: repoName(params.project), pr_url: params.prUrl },
-          created_at: params.createdAt,
-          ...(params.spec.kind === "mr_diff_note"
-            ? { path: params.spec.path, line: params.spec.line }
-            : {}),
-        },
-      },
-      targets: [{ id: externalId, spec: params.spec }],
-      prUrl: params.prUrl,
-    });
-  }
-
-  // GitLab Pipeline Hook, status failed — one row per task whose merge request
-  // URL matches. external_id includes the merge request iid (a branch pipeline
-  // can belong to several) and the pipeline's finished_at: a retry (the
-  // harness's rerun, or a click on Retry) re-runs the failed jobs inside the
-  // SAME pipeline id, so without it the next failure would collapse into the
-  // first as a duplicate. A redelivery of one failure keeps its finished_at.
-  // followUp applies the per-task loop breaker.
-  async enqueueGitlabCiResult(params: {
-    task: Pick<Task, "id" | "key">;
-    pipelineId: number;
-    finishedAt: string;
-    name: string;
-    status: string;
-    url: string;
-    sha: string;
-    ref: string;
-    projectId: number;
-    project: string;
-    mrIid: number;
-    prUrl: string;
-  }): Promise<void> {
-    const pipelineIdStr = String(params.pipelineId);
-    const externalId = `pipeline:${params.pipelineId}:${params.mrIid}:${params.finishedAt}`;
-    await this.intake.followUp({
-      task: params.task,
-      message: {
-        source: "gitlab",
-        kind: "ci_result",
-        external_id: externalId,
-        payload: {
-          target_id: pipelineIdStr,
-          workflow_name: params.name,
-          workflow_path: ".gitlab-ci.yml",
-          // GitLab says "failed"; the harness contract says "failure".
-          conclusion: params.status === "failed" ? "failure" : params.status,
-          run_url: params.url,
-          head_sha: params.sha,
-          head_branch: params.ref,
-          pr: { repo: repoName(params.project), pr_url: params.prUrl },
-        },
-      },
-      targets: [
-        {
-          id: pipelineIdStr,
-          spec: {
-            kind: "mr_note",
-            projectId: params.projectId,
-            project: params.project,
-            mrIid: params.mrIid,
-            // noteId 0 is the sentinel for "post a new note".
-            noteId: 0,
-          },
-        },
-      ],
-      prUrl: params.prUrl,
-    });
-  }
 
   // ──── Sweep ────
 
@@ -399,18 +95,27 @@ export class InboxService {
         return [];
       });
     if (marked.length === 0) return;
-    if (entry.kind === "assignment") this.hooks.roundFinished(task, entry, "failed", true);
+    if (entry.kind === "assignment") {
+      this.registry.for(entry.source).onRoundFinished(task, entry, entry.id, "failed", true);
+    }
     const target = entry.reply_targets[0];
     if (!target) return;
     // A row whose integration is unknown or disabled gets no notice; it is
     // still failed. No cursor to hold, so a RetryableError is dropped too.
-    await deliverToRound(
-      this.integrations,
-      entry,
-      target,
-      { type: "failure", cause: "workspace_missing", round: entry },
-      { taskId: task.id },
-    ).catch((err) => logErr(`workspace_missing notice for inbox ${entry.id} dropped`, err));
+    await this.registry
+      .for(entry.source)
+      .deliver(
+        entry,
+        target,
+        {
+          type: "failure",
+          cause: "workspace_missing",
+          round: entry,
+          summary: WORKSPACE_MISSING_MESSAGE,
+        },
+        { taskId: task.id },
+      )
+      .catch((err) => logErr(`workspace_missing notice for inbox ${entry.id} dropped`, err));
   }
 }
 
@@ -433,11 +138,5 @@ function toInboxMessage(row: InboxRow): InboxMessage {
     kind: row.kind,
     external_id: row.external_id,
     payload: row.payload,
-  } as InboxMessage;
-}
-
-// The checkout directory of a GitLab project: the last segment of its
-// path_with_namespace (repos clone to /workspace/<name>).
-function repoName(projectPath: string): string {
-  return projectPath.split("/").filter(Boolean).at(-1) ?? projectPath;
+  };
 }

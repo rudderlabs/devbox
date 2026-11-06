@@ -2,9 +2,6 @@
 // values, so the devbox CLI can import it without pulling
 // in server modules. Guarded by src/types/__tests__/api.test.ts.
 
-// The task_source enum, as a literal union: this file can't import db/schema.
-// integrations/types.ts checks the two stay equal.
-export type ApiTaskSource = "linear" | "api";
 export type ApiTaskState = "queued" | "running" | "idle" | "failed";
 export type ApiRoundStatus = "pending" | "delivered" | "responded" | "failed";
 export type ApiRoundOutcome = "completed" | "partial_failure" | "no_action" | "failed";
@@ -25,7 +22,7 @@ export type ApiRound = {
 export type ApiTask = {
   id: string;
   key: string;
-  source: ApiTaskSource;
+  source: string;
   title: string;
   description: string | null;
   external_url: string;
@@ -65,11 +62,16 @@ export type ApiEventEnvelope = {
 export type ListEventsResponse = {
   events: ApiEventEnvelope[];
   next_after: number;
+  // This server always answers "available": every task has a log. Older
+  // servers, which logged only API tasks, answered "unavailable" for the
+  // others, and clients still handle that.
   logging: "available" | "unavailable";
 };
 
 // SSE `state` event payload. Sent without an id.
 export type SseStateData = { state: ApiTaskState; sandbox_live: boolean };
+// The `logging` frame. This server never sends it. Older servers sent it on
+// the stream of a task they did not log, and clients still handle it.
 export type SseLoggingData = { logging: "unavailable" };
 
 export type MeResponse = { token: ApiCreator } | { token: null; auth: "disabled" };

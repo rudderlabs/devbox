@@ -27,7 +27,6 @@ export type PostSlackMessageParams = {
   text: string;
   // Optional Block Kit blocks; `text` stays the fallback/notification string.
   blocks?: unknown[];
-  signal?: AbortSignal;
 };
 
 // POST /chat.postMessage into a channel, or into a thread when threadTs is set. IMPORTANT: Slack returns HTTP 200 even
@@ -47,7 +46,6 @@ export async function postSlackMessage(params: PostSlackMessageParams): Promise<
       text: params.text,
       ...(params.blocks ? { blocks: params.blocks } : {}),
     }),
-    signal: params.signal,
   });
   const text = await resp.text();
   if (!resp.ok) {
@@ -70,14 +68,10 @@ export async function postSlackMessage(params: PostSlackMessageParams): Promise<
 // or missing_scope when the bot lacks `users:read.email`) — the caller's mention
 // degrades to a plain name, never worth failing a message over. Throws only on
 // a transport-level error, matching postSlackMessage.
-export async function lookupSlackUserIdByEmail(
-  email: string,
-  signal?: AbortSignal,
-): Promise<string | null> {
+export async function lookupSlackUserIdByEmail(email: string): Promise<string | null> {
   const resp = await fetch(`${API_BASE}/users.lookupByEmail?email=${encodeURIComponent(email)}`, {
     method: "GET",
     headers: { Authorization: `Bearer ${slackToken()}` },
-    signal,
   });
   const text = await resp.text();
   if (!resp.ok) {

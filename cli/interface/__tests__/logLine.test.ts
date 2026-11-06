@@ -50,6 +50,25 @@ describe("renderEvent", () => {
     );
   });
 
+  it("strips control characters from the text but keeps its lines and tabs", () => {
+    const line = renderEvent(
+      envelope(6, "agent_response", { body: "hi\x1b]52;c;eA==\x07\n\tnext\x1b[2K" }),
+      { color: true, timeZone: "UTC" },
+    );
+    expect(line).toBe("12:00:06  ✉ hi]52;c;eA==\n            \tnext[2K");
+  });
+
+  it("renders a message_queued by its body, or by its kind and source without one", () => {
+    const queued = (data: unknown) => renderEvent(envelope(8, "message_queued", data), plain);
+    expect(queued({ source: "linear", kind: "comment", body: "and the tests" })).toBe(
+      "12:00:08  → and the tests",
+    );
+    expect(queued({ source: "github", kind: "review" })).toBe("12:00:08  → review queued (github)");
+    expect(queued({ source: "github", kind: "ci_result" })).toBe(
+      "12:00:08  → ci_result queued (github)",
+    );
+  });
+
   it("colours marker and text when asked", () => {
     expect(
       renderEvent(envelope(4, "agent_thought", { body: "hmm" }), { color: true, timeZone: "UTC" }),

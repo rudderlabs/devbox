@@ -952,6 +952,70 @@ describe("SandboxManager", () => {
       expect(thought.body.length).toBe(60001);
       expect(thought.body.endsWith("…")).toBe(true);
     });
+
+    // Postgres text and jsonb reject both, and every event is stored.
+    it("removes NULs and replaces lone surrogates in every string field", async () => {
+      const bad = (s: string) => `${s}\u0000\ud800`;
+      const raw = [
+        JSON.stringify({
+          seq: 1,
+          ts: bad("t"),
+          type: "agent_response",
+          inbox_id: bad("i"),
+          target_id: bad("tgt"),
+          body: bad("done"),
+        }),
+        JSON.stringify({
+          seq: 2,
+          ts: "t",
+          type: "pr_opened",
+          inbox_id: "i",
+          repo: bad("o/r"),
+          pr_url: "https://github.com/o/r/pull/1",
+          branch: bad("b"),
+          commit_sha: bad("c"),
+        }),
+      ].join("\n");
+      expect(await mgrWith(raw).readEvents("sbx", 0)).toEqual([
+        {
+          seq: 1,
+          ts: "t\ufffd",
+          type: "agent_response",
+          inbox_id: "i\ufffd",
+          target_id: "tgt\ufffd",
+          body: "done\ufffd",
+        },
+        {
+          seq: 2,
+          ts: "t",
+          type: "pr_opened",
+          inbox_id: "i",
+          repo: "o/r\ufffd",
+          pr_url: "https://github.com/o/r/pull/1",
+          branch: "b\ufffd",
+          commit_sha: "c\ufffd",
+        },
+      ]);
+    });
+
+    it("a cap that splits a surrogate pair leaves no lone half", async () => {
+      // The cut falls between the two halves of the emoji.
+      const body = `${"y".repeat(59999)}\u{1F600}`;
+      const raw = JSON.stringify({
+        seq: 1,
+        ts: "t",
+        type: "agent_thought",
+        inbox_id: "i",
+        target_id: "tgt",
+        body,
+      });
+      const [thought] = (await mgrWith(raw).readEvents("sbx", 0)) as Extract<
+        HarnessEvent,
+        { type: "agent_thought" }
+      >[];
+      expect(thought?.body).toBe(`${"y".repeat(59999)}\ufffd…`);
+      expect(thought?.body.isWellFormed()).toBe(true);
+    });
   });
 
   describe("createSandboxFromExistingPvc — adopts the sandbox already on the PVC", () => {

@@ -5,7 +5,6 @@
 import type {
   ApiErrorBody,
   ApiTask,
-  ApiTaskSource,
   ApiTaskState,
   CreateTaskRequest,
   ListEventsResponse,
@@ -36,7 +35,7 @@ export const isFatal = (err: unknown): boolean =>
 export type ClientConfig = { url: string; token?: string };
 
 export type ListTasksQuery = {
-  source?: ApiTaskSource;
+  source?: string;
   created_by?: string;
   state?: ApiTaskState;
   limit: number;

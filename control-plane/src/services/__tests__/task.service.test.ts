@@ -1,0 +1,703 @@
+import { beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
+import { SQL } from "bun";
+import { sql } from "drizzle-orm";
+
+const TEST_DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? "postgres://devbox:devbox@localhost:5432/devbox";
+mock.module("../../config", () => ({ config: { databaseUrl: TEST_DATABASE_URL } }));
+
+const { db } = await import("../../db");
+const { TaskRepository } = await import("../../repositories/task.repository");
+const { InboxRepository, isUniqueViolation } = await import("../../repositories/inbox.repository");
+const { BoundTaskService } = await import("../task.service");
+const { migrate } = await import("drizzle-orm/bun-sql/migrator");
+
+import type { ReplyTarget } from "../../repositories/inbox.repository";
+import type { RoundDraft, TaskService } from "../task.service";
+
+const session = (id: string, order?: number): ReplyTarget => ({
+  id,
+  spec: { kind: "linear_session" },
+  ...(order === undefined ? {} : { order }),
+});
+
+// The insert failed because another task holds the key, in any case.
+const keyTaken = (err: unknown): boolean => isUniqueViolation(err, "tasks_key_lower_uniq");
+
+const PR = "https://github.com/o/r/pull/7";
+const ghComment = (id: string): RoundDraft & { externalId: string } => ({
+  kind: "comment",
+  externalId: id,
+  payload: { target_id: id, body: "@bot fix", pr: { repo: "r", pr_url: PR }, created_at: "" },
+});
+const ghTarget = (id: string): ReplyTarget => ({
+  id,
+  spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 7, commentId: Number(id) },
+});
+const ciResult = (run: number): RoundDraft & { externalId: string } => ({
+  kind: "ci_result",
+  externalId: `workflow_run:${run}:1:7`,
+  payload: {
+    target_id: String(run),
+    workflow_name: "CI",
+    workflow_path: ".github/workflows/ci.yml",
+    conclusion: "failure",
+    run_url: "u",
+    head_sha: "abc",
+    head_branch: "b",
+    pr: { repo: "r", pr_url: PR },
+  },
+});
+
+async function insertTask(o: {
+  source?: string;
+  externalId?: string;
+  key: string;
+  prs?: string[];
+}) {
+  const prUrls = (o.prs ?? []).map((url) => ({ repo: "r", url, branch: "b", commit_sha: "c" }));
+  const [row] = await db.execute<{ id: string; key: string }>(sql`
+    INSERT INTO tasks (source, external_id, key, title, external_url, pr_urls)
+         VALUES (${o.source ?? "api"}, ${o.externalId ?? crypto.randomUUID()}, ${o.key}, 't', 'u',
+                 ${JSON.stringify(prUrls)}::text::jsonb)
+    RETURNING id, key;`);
+  return row as { id: string; key: string };
+}
+
+describe("TaskService", () => {
+  let killSandbox: ReturnType<typeof mock>;
+  let track: ReturnType<typeof mock>;
+  let linear: TaskService;
+  let github: TaskService;
+  let api: TaskService;
+
+  // A Linear `created`: issue-1 / ISS-1, delegated through `target`.
+  const assignLinear = (
+    target: ReplyTarget,
+    o: Partial<Parameters<TaskService["assign"]>[0]> = {},
+  ) =>
+    linear.assign({
+      externalId: "issue-1",
+      key: { hint: "ISS-1" },
+      title: "Fix auth",
+      description: "desc",
+      flags: [],
+      url: () => "https://linear.app/x/issue/ISS-1",
+      target: () => target,
+      ...o,
+    });
+
+  beforeAll(async () => {
+    await migrate(db, { migrationsFolder: "./drizzle" });
+  });
+  beforeEach(async () => {
+    await db.execute(
+      sql`TRUNCATE TABLE task_events, inbox, tasks, api_tokens RESTART IDENTITY CASCADE`,
+    );
+    killSandbox = mock(() => Promise.resolve());
+    track = mock(() => {});
+    const bound = (source: "linear" | "github" | "api") =>
+      new BoundTaskService(source, {
+        createsTasks: source !== "github",
+        taskRepo: new TaskRepository(),
+        inboxRepo: new InboxRepository(),
+        sandboxManager: { killSandbox },
+        background: { track },
+      });
+    linear = bound("linear");
+    github = bound("github");
+    api = bound("api");
+  });
+
+  describe("assign", () => {
+    it("creates the task and its assignment round; the platform id is the round's external id", async () => {
+      const requester = { id: "u-1", displayName: "Ann", githubAccount: null };
+      const res = await assignLinear(session("sess-1"), { flags: ["FOO"], requester });
+      expect(res).toEqual({ taskId: expect.any(String), key: "ISS-1", result: "created" });
+
+      const [task] = await db.execute(
+        sql`SELECT source, external_id, key, title, external_url, metadata FROM tasks`,
+      );
+      expect(task).toEqual({
+        source: "linear",
+        external_id: "issue-1",
+        key: "ISS-1",
+        title: "Fix auth",
+        external_url: "https://linear.app/x/issue/ISS-1",
+        metadata: { experimentalFlags: ["FOO"], requester },
+      });
+      const rounds = await db.execute(
+        sql`SELECT source, kind, external_id, payload, reply_targets FROM inbox`,
+      );
+      expect([...rounds]).toEqual([
+        {
+          source: "linear",
+          kind: "assignment",
+          external_id: "issue-1",
+          payload: {
+            title: "Fix auth",
+            description: "desc",
+            external_url: "https://linear.app/x/issue/ISS-1",
+            target_id: "sess-1",
+            task_id: res.taskId,
+            task_key: "ISS-1",
+          },
+          reply_targets: [session("sess-1")],
+        },
+      ]);
+      // A Linear task is logged like any other, from its assignment round.
+      const [round] = await db.execute<{ id: string }>(sql`SELECT id FROM inbox`);
+      const events = await db.execute(sql`SELECT task_id, type, inbox_id, data FROM task_events`);
+      expect([...events]).toEqual([
+        {
+          task_id: res.taskId,
+          type: "task_created",
+          inbox_id: round?.id,
+          data: { title: "Fix auth", description: "desc", experimental_flags: ["FOO"] },
+        },
+      ]);
+    });
+
+    it("a hint another task holds, in any case, fails the assign", async () => {
+      await insertTask({ key: "iss-1" });
+      expect(keyTaken(await assignLinear(session("sess-1")).catch((e: unknown) => e))).toBe(true);
+      expect([...(await db.execute(sql`SELECT key FROM tasks`))]).toEqual([{ key: "iss-1" }]);
+    });
+
+    it("makes the hint branch-safe", async () => {
+      expect((await assignLinear(session("sess-1"), { key: { hint: "ISS 1/x" } })).key).toBe(
+        "ISS-1-x",
+      );
+    });
+
+    // Another transaction holds an uncommitted task with `key` while `assign`
+    // runs: the insert waits on the key index, then fails with 23505 once the
+    // other transaction commits.
+    async function whileKeyHeld<T>(key: string, assign: () => Promise<T>): Promise<T> {
+      const other = new SQL(TEST_DATABASE_URL);
+      try {
+        let release!: () => void;
+        const gate = new Promise<void>((r) => {
+          release = r;
+        });
+        let inserted!: () => void;
+        const ready = new Promise<void>((r) => {
+          inserted = r;
+        });
+        const holder = other.begin(async (tx) => {
+          await tx`INSERT INTO tasks (source, external_id, key, title, external_url)
+                   VALUES ('linear', 'other', ${key}, 't', 'u')`;
+          inserted();
+          await gate;
+        });
+        await ready;
+        const pending = assign();
+        pending.catch(() => {});
+        await new Promise((r) => setTimeout(r, 150));
+        release();
+        await holder;
+        return await pending;
+      } finally {
+        await other.close();
+      }
+    }
+
+    it("a concurrent collision retries a sequence key once, with the next number", async () => {
+      await db.execute(sql`ALTER SEQUENCE api_task_key_seq RESTART`);
+      const res = await whileKeyHeld("DBX-API-1", () =>
+        api.assign({
+          key: { sequence: "DBX-API-" },
+          title: "t",
+          description: null,
+          flags: [],
+          url: (t) => `https://api.example/api/tasks/${t.key}`,
+          target: (t) => ({ id: t.id, spec: { kind: "api_session" } }),
+        }),
+      );
+      expect(res.key).toBe("DBX-API-2");
+    });
+
+    it("a concurrent hint collision rethrows", async () => {
+      const err = await whileKeyHeld("ISS-1", () => assignLinear(session("sess-1"))).catch(
+        (e: unknown) => e,
+      );
+      expect(keyTaken(err)).toBe(true);
+    });
+
+    it("compares delegation order when both targets carry one", async () => {
+      await assignLinear(session("d:5", 5));
+      expect((await assignLinear(session("d:3", 3))).result).toBe("duplicate");
+      expect((await assignLinear(session("d:5", 5))).result).toBe("duplicate");
+      expect((await assignLinear(session("d:7", 7))).result).toBe("restarted");
+      const [round] = await db.execute<{ reply_targets: ReplyTarget[] }>(
+        sql`SELECT reply_targets FROM inbox`,
+      );
+      expect(round?.reply_targets).toEqual([session("d:7", 7)]);
+    });
+
+    it("rejects an order that isn't a non-negative integer; a valid order still dedupes", async () => {
+      await assignLinear(session("d:5", 5));
+      for (const bad of [Number.NaN, -1, 1.5]) {
+        await expect(assignLinear(session("d:5", bad))).rejects.toThrow(
+          "target.order must be a non-negative integer",
+        );
+      }
+      expect((await assignLinear(session("d:5", 5))).result).toBe("duplicate");
+      const [round] = await db.execute<{ reply_targets: ReplyTarget[] }>(
+        sql`SELECT reply_targets FROM inbox`,
+      );
+      expect(round?.reply_targets).toEqual([session("d:5", 5)]);
+    });
+
+    it("a duplicate kills nothing", async () => {
+      const { taskId } = await assignLinear(session("sess-1"));
+      await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-1' WHERE id = ${taskId}`);
+      expect((await assignLinear(session("sess-1"))).result).toBe("duplicate");
+      expect(killSandbox).not.toHaveBeenCalled();
+      expect(track).not.toHaveBeenCalled();
+    });
+
+    it("kills the preempted sandbox when a re-delegation restarts a live run", async () => {
+      const ann = { id: "u-1", displayName: "Ann", githubAccount: null };
+      const { taskId } = await assignLinear(session("sess-1"), { flags: ["OLD"], requester: ann });
+      await db.execute(
+        sql`UPDATE tasks SET sandbox_id = 'sb-old', pvc_name = 'pvc-old' WHERE id = ${taskId}`,
+      );
+
+      const res = await assignLinear(session("sess-2"), {
+        title: "Fix auth v2",
+        url: () => "https://linear.app/x/issue/ISS-1/v2",
+        flags: ["NEW"],
+      });
+
+      expect(res).toEqual({
+        taskId,
+        key: "ISS-1",
+        result: "restarted",
+        previousTargetId: "sess-1",
+      });
+      expect(killSandbox).toHaveBeenCalledTimes(1);
+      expect(killSandbox).toHaveBeenCalledWith("sb-old");
+      // In BackgroundWork, so shutdown drains it.
+      expect(track).toHaveBeenCalledWith(taskId, "killSandbox", expect.any(Promise));
+      const [task] = await db.execute(
+        sql`SELECT title, external_url, metadata, sandbox_id, pvc_name FROM tasks`,
+      );
+      // The old workspace volume is only unlinked, not deleted (a known leak).
+      expect(task).toEqual({
+        title: "Fix auth v2",
+        external_url: "https://linear.app/x/issue/ISS-1/v2",
+        metadata: { experimentalFlags: ["NEW"] },
+        sandbox_id: null,
+        pvc_name: null,
+      });
+    });
+
+    it("concurrent deliveries of one re-delegation restart the task once", async () => {
+      // The task row lock serializes them: the first restarts, the rest read
+      // the new target after it commits. Another transaction holds the
+      // assignment row, so the first restart waits while the rest pile up.
+      const { taskId } = await assignLinear(session("S0"));
+      await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-old' WHERE id = ${taskId}`);
+      const other = new SQL(TEST_DATABASE_URL);
+      try {
+        let release!: () => void;
+        const gate = new Promise<void>((r) => {
+          release = r;
+        });
+        let locked!: () => void;
+        const ready = new Promise<void>((r) => {
+          locked = r;
+        });
+        const holder = other.begin(async (tx) => {
+          await tx`SELECT 1 FROM inbox WHERE task_id = ${taskId} FOR UPDATE`;
+          locked();
+          await gate;
+        });
+        await ready;
+        const pending = Promise.all(Array.from({ length: 6 }, () => assignLinear(session("S1"))));
+        await new Promise((r) => setTimeout(r, 150));
+        release();
+        await holder;
+        const results = (await pending).map((r) => r.result).sort();
+        expect(results).toEqual([...Array(5).fill("duplicate"), "restarted"]);
+      } finally {
+        await other.close();
+      }
+      expect(killSandbox).toHaveBeenCalledTimes(1);
+      expect(killSandbox).toHaveBeenCalledWith("sb-old");
+    });
+
+    it("only a source that creates tasks may assign", async () => {
+      await expect(
+        github.assign({
+          externalId: "pr-1",
+          key: { hint: "PR-1" },
+          title: "t",
+          description: null,
+          flags: [],
+          url: () => "https://github.com/o/r/pull/1",
+          target: () => ({
+            id: "1",
+            spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 1 },
+          }),
+        }),
+      ).rejects.toThrow("assign: github creates no tasks");
+      expect(await db.execute(sql`SELECT 1 FROM tasks`)).toHaveLength(0);
+    });
+
+    it("rejects a hint without an external id", async () => {
+      await expect(assignLinear(session("sess-1"), { externalId: undefined })).rejects.toThrow(
+        "a hint key needs externalId",
+      );
+      expect(await db.execute(sql`SELECT 1 FROM tasks`)).toHaveLength(0);
+    });
+  });
+
+  describe("enqueueRound", () => {
+    it("inserts the round with the service's source and the task's identity; a redelivery is a duplicate", async () => {
+      const task = await insertTask({ key: "DBX-API-1", prs: [PR] });
+      const first = await github.enqueueRound({
+        task,
+        ...ghComment("555"),
+        targets: [ghTarget("555")],
+        prUrl: PR,
+      });
+      const [row] = await db.execute<{ id: string; source: string; payload: unknown }>(
+        sql`SELECT id, source, payload FROM inbox`,
+      );
+      expect(first).toEqual({ roundId: (row as { id: string }).id });
+      expect(row?.source).toBe("github");
+      expect(row?.payload).toEqual({
+        ...ghComment("555").payload,
+        task_id: task.id,
+        task_key: "DBX-API-1",
+      });
+      expect(
+        await github.enqueueRound({ task, ...ghComment("555"), targets: [ghTarget("555")] }),
+      ).toEqual({ dropped: "duplicate" });
+      // A GitHub round is logged once, with the comment's text; the redelivery adds nothing.
+      const events = await db.execute(sql`SELECT type, inbox_id, data FROM task_events`);
+      expect([...events]).toEqual([
+        {
+          type: "message_queued",
+          inbox_id: row?.id,
+          data: { source: "github", kind: "comment", body: "@bot fix" },
+        },
+      ]);
+    });
+
+    it("a review whose id equals a stored comment id is a duplicate while the old index exists", async () => {
+      // characterization: changes once the old (source, external_id) index is dropped
+      const task = await insertTask({ key: "DBX-API-1" });
+      await github.enqueueRound({ task, ...ghComment("555"), targets: [ghTarget("555")] });
+      const review = await github.enqueueRound({
+        task,
+        kind: "review",
+        externalId: "555",
+        payload: {
+          review_body: { target_id: "555", body: "@bot" },
+          inline_comments: [],
+          pr: { repo: "r", pr_url: PR },
+          created_at: "",
+        },
+        targets: [
+          {
+            id: "555",
+            spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 7, reviewId: 555 },
+          },
+        ],
+      });
+      expect(review).toEqual({ dropped: "duplicate" });
+    });
+
+    it("drops a round whose PR is no longer on the task", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      expect(
+        await github.enqueueRound({
+          task,
+          ...ghComment("555"),
+          targets: [ghTarget("555")],
+          prUrl: PR,
+        }),
+      ).toEqual({ dropped: "stale" });
+      expect(await db.execute(sql`SELECT 1 FROM inbox`)).toHaveLength(0);
+      expect(await db.execute(sql`SELECT 1 FROM task_events`)).toHaveLength(0);
+    });
+
+    it("writes message_queued for an inserted API message", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      const message: RoundDraft & { externalId: string } = {
+        kind: "comment",
+        externalId: "m-1",
+        payload: { target_id: task.id, body: "more", pr: null, created_at: "" },
+      };
+      const targets: ReplyTarget[] = [{ id: task.id, spec: { kind: "api_session" } }];
+      const first = await api.enqueueRound({ task, ...message, targets });
+      expect(await api.enqueueRound({ task, ...message, targets })).toEqual({
+        dropped: "duplicate",
+      });
+      const events = await db.execute(sql`SELECT type, inbox_id, data FROM task_events`);
+      expect([...events]).toEqual([
+        {
+          type: "message_queued",
+          inbox_id: (first as { roundId: string }).roundId,
+          data: { source: "api", kind: "comment", body: "more" },
+        },
+      ]);
+    });
+
+    it("message_queued carries every round's source and kind, and only a comment's body", async () => {
+      const task = await insertTask({ key: "DBX-API-1", prs: [PR] });
+      const rounds = [
+        await linear.enqueueRound({
+          task,
+          kind: "comment",
+          externalId: "activity-1",
+          payload: { target_id: "activity-1", body: "and the tests", pr: null, created_at: "" },
+          targets: [session("activity-1")],
+        }),
+        await github.enqueueRound({
+          task,
+          kind: "review",
+          externalId: "900",
+          payload: {
+            review_body: { target_id: "900", body: "needs work" },
+            inline_comments: [],
+            pr: { repo: "r", pr_url: PR },
+            created_at: "",
+          },
+          targets: [
+            {
+              id: "900",
+              spec: { kind: "review_body", owner: "o", repo: "r", prNumber: 7, reviewId: 900 },
+            },
+          ],
+        }),
+        await github.enqueueRound({ task, ...ciResult(1), targets: [ghTarget("1")] }),
+      ].map((r) => (r as { roundId: string }).roundId);
+      const events = await db.execute(
+        sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...events]).toEqual([
+        {
+          type: "message_queued",
+          inbox_id: rounds[0],
+          data: { source: "linear", kind: "comment", body: "and the tests" },
+        },
+        {
+          type: "message_queued",
+          inbox_id: rounds[1],
+          data: { source: "github", kind: "review" },
+        },
+        {
+          type: "message_queued",
+          inbox_id: rounds[2],
+          data: { source: "github", kind: "ci_result" },
+        },
+      ]);
+    });
+
+    it("a round dropped at the limit logs nothing", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      await github.enqueueRound({ task, ...ciResult(1), targets: [ghTarget("1")], limit: 1 });
+      expect(
+        await github.enqueueRound({ task, ...ciResult(2), targets: [ghTarget("2")], limit: 1 }),
+      ).toEqual({ dropped: "limit", count: 1 });
+      const events = await db.execute(sql`SELECT type FROM task_events`);
+      expect([...events]).toEqual([{ type: "message_queued" }]);
+    });
+
+    // GitHub's CI loop breaker: at most 20 ci_result rounds per task.
+    const ci = (task: { id: string; key: string }, run: number, limit?: number) =>
+      github.enqueueRound({ task, ...ciResult(run), targets: [ghTarget(String(run))], limit });
+
+    it("enqueues when under the limit", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      for (let run = 1; run <= 19; run++) await ci(task, run, 20);
+      expect(await ci(task, 20, 20)).toEqual({ roundId: expect.any(String) });
+    });
+
+    it("drops the round once the limit is reached", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      for (let run = 1; run <= 20; run++) await ci(task, run, 20);
+      expect(await ci(task, 21, 20)).toEqual({ dropped: "limit", count: 20 });
+      const [n] = await db.execute(sql`SELECT count(*)::int AS n FROM inbox`);
+      expect(n).toEqual({ n: 20 });
+    });
+
+    it("a limit of N keeps N rounds and drops the next; failed and responded rounds count", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      expect(await ci(task, 1, 2)).toEqual({ roundId: expect.any(String) });
+      await db.execute(sql`UPDATE inbox SET status = 'failed'`);
+      expect(await ci(task, 2, 2)).toEqual({ roundId: expect.any(String) });
+      await db.execute(sql`UPDATE inbox SET status = 'responded' WHERE status = 'pending'`);
+      expect(await ci(task, 3, 2)).toEqual({ dropped: "limit", count: 2 });
+    });
+
+    it("a limit of 0, a negative one or none caps nothing", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      await ci(task, 1, 1);
+      for (const [run, limit] of [
+        [2, 0],
+        [3, -1],
+        [4, undefined],
+      ] as const) {
+        expect(await ci(task, run, limit)).toEqual({ roundId: expect.any(String) });
+      }
+    });
+
+    it("a limit counts only rounds of the same source and kind", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      await github.enqueueRound({ task, ...ghComment("555"), targets: [ghTarget("555")] });
+      // A GitHub comment is not a CI result.
+      expect(await ci(task, 1, 1)).toEqual({ roundId: expect.any(String) });
+      // An API comment is not a GitHub one.
+      const message = (id: string) => ({
+        task,
+        kind: "comment" as const,
+        externalId: id,
+        payload: { target_id: task.id, body: "more", pr: null, created_at: "" },
+        targets: [{ id: task.id, spec: { kind: "api_session" as const } }],
+        limit: 1,
+      });
+      expect(await api.enqueueRound(message("m-1"))).toEqual({ roundId: expect.any(String) });
+      expect(await api.enqueueRound(message("m-2"))).toEqual({ dropped: "limit", count: 1 });
+    });
+
+    it("checks the kind, and payload.target_id against targets[0] (reviews exempt)", async () => {
+      const task = await insertTask({ key: "DBX-API-1" });
+      await expect(
+        // Only the types stop a module from passing another kind.
+        github.enqueueRound({
+          task,
+          ...ghComment("555"),
+          kind: "assignment",
+          targets: [ghTarget("555")],
+        } as never),
+      ).rejects.toThrow("enqueueRound: unknown kind assignment");
+      await expect(
+        github.enqueueRound({ task, ...ghComment("555"), targets: [ghTarget("556")] }),
+      ).rejects.toThrow("payload.target_id must equal targets[0].id");
+      // A review's targets[0] is its first inline comment; it has no target_id.
+      const review = await github.enqueueRound({
+        task,
+        kind: "review",
+        externalId: "88",
+        payload: {
+          review_body: { target_id: "88", body: "@bot" },
+          inline_comments: [{ target_id: "11", path: "a.ts", line: 3, body: "nit" }],
+          pr: { repo: "r", pr_url: PR },
+          created_at: "",
+        },
+        targets: [ghTarget("11")],
+      });
+      expect(review).toEqual({ roundId: expect.any(String) });
+      expect(await db.execute(sql`SELECT kind FROM inbox`)).toEqual([{ kind: "review" }]);
+    });
+
+    it("a round's source is its TaskService's", async () => {
+      // Core doesn't read targets: each goes back to its round's own deliver,
+      // which checks it.
+      const task = await insertTask({ key: "DBX-API-1" });
+      const target = { id: "t", spec: { kind: "linear_session" } };
+      const comment = (tasks: TaskService, externalId: string) =>
+        tasks.enqueueRound({
+          task,
+          kind: "comment",
+          externalId,
+          payload: { target_id: "t", body: "b", pr: null, created_at: "" },
+          targets: [target],
+        });
+      await comment(github, "c-1");
+      await comment(api, "c-2");
+      const rows = await db.execute(
+        sql`SELECT source, external_id, reply_targets FROM inbox ORDER BY external_id`,
+      );
+      expect([...rows]).toEqual([
+        { source: "github", external_id: "c-1", reply_targets: [target] },
+        { source: "api", external_id: "c-2", reply_targets: [target] },
+      ]);
+    });
+  });
+
+  describe("restart", () => {
+    const def = (target: ReplyTarget) => ({ title: "T2", description: null, flags: [], target });
+
+    it("only a source that creates tasks may restart", async () => {
+      const task = await insertTask({ source: "linear", externalId: "issue-1", key: "ISS-1" });
+      const target = {
+        id: "1",
+        spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 1 },
+      } as const;
+      await expect(github.restart(task.id, def(target))).rejects.toThrow(
+        "restart: github creates no tasks",
+      );
+      const [row] = await db.execute(sql`SELECT title FROM tasks`);
+      expect(row).toEqual({ title: "t" });
+    });
+
+    it("refuses another source's task", async () => {
+      const task = await insertTask({ source: "linear", externalId: "issue-1", key: "ISS-1" });
+      await expect(
+        api.restart(task.id, def({ id: task.id, spec: { kind: "api_session" } })),
+      ).rejects.toThrow("is not from api");
+      const [row] = await db.execute(sql`SELECT title FROM tasks`);
+      expect(row).toEqual({ title: "t" });
+    });
+
+    it("replaces the definition, keeps the requester, delegates through the target and kills the old sandbox", async () => {
+      const ann = { id: "u-1", displayName: "Ann", githubAccount: null };
+      const { taskId } = await assignLinear(session("sess-1"), { flags: ["OLD"], requester: ann });
+      await db.execute(sql`UPDATE tasks SET sandbox_id = 'sb-old' WHERE id = ${taskId}`);
+      await linear.restart(taskId, { ...def(session("sess-9")), flags: ["NEW"] });
+      const [task] = await db.execute(
+        sql`SELECT title, external_url, metadata, sandbox_id FROM tasks`,
+      );
+      expect(task).toEqual({
+        title: "T2",
+        external_url: "https://linear.app/x/issue/ISS-1",
+        metadata: { experimentalFlags: ["NEW"], requester: ann },
+        sandbox_id: null,
+      });
+      const [round] = await db.execute(sql`SELECT status, payload, reply_targets FROM inbox`);
+      expect(round).toEqual({
+        status: "pending",
+        payload: {
+          title: "T2",
+          description: null,
+          external_url: "https://linear.app/x/issue/ISS-1",
+          target_id: "sess-9",
+          task_id: taskId,
+          task_key: "ISS-1",
+        },
+        reply_targets: [session("sess-9")],
+      });
+      expect(killSandbox).toHaveBeenCalledWith("sb-old");
+      expect(track).toHaveBeenCalledWith(taskId, "killSandbox", expect.any(Promise));
+      // Every source's restart is logged, on the new run.
+      const [assignment] = await db.execute<{ id: string }>(sql`SELECT id FROM inbox`);
+      const events = await db.execute(
+        sql`SELECT type, inbox_id, data FROM task_events ORDER BY id`,
+      );
+      expect([...events].slice(1)).toEqual([
+        {
+          type: "task_restarted",
+          inbox_id: assignment?.id,
+          data: {
+            title: "T2",
+            description: null,
+            experimental_flags: ["NEW"],
+            superseded_round_ids: [],
+          },
+        },
+      ]);
+    });
+  });
+
+  it("findTask matches on the service's source and the external id", async () => {
+    const t = await insertTask({ source: "linear", externalId: "issue-9", key: "ISS-9" });
+    expect((await linear.findTask("issue-9"))?.id).toBe(t.id);
+    expect(await api.findTask("issue-9")).toBeNull();
+  });
+});

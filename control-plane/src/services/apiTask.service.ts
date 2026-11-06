@@ -1,8 +1,6 @@
 import { ApiError } from "../errors";
-import type { TaskIntake } from "../integrations/intake";
-import type { TaskSource } from "../integrations/types";
 import type { ApiTaskRecord, ApiTaskRepository } from "../repositories/apiTask.repository";
-import { apiSessionTarget } from "../repositories/inbox.repository";
+import type { ReplyTarget } from "../repositories/inbox.repository";
 import type { TaskEventRepository, TaskEventRow } from "../repositories/taskEvent.repository";
 import type {
   ApiEventEnvelope,
@@ -15,6 +13,7 @@ import type {
   SseStateData,
 } from "../types/api";
 import { extractExperimentalFlags } from "./experimentalFlags";
+import type { TaskService } from "./task.service";
 
 export type Principal = { tokenId: string; name: string };
 export type CreateTaskInput = {
@@ -23,7 +22,7 @@ export type CreateTaskInput = {
   experimentalFlags: string[];
 };
 export type ListTasksInput = {
-  source?: TaskSource;
+  source?: string;
   createdBy?: "me" | string;
   state?: ApiTaskState;
   before?: string;
@@ -31,6 +30,7 @@ export type ListTasksInput = {
 };
 export type ApiTaskServiceOptions = {
   publicBaseUrl: string;
+  taskKeyPrefix: string;
   now: () => Date;
 };
 
@@ -39,14 +39,14 @@ const NOT_FOUND = () => new ApiError(404, "task_not_found", "Task not found");
 const NOT_API = () =>
   new ApiError(409, "not_api_task", "Only API tasks can be changed through the API");
 
-// The /api use cases read every task and write only API tasks, through
-// TaskIntake. All settings arrive through the constructor so this module never
-// imports ../config; that keeps process-global mock.module replacements from
-// leaking into these tests.
+// The /api use cases read every task and write only API tasks, through the
+// API's TaskService. All settings arrive through the constructor so this
+// module never imports ../config; that keeps process-global mock.module
+// replacements from leaking into these tests.
 export class ApiTaskService {
   constructor(
     private apiTaskRepo: ApiTaskRepository,
-    private intake: Pick<TaskIntake, "assign" | "restart" | "followUp">,
+    private tasks: Pick<TaskService, "source" | "assign" | "restart" | "enqueueRound">,
     private taskEventRepo: TaskEventRepository,
     private opts: ApiTaskServiceOptions,
   ) {}
@@ -54,9 +54,8 @@ export class ApiTaskService {
   // The task row, its assignment round and task_created, in one transaction.
   // The key comes from api_task_key_seq and is also the task's external id.
   async create(principal: Principal | null, input: CreateTaskInput): Promise<ApiTask> {
-    const { taskId } = await this.intake.assign({
-      source: "api",
-      key: { sequence: "api" },
+    const { taskId } = await this.tasks.assign({
+      key: { sequence: this.opts.taskKeyPrefix },
       title: input.title,
       description: input.description,
       flags: input.experimentalFlags,
@@ -92,14 +91,11 @@ export class ApiTaskService {
   // behind it, as on Linear.
   async sendMessage(ref: string, body: string): Promise<SendMessageResponse> {
     const task = await this.resolveApiTask(ref);
-    const result = await this.intake.followUp({
+    const result = await this.tasks.enqueueRound({
       task: { id: task.id, key: task.key },
-      message: {
-        source: "api",
-        kind: "comment",
-        external_id: crypto.randomUUID(),
-        payload: { target_id: task.id, body, pr: null, created_at: this.opts.now().toISOString() },
-      },
+      kind: "comment",
+      externalId: crypto.randomUUID(),
+      payload: { target_id: task.id, body, pr: null, created_at: this.opts.now().toISOString() },
       targets: [apiSessionTarget(task.id)],
     });
     // A fresh external id and no PR guard: nothing can drop it.
@@ -107,29 +103,30 @@ export class ApiTaskService {
     return { round_id: result.roundId };
   }
 
-  // Same restart as a re-delegation, plus the full new definition and
-  // task_restarted. The input replaces the current title/description/flags;
-  // nothing is merged. The previous sandbox is killed afterwards.
+  // Same restart as a re-delegation, task_restarted included. The input
+  // replaces the current title/description/flags; nothing is merged. The
+  // previous sandbox is killed afterwards.
   async restart(ref: string, input: CreateTaskInput): Promise<ApiTask> {
     const task = await this.resolveApiTask(ref);
-    await this.intake.restart(task.id, {
+    await this.tasks.restart(task.id, {
       title: input.title,
       description: input.description,
       flags: input.experimentalFlags,
+      target: apiSessionTarget(task.id),
     });
     return this.get(task.id);
   }
 
+  // Every task has a log, whatever its source.
   async events(ref: string, after: number, limit: number): Promise<ListEventsResponse> {
     const task = await this.resolve(ref);
-    if (task.source !== "api") return { events: [], next_after: 0, logging: "unavailable" };
     const events = await this.eventsAfter(task.id, after, limit);
     return { events, next_after: events[events.length - 1]?.id ?? after, logging: "available" };
   }
 
-  async streamTarget(ref: string): Promise<{ id: string; source: TaskSource }> {
-    const task = await this.resolve(ref);
-    return { id: task.id, source: task.source };
+  // The id of the task whose log a stream follows.
+  async streamTarget(ref: string): Promise<string> {
+    return (await this.resolve(ref)).id;
   }
 
   async streamState(taskId: string): Promise<SseStateData> {
@@ -153,7 +150,7 @@ export class ApiTaskService {
 
   private async resolveApiTask(ref: string): Promise<ApiTaskRecord> {
     const task = await this.resolve(ref);
-    if (task.source !== "api") throw NOT_API();
+    if (task.source !== this.tasks.source) throw NOT_API();
     return task;
   }
 
@@ -176,6 +173,11 @@ export class ApiTaskService {
       updated_at: r.updated_at.toISOString(),
     };
   }
+}
+
+// API tasks have no outbound channel: a round's one target is the task itself.
+export function apiSessionTarget(taskId: string): ReplyTarget {
+  return { id: taskId, spec: { kind: "api_session" } };
 }
 
 function prsOf(prUrls: unknown): ApiPr[] {

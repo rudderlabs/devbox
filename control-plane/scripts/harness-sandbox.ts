@@ -2,7 +2,7 @@ import { type FileHandle, open, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type CommandExecution, ConnectionConfig, Sandbox } from "@alibaba-group/opensandbox";
 import { pickForwardedEnv } from "../src/forwardedEnv";
-import { parseTrustList } from "../src/integrationsConfig";
+import { parseTrustList } from "../src/integrations/env";
 
 export const WORKSPACE = "/workspace";
 export const HARNESS_DIR = `${WORKSPACE}/.harness`;

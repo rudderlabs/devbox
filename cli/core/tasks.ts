@@ -2,7 +2,6 @@
 // API call today, so new behaviour has one obvious home.
 import type {
   ApiTask,
-  ApiTaskSource,
   ApiTaskState,
   CreateTaskRequest,
   SendMessageResponse,
@@ -11,7 +10,7 @@ import type { ApiClient } from "./api";
 import { type From, roundStart } from "./events";
 
 export type ListTasksOptions = {
-  source?: ApiTaskSource;
+  source?: string;
   mine: boolean;
   state?: ApiTaskState;
   limit?: number;

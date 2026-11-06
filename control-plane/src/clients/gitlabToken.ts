@@ -3,8 +3,8 @@
 // (GITLAB_TOKEN_FILE): the kubelet rewrites the file when the Secret changes,
 // so re-reading it at most every TTL picks up a rotated token without a
 // restart. GITLAB_TOKEN serves local runs. Optional: with neither set, the
-// first GitLab call fails with a TokenFetchError (the send is held, not
-// dropped). The token never appears in an error or log line.
+// first GitLab call throws and its send is dropped, as with GitHub's token.
+// The token never appears in an error or log line.
 
 export type GitlabTokenSettings = { file?: string; token?: string };
 

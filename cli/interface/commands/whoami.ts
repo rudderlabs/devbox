@@ -2,6 +2,7 @@
 import type { MeResponse } from "../../../control-plane/src/types/api";
 import type { CoreOps } from "../../core/ops";
 import type { CommandModule, CommonArgs } from "../command";
+import { toJson } from "../format";
 import type { Io } from "../io";
 import { common, commonArgs, type Opts } from "../options";
 
@@ -13,7 +14,7 @@ export function render(me: MeResponse): string {
 
 export async function run(args: WhoamiArgs, ops: CoreOps, io: Io): Promise<number> {
   const me = await ops.whoami();
-  io.out(args.json ? JSON.stringify(me, null, 2) : render(me));
+  io.out(args.json ? toJson(me, 2) : render(me));
   return 0;
 }
 

@@ -4,14 +4,14 @@ import { SandboxApiException } from "@alibaba-group/opensandbox";
 import type { LinearClient } from "@linear/sdk";
 import type { Task } from "../../db/schema";
 import { PvcNotFoundError, SandboxCreateError } from "../../errors";
-import { fakeIntegrations } from "../../integrations/__tests__/fakeIntegrations";
-import type { Integration, IntegrationName } from "../../integrations/types";
+import { fakeDefinitions, NO_WEBHOOK } from "../../integrations/__tests__/fakeIntegrations";
+import type { LinearTokenProvider } from "../../integrations/linear/tokenProvider";
+import type { Integration } from "../../integrations/types";
 import type { InboxRepository } from "../../repositories/inbox.repository";
 import type { TaskRepository } from "../../repositories/task.repository";
 import type { HarnessEvent } from "../../types/harnessEvent";
 import type { EventDispatcher } from "../eventDispatcher";
 import type { InboxService } from "../inbox.service";
-import type { LinearTokenProvider } from "../linearTokenProvider";
 import type { SandboxManager } from "../sandboxManager.service";
 import type { SlackNotifierService } from "../slackNotifier.service";
 
@@ -47,7 +47,7 @@ const emitAction = mock(() => Promise.resolve());
 const emitThought = mock(() => Promise.resolve());
 const emitError = mock(() => Promise.resolve());
 
-mock.module("../../clients/linear", () => ({
+mock.module("../../integrations/linear/client", () => ({
   setIssueStarted,
   emitAction,
   emitThought,
@@ -89,6 +89,7 @@ mock.module("../../clients/github", () => ({
   getUserIdByLogin: mock(() => Promise.resolve(null)),
   requestReviewers: mock(() => Promise.resolve()),
   parsePrUrl: () => null,
+  githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),
 }));
 
 const { TaskProcessorService } = await import("../taskProcessor.service");
@@ -97,16 +98,18 @@ const { GithubIntegration } = await import("../../integrations/github");
 const { ApiIntegration } = await import("../../integrations/api");
 const { logger } = await import("../../logger");
 const { ReplyHolds } = await import("../replyHolds");
-const { IntegrationHooks } = await import("../integrationHooks");
+const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
+const { BackgroundWork } = await import("../backgroundWork");
 const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
-const { InboxService: RealInboxService, WORKSPACE_MISSING_MESSAGE } = await import(
-  "../inbox.service"
-);
+const { CodeHost } = await import("../codeHost.service");
+const { InboxService: RealInboxService } = await import("../inbox.service");
+const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound");
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
   config: { shutdownDrainMs: number; leaseTimeoutMs: number };
 };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const { RetryableError } = await import("../../integrations/outbound");
+const { LinearTokenError } = await import("../../integrations/linear/oauth");
 
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
@@ -191,10 +194,11 @@ describe("TaskProcessorService", () => {
   let notifyTerminal: ReturnType<typeof mock>;
   let slackNotifier: SlackNotifierService;
   let holds: InstanceType<typeof ReplyHolds>;
-  let integrations: Record<IntegrationName, Integration> & {
+  // The enabled integrations the registry is built from.
+  let integrations: Record<string, Integration> & {
     linear: InstanceType<typeof LinearIntegration>;
   };
-  let hooks: InstanceType<typeof IntegrationHooks>;
+  let background: InstanceType<typeof BackgroundWork>;
   let service: InstanceType<typeof TaskProcessorService>;
 
   beforeEach(() => {
@@ -288,21 +292,23 @@ describe("TaskProcessorService", () => {
     inboxService = { sweepUndelivered, deadLetterWorkspaceMissing } as unknown as InboxService;
 
     notifyTerminal = mock(() => Promise.resolve());
-    // Slack on with the default SLACK_NOTIFY_SOURCES (linear).
-    slackNotifier = {
-      notifyTerminal,
-      notifies: (source: string) => source === "linear",
-    } as unknown as SlackNotifierService;
+    slackNotifier = { notifyTerminal } as unknown as SlackNotifierService;
 
     holds = new ReplyHolds();
-    integrations = fakeIntegrations({
-      linear: new LinearIntegration(linearTokenProvider, true, {
-        status: async () => ({ configured: false }),
-      }),
-      api: new ApiIntegration(true),
-      github: new GithubIntegration(true, { status: () => ({}) as never }),
-    });
-    hooks = new IntegrationHooks(integrations, inboxRepo);
+    integrations = {
+      linear: new LinearIntegration(
+        linearTokenProvider,
+        { status: async () => ({}) as never },
+        NO_WEBHOOK,
+      ),
+      api: new ApiIntegration(),
+      github: new GithubIntegration(
+        { botLogin: "harness" },
+        { status: () => ({}) as never },
+        NO_WEBHOOK,
+      ),
+    };
+    background = new BackgroundWork();
     service = new TaskProcessorService(
       taskRepo,
       inboxRepo,
@@ -310,12 +316,27 @@ describe("TaskProcessorService", () => {
       eventDispatcher,
       inboxService,
       slackNotifier,
-      integrations,
+      registryOf(integrations),
       holds,
       ["linear", "api"],
-      hooks,
+      background,
     );
   });
+
+  // A registry of these integrations (null: off), with shorter timeouts when
+  // given.
+  const registryOf = (
+    instances: Record<string, Integration | null>,
+    timeoutsMs: { deliver?: number } = {},
+  ) => {
+    const defs = fakeDefinitions(instances);
+    return new IntegrationRegistry(
+      defs,
+      parseIntegrationConfigs(defs, {}),
+      { taskRepo, inboxRepo, sandboxManager, background, holds },
+      timeoutsMs,
+    );
+  };
 
   // failTask broadcasts to the reply targets of the rows failTaskInbox
   // dead-letters — stub one with a Linear session target so the user-facing
@@ -366,7 +387,12 @@ describe("TaskProcessorService", () => {
         ownerId: "pod-test",
         reason: "Task failed — check control-plane logs for details.",
       });
-      expect(notifyTerminal).not.toHaveBeenCalled();
+      // The notifier skips non-Linear tasks itself (slackNotifier.service.test.ts).
+      expect(notifyTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "api" }),
+        "failed",
+        expect.any(String),
+      );
     });
   });
 
@@ -426,7 +452,7 @@ describe("TaskProcessorService", () => {
       expect(failTaskInbox).not.toHaveBeenCalled();
     });
 
-    it("runs the owner's onTaskStarted once per assignment id, before the sandbox is created", async () => {
+    it("runs the owner's onTaskStarted on each fresh-provision attempt, before the sandbox is created", async () => {
       const order: string[] = [];
       const onTaskStarted = mock(async () => {
         order.push("started");
@@ -454,12 +480,11 @@ describe("TaskProcessorService", () => {
       await waitFor(() => attachSandboxResources.mock.calls.length > 0);
       await service.stop();
 
-      expect(order).toEqual(["started", "create", "create"]);
-      expect(onTaskStarted).toHaveBeenCalledWith(
-        expect.anything(),
-        task,
-        assignment.reply_targets[0],
-      );
+      expect(order).toEqual(["started", "create", "started", "create"]);
+      expect(onTaskStarted.mock.calls.map((c) => (c as unknown[]).slice(1))).toEqual([
+        [task, assignment.reply_targets[0]],
+        [task, assignment.reply_targets[0]],
+      ]);
     });
 
     it("threads experimental flags from task metadata into sandbox creation", async () => {
@@ -717,7 +742,6 @@ describe("TaskProcessorService", () => {
     });
 
     it("a row whose integration is disabled gets no notice; it is still failed and the lease released", async () => {
-      integrations.github = new GithubIntegration(false, { status: () => ({}) as never });
       const row = {
         ...survivingNonTerminalRow(),
         id: "gc",
@@ -735,9 +759,11 @@ describe("TaskProcessorService", () => {
       Object.assign(inboxRepo, { getById: mock(() => Promise.resolve(row)), markFailed });
       // The real dead-letter path in place of the stub.
       Object.assign(service, {
-        inboxService: new RealInboxService(inboxRepo, sandboxManager, integrations, hooks, {
-          followUp: mock(),
-        }),
+        inboxService: new RealInboxService(
+          inboxRepo,
+          sandboxManager,
+          registryOf({ ...integrations, github: null }),
+        ),
       });
 
       await (
@@ -958,7 +984,7 @@ describe("TaskProcessorService", () => {
     });
 
     it("a row whose integration is disabled gets no notice; it is still dead-lettered and the lease released", async () => {
-      integrations.github = new GithubIntegration(false, { status: () => ({}) as never });
+      Object.assign(service, { registry: registryOf({ ...integrations, github: null }) });
       failTaskInbox.mockResolvedValue([
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
       ]);
@@ -980,7 +1006,9 @@ describe("TaskProcessorService", () => {
     });
 
     it("a Linear token failure skips only the Linear post; GitHub and Slack posts, dead-letter and release go on", async () => {
-      getAuthorizedLinearClient.mockRejectedValue(new Error("token refresh failed"));
+      getAuthorizedLinearClient.mockRejectedValue(
+        new LinearTokenError("Linear token request failed: Unable to connect"),
+      );
       failTaskInbox.mockResolvedValue([
         row("a", "assignment", "linear", [{ id: "sess-1", spec: { kind: "linear_session" } }]),
         row("gc", "comment", "github", [issueComment("555", 7, 555)]),
@@ -1327,23 +1355,26 @@ describe("TaskProcessorService", () => {
       expect(requeueForRetry).not.toHaveBeenCalled();
     });
 
-    it("a hung send is cut at the send timeout: dropped, cursor advanced, the task stops, the tick goes on", async () => {
+    it("a hung send is cut at the send timeout and dropped: the cursor advances and the next event goes on", async () => {
       const error = spyOn(logger, "error").mockImplementation(() => logger);
       try {
         const deliver = mock(() => new Promise<void>(() => {}));
         const round = { ...survivingNonTerminalRow(), source: "github", status: "delivered" };
+        const registry = registryOf(
+          { ...integrations, github: { status: async () => ({}), deliver } },
+          { deliver: 20 }, // send timeout (ms)
+        );
         const dispatcher = new RealEventDispatcher(
           taskRepo,
-          { getByIdForTask: mock(() => Promise.resolve(round)) } as unknown as InboxRepository,
+          {
+            getByIdForTask: mock(() => Promise.resolve({ row: round, assignmentId: "inbox-1" })),
+          } as unknown as InboxRepository,
           sandboxManager,
           slackNotifier,
-          {
-            ...integrations,
-            github: { name: "github", enabled: true, status: async () => ({}), deliver },
-          },
+          registry,
+          new CodeHost(registry, background),
           holds,
-          hooks,
-          20, // send timeout (ms)
+          background,
         );
         service = new TaskProcessorService(
           taskRepo,
@@ -1352,10 +1383,10 @@ describe("TaskProcessorService", () => {
           dispatcher,
           inboxService,
           slackNotifier,
-          integrations,
+          registryOf(integrations),
           holds,
           ["linear", "api"],
-          hooks,
+          background,
         );
         const thought = (seq: number) => ({
           seq,
@@ -1376,19 +1407,21 @@ describe("TaskProcessorService", () => {
         );
 
         service.start();
-        await waitFor(() => recordEventCursor.mock.calls.length >= 2);
+        await waitFor(() => recordEventCursor.mock.calls.length >= 3);
         await service.stop();
 
-        // task-1's seq 2 is never sent: the drop ended task-1's events; task-2 ran.
+        // Every send hangs and is cut at 20 ms; each is dropped and the next
+        // event, then the next task, goes on in the same tick.
         const cursors = recordEventCursor.mock.calls.map((c: unknown[]) => {
           const p = c[0] as { taskId: string; event: { seq: number } };
           return [p.taskId, p.event.seq];
         });
         expect(cursors).toEqual([
           ["task-1", 1],
+          ["task-1", 2],
           ["task-2", 1],
         ]);
-        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(deliver).toHaveBeenCalledTimes(3);
       } finally {
         error.mockRestore();
       }
@@ -1461,7 +1494,7 @@ describe("TaskProcessorService", () => {
       expect(holds.of("github").heldTasks).toBe(1);
     });
 
-    it("a dropped send advances the cursor, then ends this task's events for the tick", async () => {
+    it("a dropped send, timed out or not, lets the task's next event proceed in the same tick", async () => {
       const task = makeTask({ sandboxId: "sbx-1" });
       listInFlightOwnedBy.mockResolvedValueOnce([task]).mockResolvedValue([]);
       readEvents
@@ -1470,18 +1503,19 @@ describe("TaskProcessorService", () => {
           { seq: 2, ts: "t", type: "agent_thought", inbox_id: "i", target_id: "s", body: "y" },
         ] as HarnessEvent[])
         .mockResolvedValue([]);
+      // The registry reports a timed-out send and one that failed fast alike.
       dispatcherHandle.mockResolvedValueOnce("dropped");
 
       service.start();
-      await waitFor(() => recordEventCursor.mock.calls.length >= 1);
-      await new Promise<void>((r) => setTimeout(r, 30));
+      await waitFor(() => recordEventCursor.mock.calls.length >= 2);
       await service.stop();
 
-      expect(dispatcherHandle).toHaveBeenCalledTimes(1);
+      // Only the first tick reconciles the task, so both events ran in it.
+      expect(dispatcherHandle).toHaveBeenCalledTimes(2);
       const seqs = recordEventCursor.mock.calls.map(
         (c: unknown[]) => (c[0] as { event: { seq: number } }).event.seq,
       );
-      expect(seqs).toEqual([1]);
+      expect(seqs).toEqual([1, 2]);
     });
 
     it("drops a hold once the cursor moves past its event, or once the task leaves this pod", async () => {
@@ -1528,6 +1562,39 @@ describe("TaskProcessorService", () => {
       expect(order.slice(0, 2)).toEqual(["heartbeat", "reconcile sbx-1"]);
       expect(order).not.toContain("reconcile sbx-2");
       expect(heartbeatOwnedBy).toHaveBeenCalledWith("pod-test");
+    });
+
+    it("renewLeases rejects; the next task still reconciles", async () => {
+      const leaseMs = mockedConfig.leaseTimeoutMs;
+      mockedConfig.leaseTimeoutMs = 0; // renew before every task
+      try {
+        const t1 = makeTask({ id: "task-1", sandboxId: "sbx-1" });
+        const t2 = makeTask({ id: "task-2", sandboxId: "sbx-2" });
+        listInFlightOwnedBy.mockResolvedValueOnce([t1, t2]).mockResolvedValue([]);
+        // The tick-start renewal works; the one before task-1 fails.
+        let renewals = 0;
+        heartbeatOwnedBy.mockImplementation(() =>
+          renewals++ === 1
+            ? Promise.reject(new Error("connection reset"))
+            : Promise.resolve([{ id: "task-1" }, { id: "task-2" }]),
+        );
+        const reconciled: string[] = [];
+        getSandboxInfo.mockImplementation((id: string) => {
+          reconciled.push(id);
+          return Promise.resolve(makeSandboxInfo());
+        });
+
+        service.start();
+        await waitFor(() => reconciled.length >= 1);
+        await new Promise<void>((r) => setTimeout(r, 30));
+        await service.stop();
+
+        expect(reconciled[0]).toBe("sbx-2");
+        expect(reconciled).not.toContain("sbx-1");
+        expect(claimNext).toHaveBeenCalled();
+      } finally {
+        mockedConfig.leaseTimeoutMs = leaseMs;
+      }
     });
 
     describe("a reconcile longer than a quarter of the lease", () => {
@@ -1971,14 +2038,14 @@ describe("TaskProcessorService", () => {
         let finished = false;
         service.start();
         await waitFor(() => heartbeatOwnedBy.mock.calls.length > 0);
-        hooks.detach(
+        background.track(
           "task-1",
           "onRoundFinished",
           sleep(20).then(() => {
             finished = true;
           }),
         );
-        hooks.detach("task-2", "assignee", sleep(400));
+        background.track("task-2", "assignee", sleep(400));
         await service.stop();
 
         expect(finished).toBe(true);
@@ -1993,6 +2060,37 @@ describe("TaskProcessorService", () => {
         warn.mockRestore();
       }
     });
+
+    // Each in turn outlasts the other, so neither finishes inside the other's wait.
+    for (const slow of ["slack", "onRoundFinished"]) {
+      it(`stop() waits for a failed task's Slack post and its onRoundFinished (${slow} last)`, async () => {
+        const drainMs = mockedConfig.shutdownDrainMs;
+        mockedConfig.shutdownDrainMs = 1_000;
+        try {
+          const done: string[] = [];
+          const work = (what: string) =>
+            sleep(what === slow ? 60 : 20).then(() => {
+              done.push(what);
+            });
+          notifyTerminal.mockImplementation(() => work("slack"));
+          (integrations.linear as Integration).onRoundFinished = () => work("onRoundFinished");
+          failTaskInbox.mockResolvedValue([survivingNonTerminalRow()]);
+          service.start();
+          await waitFor(() => heartbeatOwnedBy.mock.calls.length > 0);
+
+          await (service as unknown as { failTask(t: Task, m: string): Promise<void> }).failTask(
+            makeTask(),
+            "boom",
+          );
+          expect(done).toEqual([]);
+          await service.stop();
+
+          expect(done.sort()).toEqual(["onRoundFinished", "slack"]);
+        } finally {
+          mockedConfig.shutdownDrainMs = drainMs;
+        }
+      });
+    }
 
     it("stop() backdates heartbeats owned by this pod before resolving", async () => {
       service.start();

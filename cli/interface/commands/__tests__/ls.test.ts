@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { NOW, task } from "../../../__tests__/fixtures";
+import { apiError, createStub } from "../../../__tests__/stub";
+import { ApiClient, type ClientConfig } from "../../../core/api";
+import { bindCore } from "../../../core/ops";
 import { asJson, conn, fakeOps, testIo } from "../../__tests__/fakes";
 import { base, parsed, usage } from "../../__tests__/parsing";
+import { runCli } from "../../main";
 import { render, run } from "../ls";
 
 describe("ls: parsing", () => {
@@ -11,15 +15,16 @@ describe("ls: parsing", () => {
       ["ls", "--source", "linear", "--mine", "--state", "idle", "--limit", "250"],
       { ...base, source: "linear", mine: true, state: "idle", limit: 250 },
     ],
+    // The server, not the CLI, knows the sources.
+    [
+      ["ls", "--source", "github"],
+      { ...base, source: "github", mine: false },
+    ],
   ])("%p", (argv, args) => {
     expect(parsed(argv)).toEqual({ name: "ls", args });
   });
 
   it.each([
-    [
-      ["ls", "--source", "github"],
-      "option '--source <source>' argument 'github' is invalid. Allowed choices are api, linear.",
-    ],
     [
       ["ls", "--state", "done"],
       "option '--state <state>' argument 'done' is invalid. Allowed choices are queued, running, idle, failed.",
@@ -74,6 +79,23 @@ describe("ls: render", () => {
     expect(row).not.toContain("more");
   });
 
+  it("strips control characters from titles, descriptions and creators", () => {
+    const [, row = ""] = render(
+      [
+        task({
+          title: "Fix\x1b]52;c;eA==\x07 it",
+          description: "Erase\x1b[2K\r me",
+          created_by: { id: "0192f000-0000-7000-8000-0000000000aa", name: "frodo\x1b[8m\u009b" },
+        }),
+      ],
+      NOW,
+    ).split("\n");
+    expect(row).toContain("Fix]52;c;eA== it");
+    expect(row).toContain("Erase[2K me");
+    expect(row).toContain("frodo[8m");
+    expect(row).not.toMatch(/\p{Cc}/u);
+  });
+
   it("colours the header, key and state when asked", () => {
     const tasks = [task({ state: "running", created_at: "2026-10-12T12:25:00.000Z" })];
     expect(render(tasks, NOW, { color: true })).toBe(
@@ -86,6 +108,19 @@ describe("ls: render", () => {
 });
 
 describe("ls: run", () => {
+  it("sends --source to the server, and an unknown one gets the server's 400", async () => {
+    const stub = createStub();
+    stub.app.get("/api/tasks", () =>
+      apiError(400, "invalid_request", "source must be linear or api"),
+    );
+    const core = (config: ClientConfig) =>
+      bindCore(new ApiClient(config, stub.fetch), { sleep: async () => {} });
+    const io = testIo();
+    expect(await runCli(["ls", "--source", "github"], io, core)).toBe(10);
+    expect(stub.requests.map((r) => r.path)).toEqual(["/api/tasks?source=github&limit=100"]);
+    expect(io.stderr).toEqual(["devbox: source must be linear or api (400 invalid_request)"]);
+  });
+
   it("passes the filters and prints the table", async () => {
     const tasks = [task({ created_at: "2026-10-12T12:25:00.000Z" })];
     const { ops, calls } = fakeOps({ listTasks: async () => tasks });
@@ -108,6 +143,17 @@ describe("ls: run", () => {
     const json = testIo();
     await run({ ...asJson, mine: false }, ops, json);
     expect(JSON.parse(json.stdout.join("\n"))).toEqual([]);
+  });
+
+  it("escapes DEL and C1 controls in --json, and the parsed tasks are unchanged", async () => {
+    const tasks = [task({ title: "a\x7fb\u0085c\u009bd" })];
+    const { ops } = fakeOps({ listTasks: async () => tasks });
+    const io = testIo();
+    await run({ ...asJson, mine: false }, ops, io);
+    const out = io.stdout.join("\n");
+    expect(out).toContain("a\\u007fb\\u0085c\\u009bd");
+    expect(out).not.toMatch(/(?!\n)\p{Cc}/u);
+    expect(JSON.parse(out)).toEqual(tasks);
   });
 
   it("colours output only on a TTY without NO_COLOR", async () => {

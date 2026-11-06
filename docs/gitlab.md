@@ -131,7 +131,9 @@ With `integrations.gitlab.enabled`, the control plane serves
   downloads the failed jobs' traces, fixes the cause, pushes, and posts a note.
   A branch pipeline (no `merge_request` in the event) is matched to the open
   merge requests of its branch. Off with `integrations.gitlab.ciResults:
-  false`.
+  false`. At most 20 failed pipelines reach one task, so a fix that keeps
+  failing cannot loop forever; `GITLAB_CI_RESULT_MAX_PER_TASK` changes that
+  ([configuration.md](configuration.md#control-plane-settings)).
 
 Only notes from trusted users count: members of `gitlab.trustedGroups`
 (inherited members included) and `gitlab.trustedUsers`, by immutable numeric

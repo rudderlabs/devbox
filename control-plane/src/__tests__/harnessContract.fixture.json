@@ -1,0 +1,197 @@
+[
+  {
+    "sandboxId": "sandbox-ENG-42",
+    "path": "inbox/<uuid-1>.json",
+    "body": {
+      "id": "<uuid-1>",
+      "source": "linear",
+      "kind": "assignment",
+      "external_id": "issue-1",
+      "payload": {
+        "title": "Fix the login form",
+        "task_id": "<uuid-2>",
+        "task_key": "ENG-42",
+        "target_id": "session-1",
+        "description": "The submit button does nothing.\n\n",
+        "external_url": "https://linear.app/example/issue/ENG-42/fix-the-login-form"
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-ENG-42",
+    "path": "inbox/<uuid-3>.json",
+    "body": {
+      "id": "<uuid-3>",
+      "source": "linear",
+      "kind": "comment",
+      "external_id": "activity-1",
+      "payload": {
+        "pr": null,
+        "body": "Also check the signup form",
+        "task_id": "<uuid-2>",
+        "task_key": "ENG-42",
+        "target_id": "session-2",
+        "created_at": ""
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-ENG-42",
+    "path": "inbox/<uuid-4>.json",
+    "body": {
+      "id": "<uuid-4>",
+      "source": "github",
+      "kind": "comment",
+      "external_id": "101",
+      "payload": {
+        "pr": {
+          "repo": "app",
+          "pr_url": "https://github.com/example/app/pull/7"
+        },
+        "body": "@devbox rename the helper",
+        "task_id": "<uuid-2>",
+        "task_key": "ENG-42",
+        "target_id": "101",
+        "created_at": "2026-01-02T04:00:00Z"
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-ENG-42",
+    "path": "inbox/<uuid-5>.json",
+    "body": {
+      "id": "<uuid-5>",
+      "source": "github",
+      "kind": "review",
+      "external_id": "201",
+      "payload": {
+        "pr": {
+          "repo": "app",
+          "owner": "example",
+          "pr_url": "https://github.com/example/app/pull/7",
+          "prNumber": 7
+        },
+        "task_id": "<uuid-2>",
+        "task_key": "ENG-42",
+        "created_at": "2026-01-02T05:00:00Z",
+        "review_body": {
+          "body": "A few things to fix",
+          "target_id": "201"
+        },
+        "reviewer_login": "reviewer",
+        "inline_comments": [
+          {
+            "body": "typo",
+            "line": 12,
+            "path": "src/a.ts",
+            "target_id": "301"
+          },
+          {
+            "body": "extract this",
+            "line": 30,
+            "path": "src/b.ts",
+            "target_id": "302",
+            "start_line": 25
+          }
+        ]
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-ENG-42",
+    "path": "inbox/<uuid-6>.json",
+    "body": {
+      "id": "<uuid-6>",
+      "source": "github",
+      "kind": "ci_result",
+      "external_id": "workflow_run:401:2:7",
+      "payload": {
+        "pr": {
+          "repo": "app",
+          "pr_url": "https://github.com/example/app/pull/7"
+        },
+        "run_url": "https://github.com/example/app/actions/runs/401",
+        "task_id": "<uuid-2>",
+        "head_sha": "abc123",
+        "task_key": "ENG-42",
+        "target_id": "401",
+        "conclusion": "failure",
+        "head_branch": "devbox/eng-42",
+        "workflow_name": "CI",
+        "workflow_path": ".github/workflows/ci.yml"
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-DBX-API-1",
+    "path": "inbox/<uuid-7>.json",
+    "body": {
+      "id": "<uuid-7>",
+      "source": "api",
+      "kind": "assignment",
+      "external_id": "DBX-API-1",
+      "payload": {
+        "title": "Add a health check",
+        "task_id": "<uuid-8>",
+        "task_key": "DBX-API-1",
+        "target_id": "<uuid-8>",
+        "description": "Expose /healthz",
+        "external_url": "https://devbox.example/api/tasks/DBX-API-1"
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-DBX-API-1",
+    "path": "inbox/<uuid-9>.json",
+    "body": {
+      "id": "<uuid-9>",
+      "source": "api",
+      "kind": "comment",
+      "external_id": "<uuid-10>",
+      "payload": {
+        "pr": null,
+        "body": "Also log the uptime",
+        "task_id": "<uuid-8>",
+        "task_key": "DBX-API-1",
+        "target_id": "<uuid-8>",
+        "created_at": "2026-01-02T03:04:05.000Z"
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-ENG-42",
+    "path": "inbox/<uuid-11>.json",
+    "body": {
+      "id": "<uuid-11>",
+      "source": "linear",
+      "kind": "assignment",
+      "external_id": "issue-1",
+      "payload": {
+        "title": "Fix the login form, again",
+        "task_id": "<uuid-2>",
+        "task_key": "ENG-42",
+        "target_id": "session-3",
+        "description": "Still broken.",
+        "external_url": "https://linear.app/example/issue/ENG-42/fix-the-login-form"
+      }
+    }
+  },
+  {
+    "sandboxId": "sandbox-DBX-API-1",
+    "path": "inbox/<uuid-12>.json",
+    "body": {
+      "id": "<uuid-12>",
+      "source": "api",
+      "kind": "assignment",
+      "external_id": "DBX-API-1",
+      "payload": {
+        "title": "Add a health check endpoint",
+        "task_id": "<uuid-8>",
+        "task_key": "DBX-API-1",
+        "target_id": "<uuid-8>",
+        "description": null,
+        "external_url": "https://devbox.example/api/tasks/DBX-API-1"
+      }
+    }
+  }
+]

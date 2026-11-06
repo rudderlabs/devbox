@@ -6,8 +6,8 @@
 // receives. CP-internal persistence concerns live in InboxRow (the repository
 // layer), which extends InboxMessage with status/lease/timestamps.
 
+// The daemon exits on any other kind.
 export type InboxKind = "assignment" | "comment" | "review" | "ci_result";
-export type InboxSource = "linear" | "github" | "api" | "gitlab";
 
 // Identity CP stamps on every work payload. Both values are tasks columns
 // (tasks.id, tasks.key); nothing is parsed from URLs.
@@ -16,10 +16,9 @@ export type TaskIdentity = {
   task_key: string;
 };
 
-// PR scope for code-host rounds (GitHub, and GitLab, where the "PR" is a merge
-// request and pr_url its web URL). The daemon's prompt uses repo to pick the
-// right checkout for multi-repo tasks. null for Linear comments, which live on
-// the agent session rather than any PR.
+// PR scope for GitHub-sourced rounds. The daemon's prompt uses repo to pick
+// the right checkout for multi-repo tasks. null for Linear comments, which
+// live on the agent session rather than any PR.
 export type PrScope = {
   repo: string;
   pr_url: string;
@@ -41,14 +40,14 @@ export type AssignmentPayload = TaskIdentity & {
 };
 
 export type CommentPayload = TaskIdentity & {
-  // GH comment id or GitLab note id stringified, or Linear activity UUID.
-  // Matches the row's single reply_targets[0].id.
+  // GH comment id stringified, or Linear activity UUID. Matches the row's
+  // single reply_targets[0].id.
   target_id: string;
   body: string;
-  // null for linear-sourced (agent-session) comments; PrScope for github.
+  // null for linear-sourced (agent-session) comments; PrScope for a code host's.
   pr: PrScope | null;
-  // The diff anchor of an inline comment (a GitHub review comment, a GitLab
-  // DiffNote), so "fix this" arrives with a location. Absent on plain comments.
+  // The diff anchor of an inline comment (a GitLab DiffNote), so "fix this"
+  // arrives with a location. Absent on plain comments.
   path?: string;
   line?: number;
   // ISO-8601 creation time of the triggering comment. Display-only today —
@@ -82,9 +81,8 @@ export type ReviewPayload = TaskIdentity & {
 };
 
 export type CiResultPayload = TaskIdentity & {
-  // run id (GitHub) or pipeline id (GitLab) stringified — matches reply_targets[0].id
+  // run id stringified — matches reply_targets[0].id
   target_id: string;
-  // GitLab: the pipeline's name, else "Pipeline #<iid>"; workflow_path is ".gitlab-ci.yml".
   workflow_name: string;
   workflow_path: string;
   // "success" | "failure" | "cancelled" | "skipped" | "timed_out" | ...
@@ -95,8 +93,8 @@ export type CiResultPayload = TaskIdentity & {
   pr: PrScope;
 };
 
-// The wire contract. Discriminated on (source, kind) together so impossible
-// combos (e.g. linear + review) are unrepresentable at the type level.
+// The wire contract. The payload is one of the per-kind types above; its
+// integration builds it and core only stamps the task identity on it.
 //
 // Field roles:
 //   id          — Synthetic uuidv7 PK assigned by CP at insert. The daemon
@@ -105,9 +103,8 @@ export type CiResultPayload = TaskIdentity & {
 //                 existing assignment row so each fresh run gets a fresh
 //                 daemon-visible identity while the logical task row and
 //                 assignment external_id stay one-per-issue.
-//   source      — Channel the round arrived on. Lets the daemon route final
-//                 replies through the right adapter (Linear API vs GitHub
-//                 REST).
+//   source      — Channel the round arrived on: the name of the integration
+//                 that created it (linear, github, api).
 //   kind        — Round shape; selects the daemon handler (assignment.py,
 //                 comment.py, review.py).
 //   external_id — Upstream identifier (GH comment/review id stringified,
@@ -116,69 +113,10 @@ export type CiResultPayload = TaskIdentity & {
 //                 Drives idempotency at CP's `(source, kind, external_id)` unique
 //                 index AND flows through to event reply-target routing.
 //   payload     — Kind-specific body. See the payload types above.
-export type InboxMessage =
-  | {
-      id: string;
-      source: "linear";
-      kind: "assignment";
-      external_id: string;
-      payload: AssignmentPayload;
-    }
-  | {
-      id: string;
-      source: "linear";
-      kind: "comment";
-      external_id: string;
-      payload: CommentPayload;
-    }
-  | {
-      id: string;
-      source: "api";
-      kind: "assignment";
-      external_id: string;
-      payload: AssignmentPayload;
-    }
-  | {
-      id: string;
-      source: "api";
-      kind: "comment";
-      external_id: string;
-      payload: CommentPayload;
-    }
-  | {
-      id: string;
-      source: "github";
-      kind: "comment";
-      external_id: string;
-      payload: CommentPayload;
-    }
-  | {
-      id: string;
-      source: "github";
-      kind: "review";
-      external_id: string;
-      payload: ReviewPayload;
-    }
-  | {
-      id: string;
-      source: "github";
-      kind: "ci_result";
-      external_id: string;
-      payload: CiResultPayload;
-    }
-  // GitLab has no batched "review submitted" event: each merge request note
-  // arrives on its own, so GitLab rounds are comments and CI results only.
-  | {
-      id: string;
-      source: "gitlab";
-      kind: "comment";
-      external_id: string;
-      payload: CommentPayload;
-    }
-  | {
-      id: string;
-      source: "gitlab";
-      kind: "ci_result";
-      external_id: string;
-      payload: CiResultPayload;
-    };
+export type InboxMessage = {
+  id: string;
+  source: string;
+  kind: InboxKind;
+  external_id: string;
+  payload: unknown;
+};

@@ -12,13 +12,20 @@ export type Outbound =
       type: "failure";
       cause: "round_failed" | "task_failed" | "workspace_missing";
       round: InboxRow;
-      summary?: string; // user-safe text (the harness's "what failed" summary)
+      // User-safe text: the harness's "what failed" summary, or core's
+      // workspace_missing notice (WORKSPACE_MISSING_MESSAGE).
+      summary?: string;
       detail?: string; // raw error text (exception message): never post it on a public channel
     };
 export type SendCtx = { signal: AbortSignal; log: Logger };
 
-// Throw only before the first request is sent (token fetch failed, 429,
-// connection refused, DNS, TLS handshake).
+// What a workspace_missing notice tells the user, wherever it is shown.
+export const WORKSPACE_MISSING_MESSAGE =
+  "The workspace for this task has been cleaned up and can no longer be resumed. " +
+  "Please reach out to the harness team or open a new ticket to continue.";
+
+// Throw only before the first request is sent (a transient token failure,
+// 429, connection refused, DNS, TLS handshake).
 export class RetryableError extends Error {
   constructor(
     msg: string,
