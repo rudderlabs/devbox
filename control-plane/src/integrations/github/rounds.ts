@@ -219,3 +219,76 @@ export async function enqueueCiResult(
     });
   }
 }
+
+// A check run or commit status from another CI tool. A re-run is a new check
+// run id; a status is keyed by repo, commit and context, so a repeated post of
+// the same failure reaches the task once. Same loop breaker as workflow_run.
+export async function enqueueCiCheckResult(
+  tasks: Pick<TaskService, "enqueueRound">,
+  params: {
+    task: Pick<Task, "id" | "key">;
+    check:
+      | { source: "check_run"; checkRunId: number }
+      | { source: "status"; statusId: number; context: string };
+    name: string;
+    conclusion: string;
+    runUrl: string;
+    detailsUrl: string;
+    summary: string;
+    headSha: string;
+    headBranch: string;
+    owner: string;
+    repo: string;
+    prNumber: number;
+    limit: number;
+  },
+  log: Pick<Logger, "warn">,
+): Promise<void> {
+  const { check } = params;
+  const targetId = String(check.source === "check_run" ? check.checkRunId : check.statusId);
+  const externalId =
+    check.source === "check_run"
+      ? `check_run:${check.checkRunId}:${params.prNumber}`
+      : `status:${params.owner}/${params.repo}:${params.headSha}:${check.context}:${params.prNumber}`;
+  const prUrl = `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`;
+  const result = await tasks.enqueueRound({
+    task: params.task,
+    kind: "ci_result",
+    externalId,
+    payload: {
+      target_id: targetId,
+      ci_source: check.source,
+      workflow_name: params.name,
+      workflow_path: "",
+      conclusion: params.conclusion,
+      run_url: params.runUrl,
+      details_url: params.detailsUrl,
+      summary: params.summary,
+      head_sha: params.headSha,
+      head_branch: params.headBranch,
+      pr: { repo: params.repo, pr_url: prUrl },
+    },
+    targets: [
+      {
+        id: targetId,
+        spec: {
+          kind: "issue_comment",
+          owner: params.owner,
+          repo: params.repo,
+          prNumber: params.prNumber,
+          commentId: 0,
+        } satisfies GithubSpec,
+      },
+    ],
+    prUrl,
+    limit: params.limit,
+  });
+  if ("dropped" in result && result.dropped === "limit") {
+    log.warn("ci_result loop breaker tripped — dropping CI failure", {
+      taskId: params.task.id,
+      seen: result.count,
+      max: params.limit,
+      externalId,
+    });
+  }
+}

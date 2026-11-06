@@ -39,10 +39,30 @@ class TestFollowUpPrompts(unittest.TestCase):
             ]),
         )
 
+    def test_ci_system_prompt_without_rerun_is_assembled_in_order(self) -> None:
+        self.assertEqual(
+            fa.CI_SYSTEM_PROMPT_NO_RERUN,
+            "\n\n".join([
+                fa.ROLE_PROMPT,
+                fa.CI_OBJECTIVE_PROMPT,
+                fa.RUNTIME_PROMPT,
+                fa.CI_ACTIONS_PROMPT_NO_RERUN,
+                _prompt_text("merge_conflict_handling.md"),
+                _prompt_text("git_safety.md"),
+                fa.CI_CHECKLIST_PROMPT_NO_RERUN,
+            ]),
+        )
+
+    def test_ci_prompt_without_rerun_never_names_the_rerun_tool(self) -> None:
+        self.assertNotIn("rerun_failed_ci_jobs", fa.CI_SYSTEM_PROMPT_NO_RERUN)
+        self.assertIn("`update_pull_request`", fa.CI_ACTIONS_PROMPT_NO_RERUN)
+        self.assertIn("manual re-run", fa.CI_ACTIONS_PROMPT_NO_RERUN)
+
     def test_no_cli_mechanics_placeholders_or_internal_files(self) -> None:
         prompts = {
             "followup": fa.FOLLOWUP_SYSTEM_PROMPT,
             "ci": fa.CI_SYSTEM_PROMPT,
+            "ci_no_rerun": fa.CI_SYSTEM_PROMPT_NO_RERUN,
         }
         for name, prompt in prompts.items():
             with self.subTest(prompt=name):

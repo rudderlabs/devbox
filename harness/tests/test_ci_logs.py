@@ -148,5 +148,120 @@ class TestFetchFailedJobLogs(unittest.TestCase):
         self.assertTrue(log_path.exists())
 
 
+class TestParseCheckRunUrl(unittest.TestCase):
+    def test_check_run_page(self) -> None:
+        self.assertEqual(
+            ci_logs.parse_check_run_url("https://github.com/acme/api/runs/555"),
+            ("acme", "api", 555),
+        )
+
+    def test_other_urls_return_none(self) -> None:
+        self.assertIsNone(
+            ci_logs.parse_check_run_url("https://github.com/o/r/actions/runs/1")
+        )
+        self.assertIsNone(ci_logs.parse_check_run_url("https://circleci.com/gh/o/r/1"))
+        self.assertIsNone(ci_logs.parse_check_run_url(""))
+
+
+class TestFetchCheckRunReport(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.output_dir = Path(self._tmp.name) / "check"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _client(self) -> mock.Mock:
+        client = mock.Mock()
+        client.get_check_run.return_value = {
+            "name": "ci/circleci: test",
+            "conclusion": "failure",
+            "details_url": "https://circleci.com/gh/o/r/77",
+            "output": {
+                "title": "2 tests failed",
+                "summary": "test_login failed",
+                "text": "AssertionError: expected 200",
+            },
+        }
+        client.list_check_run_annotations.return_value = [
+            {
+                "path": "src/login.py",
+                "start_line": 10,
+                "end_line": 12,
+                "annotation_level": "failure",
+                "title": "test_login",
+                "message": "expected 200, got 500",
+                "raw_details": "Traceback ...",
+            }
+        ]
+        return client
+
+    def test_writes_output_and_annotations(self) -> None:
+        client = self._client()
+        with mock.patch("harness.ci_logs.GitHubClient", return_value=client):
+            result, errors = ci_logs.fetch_check_run_report(
+                "o", "r", 555, self.output_dir
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["job_name"], "ci/circleci: test")
+        self.assertEqual(result[0]["job_id"], 555)
+        report = Path(result[0]["log_path"]).read_text()
+        for expected in (
+            "Details: https://circleci.com/gh/o/r/77",
+            "# Output: 2 tests failed",
+            "test_login failed",
+            "AssertionError: expected 200",
+            "# Annotations (1)",
+            "src/login.py:10-12 [failure] test_login: expected 200, got 500",
+            "Traceback ...",
+        ):
+            self.assertIn(expected, report)
+
+    def test_annotation_failure_keeps_the_output(self) -> None:
+        client = self._client()
+        client.list_check_run_annotations.side_effect = RuntimeError("403")
+        with mock.patch("harness.ci_logs.GitHubClient", return_value=client):
+            result, errors = ci_logs.fetch_check_run_report(
+                "o", "r", 555, self.output_dir
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertIn("AssertionError", Path(result[0]["log_path"]).read_text())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("annotations", errors[0])
+
+    def test_check_run_fetch_failure_raises(self) -> None:
+        client = self._client()
+        client.get_check_run.side_effect = RuntimeError("404")
+        with (
+            mock.patch("harness.ci_logs.GitHubClient", return_value=client),
+            self.assertRaises(RuntimeError),
+        ):
+            ci_logs.fetch_check_run_report("o", "r", 555, self.output_dir)
+
+
+class TestWriteReportedFailure(unittest.TestCase):
+    def test_writes_name_summary_and_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = ci_logs.write_reported_failure(
+                name="ci/jenkins",
+                conclusion="failure",
+                summary="Build failed",
+                details_url="https://jenkins.example/job/1",
+                report_id="9001",
+                output_dir=Path(tmp) / "status",
+            )
+            self.assertEqual(result[0]["job_name"], "ci/jenkins")
+            self.assertEqual(result[0]["job_id"], "9001")
+            path = Path(result[0]["log_path"])
+            self.assertEqual(path.name, "ci_jenkins-9001.txt")
+            report = path.read_text()
+        self.assertIn("Description: Build failed", report)
+        self.assertIn("Details: https://jenkins.example/job/1", report)
+        self.assertIn("Its logs are not available here.", report)
+
+
 if __name__ == "__main__":
     unittest.main()

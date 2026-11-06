@@ -63,6 +63,7 @@ mock.module("../../clients/github", () => ({
   addPrAssignees: mock(() => Promise.resolve({ assigned: [] })),
   getUserById: mock(() => Promise.resolve({ login: "", id: 0 })),
   getUserIdByLogin: mock(() => Promise.resolve(null)),
+  listOpenPrNumbersForCommit: mock(() => Promise.resolve([])),
   requestReviewers: mock(() => Promise.resolve()),
   parsePrUrl: () => null,
   githubTokenState: () => ({ source: "env", expiresAt: null, readAt: null, lastError: null }),

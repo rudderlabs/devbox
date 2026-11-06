@@ -15,6 +15,7 @@ const SETTINGS = {
   trustedUsers: [] as string[],
   ciResultEnabled: true,
   ciResultMaxPerTask: 20,
+  ciReporters: ["circleci-checks[bot]", "jenkins-svc"],
 };
 
 const getReviewComments = mock(() => Promise.resolve([] as unknown[]));
@@ -22,6 +23,11 @@ const fetchOrgMembers = mock(() => Promise.resolve(new Set([1, 2, 3]) as Readonl
 const getUserIdByLogin = mock((_login: string) => Promise.resolve(null as number | null));
 const addIssueCommentReaction = mock(() => Promise.resolve());
 const addReviewCommentReaction = mock(() => Promise.resolve());
+const listOpenPrNumbersForCommit = mock((_o: string, _r: string, _sha: string) =>
+  Promise.resolve([42]),
+);
+// Sender ids of the CI fixtures below, for the ciReporters logins.
+const REPORTER_IDS: Record<string, number> = { "circleci-checks[bot]": 5000, "jenkins-svc": 6000 };
 // Mock the full export surface of the ../../clients/github barrel. bun's
 // mock.module is process-global; the module split alone did NOT contain it --
 // in CI this mock reached github.test.ts and failed 25 of its tests. The suite
@@ -33,6 +39,7 @@ mock.module("../../../clients/github", () => ({
   getUserIdByLogin,
   addIssueCommentReaction,
   addReviewCommentReaction,
+  listOpenPrNumbersForCommit,
   postIssueComment: mock(() => Promise.resolve({ id: 1, url: "u" })),
   postReviewCommentReply: mock(() => Promise.resolve({ id: 1, url: "u" })),
   addPrAssignees: mock(() => Promise.resolve({ assigned: [] })),
@@ -321,6 +328,111 @@ describe("parseGithubEvent", () => {
   });
 });
 
+const checkRunPayload = (overrides: Record<string, unknown> = {}) => ({
+  action: "completed",
+  repository: { name: "r", owner: { login: "o" } },
+  check_run: {
+    id: 555,
+    name: "ci/circleci: test",
+    head_sha: "abc123",
+    status: "completed",
+    conclusion: "failure",
+    html_url: "https://github.com/o/r/runs/555",
+    details_url: "https://circleci.com/gh/o/r/77",
+    output: { title: "2 tests failed", summary: "long summary" },
+    app: { slug: "circleci-checks" },
+    check_suite: { head_branch: "devbox/XYZ-1234-fix" },
+    pull_requests: [{ number: 42 }],
+    ...overrides,
+  },
+  sender: { login: "circleci-checks[bot]", id: 5000 },
+});
+
+const statusPayload = (overrides: Record<string, unknown> = {}) => ({
+  id: 9001,
+  sha: "abc123",
+  state: "failure",
+  context: "ci/jenkins",
+  description: "Build failed",
+  target_url: "https://jenkins.example/job/1",
+  repository: { name: "r", owner: { login: "o" } },
+  branches: [
+    { name: "devbox/XYZ-1234-fix", commit: { sha: "abc123" } },
+    { name: "older-branch", commit: { sha: "def456" } },
+  ],
+  sender: { login: "jenkins-svc", id: 6000 },
+  ...overrides,
+});
+
+describe("parseGithubEvent check_run and status", () => {
+  it("check_run completed with failure from a non-Actions app → check_run event", () => {
+    expect(parseGithubEvent("check_run", checkRunPayload())).toEqual({
+      kind: "check_run",
+      checkRunId: 555,
+      name: "ci/circleci: test",
+      conclusion: "failure",
+      htmlUrl: "https://github.com/o/r/runs/555",
+      detailsUrl: "https://circleci.com/gh/o/r/77",
+      summary: "2 tests failed",
+      headSha: "abc123",
+      headBranch: "devbox/XYZ-1234-fix",
+      pullRequests: [{ number: 42 }],
+      owner: "o",
+      repo: "r",
+    });
+  });
+
+  it("check_run from GitHub Actions → null (workflow_run covers it)", () => {
+    expect(
+      parseGithubEvent("check_run", checkRunPayload({ app: { slug: "github-actions" } })),
+    ).toBeNull();
+  });
+
+  it("check_run that did not fail → null", () => {
+    for (const conclusion of ["success", "neutral", "skipped", "cancelled"]) {
+      expect(parseGithubEvent("check_run", checkRunPayload({ conclusion }))).toBeNull();
+    }
+  });
+
+  it("check_run that is not completed → null", () => {
+    const payload = { ...checkRunPayload(), action: "created" };
+    expect(parseGithubEvent("check_run", payload)).toBeNull();
+  });
+
+  it("check_run without output or details → empty strings", () => {
+    const parsed = parseGithubEvent(
+      "check_run",
+      checkRunPayload({ output: undefined, details_url: null }),
+    );
+    expect(parsed).toMatchObject({ kind: "check_run", summary: "", detailsUrl: "" });
+  });
+
+  it("status failure → status event with only the branches the commit is the tip of", () => {
+    expect(parseGithubEvent("status", statusPayload())).toEqual({
+      kind: "status",
+      statusId: 9001,
+      context: "ci/jenkins",
+      state: "failure",
+      targetUrl: "https://jenkins.example/job/1",
+      description: "Build failed",
+      sha: "abc123",
+      headBranch: "devbox/XYZ-1234-fix",
+      owner: "o",
+      repo: "r",
+    });
+  });
+
+  it("status that is not a failure → null", () => {
+    for (const state of ["pending", "success", "error"]) {
+      expect(parseGithubEvent("status", statusPayload({ state }))).toBeNull();
+    }
+  });
+
+  it("status without a sha → null", () => {
+    expect(parseGithubEvent("status", statusPayload({ sha: "" }))).toBeNull();
+  });
+});
+
 // ──── Controller tests ────
 
 const linearTask = {
@@ -388,6 +500,8 @@ describe("GitHubWebhookController.handleWebhook", () => {
   const build = () => {
     enqueueRound = mock(() => Promise.resolve({ roundId: "round-1" }));
     findByPrUrl = mock(() => Promise.resolve(linearTask));
+    listOpenPrNumbersForCommit.mockReset();
+    listOpenPrNumbersForCommit.mockResolvedValue([42]);
     getReviewComments.mockReset();
     getReviewComments.mockResolvedValue([]);
     addIssueCommentReaction.mockReset();
@@ -404,7 +518,9 @@ describe("GitHubWebhookController.handleWebhook", () => {
     fetchOrgMembers.mockReset();
     fetchOrgMembers.mockResolvedValue(new Set([1, 2, 3]) as ReadonlySet<number>);
     getUserIdByLogin.mockReset();
-    getUserIdByLogin.mockResolvedValue(null);
+    getUserIdByLogin.mockImplementation((login: string) =>
+      Promise.resolve(REPORTER_IDS[login] ?? null),
+    );
     clock = { now: 1_000_000 };
     controller = new GitHubWebhookController(tasks, SETTINGS, logger, () => clock.now);
     const a = new Hono();
@@ -1051,6 +1167,156 @@ describe("GitHubWebhookController.handleWebhook", () => {
     });
     expect(res.status).toBe(200);
     expect(flagOffEnqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("enqueues ci_result for a failed check run from another CI tool", async () => {
+    // The sender is the CI tool's bot, which is in no trusted org.
+    const body = JSON.stringify(checkRunPayload());
+    const res = await post(body, "check_run", sign(body));
+    expect(res.status).toBe(200);
+    expect(findByPrUrl).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+    expect(enqueueRound.mock.calls[0]?.[0]).toEqual({
+      task: linearTask,
+      kind: "ci_result",
+      externalId: "check_run:555:42",
+      payload: {
+        target_id: "555",
+        ci_source: "check_run",
+        workflow_name: "ci/circleci: test",
+        workflow_path: "",
+        conclusion: "failure",
+        run_url: "https://github.com/o/r/runs/555",
+        details_url: "https://circleci.com/gh/o/r/77",
+        summary: "2 tests failed",
+        head_sha: "abc123",
+        head_branch: "devbox/XYZ-1234-fix",
+        pr: { repo: "r", pr_url: "https://github.com/o/r/pull/42" },
+      },
+      targets: [
+        {
+          id: "555",
+          spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 42, commentId: 0 },
+        },
+      ],
+      prUrl: "https://github.com/o/r/pull/42",
+      limit: 20,
+    });
+  });
+
+  it("ignores a check run from GitHub Actions", async () => {
+    const body = JSON.stringify(checkRunPayload({ app: { slug: "github-actions" } }));
+    const res = await post(body, "check_run", sign(body));
+    expect(res.status).toBe(200);
+    expect(enqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("ignores a failed check run on a PR not tracked by harness", async () => {
+    findByPrUrl.mockResolvedValue(null);
+    const body = JSON.stringify(checkRunPayload());
+    const res = await post(body, "check_run", sign(body));
+    expect(res.status).toBe(200);
+    expect(enqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 on a check run with a bad signature", async () => {
+    const body = JSON.stringify(checkRunPayload());
+    const res = await post(body, "check_run", sign(body, "bad-secret"));
+    expect(res.status).toBe(401);
+    expect(enqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("enqueues ci_result for a failed commit status, finding the PR by its commit", async () => {
+    const body = JSON.stringify(statusPayload());
+    const res = await post(body, "status", sign(body));
+    expect(res.status).toBe(200);
+    expect(listOpenPrNumbersForCommit).toHaveBeenCalledWith("o", "r", "abc123");
+    expect(findByPrUrl).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+    expect(enqueueRound.mock.calls[0]?.[0]).toEqual({
+      task: linearTask,
+      kind: "ci_result",
+      externalId: "status:o/r:abc123:ci/jenkins:42",
+      payload: {
+        target_id: "9001",
+        ci_source: "status",
+        workflow_name: "ci/jenkins",
+        workflow_path: "",
+        conclusion: "failure",
+        run_url: "https://jenkins.example/job/1",
+        details_url: "https://jenkins.example/job/1",
+        summary: "Build failed",
+        head_sha: "abc123",
+        head_branch: "devbox/XYZ-1234-fix",
+        pr: { repo: "r", pr_url: "https://github.com/o/r/pull/42" },
+      },
+      targets: [
+        {
+          id: "9001",
+          spec: { kind: "issue_comment", owner: "o", repo: "r", prNumber: 42, commentId: 0 },
+        },
+      ],
+      prUrl: "https://github.com/o/r/pull/42",
+      limit: 20,
+    });
+  });
+
+  it("ignores a failed commit status on a PR no task owns", async () => {
+    findByPrUrl.mockResolvedValue(null);
+    const body = JSON.stringify(statusPayload());
+    const res = await post(body, "status", sign(body));
+    expect(res.status).toBe(200);
+    expect(enqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("ignores a pending commit status without a task lookup", async () => {
+    const body = JSON.stringify(statusPayload({ state: "pending" }));
+    const res = await post(body, "status", sign(body));
+    expect(res.status).toBe(200);
+    expect(listOpenPrNumbersForCommit).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("ignores a check run from an account not in ciReporters", async () => {
+    const payload = { ...checkRunPayload(), sender: { login: "stranger[bot]", id: 7777 } };
+    const body = JSON.stringify(payload);
+    const res = await post(body, "check_run", sign(body));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ignored", reason: "not a CI reporter" });
+    expect(findByPrUrl).not.toHaveBeenCalled();
+    expect(enqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("ignores a commit status from a trusted member who is not a CI reporter", async () => {
+    // alice (id 1) is in the trusted org, which is not enough to report CI.
+    const body = JSON.stringify(statusPayload({ sender: { login: "alice", id: 1 } }));
+    const res = await post(body, "status", sign(body));
+    expect(res.status).toBe(200);
+    expect(enqueueRound).not.toHaveBeenCalled();
+  });
+
+  it("resolves the ciReporters logins once, without the trusted set", async () => {
+    const body = JSON.stringify(checkRunPayload());
+    await post(body, "check_run", sign(body));
+    await post(body, "check_run", sign(body));
+    expect(getUserIdByLogin).toHaveBeenCalledTimes(2); // one per login
+    expect(fetchOrgMembers).not.toHaveBeenCalled();
+    expect(enqueueRound).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns 503 when a CI reporter login can't be resolved, and retries next time", async () => {
+    getUserIdByLogin.mockImplementationOnce(() => Promise.reject(new Error("boom")));
+    const body = JSON.stringify(checkRunPayload());
+    expect((await post(body, "check_run", sign(body))).status).toBe(503);
+    expect((await post(body, "check_run", sign(body))).status).toBe(200);
+    expect(enqueueRound).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 500 when enqueueing a check run fails, so GitHub redelivers", async () => {
+    enqueueRound.mockRejectedValue(new Error("db down"));
+    const body = JSON.stringify(checkRunPayload());
+    const res = await post(body, "check_run", sign(body));
+    expect(res.status).toBe(500);
   });
 
   it("loads the trusted-org member set once across many webhooks", async () => {

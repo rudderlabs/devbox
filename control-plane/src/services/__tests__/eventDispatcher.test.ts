@@ -72,6 +72,7 @@ mock.module("../../clients/github", () => ({
   addPrAssignees,
   getUserById,
   getUserIdByLogin: mock(() => Promise.resolve(null)),
+  listOpenPrNumbersForCommit: mock(() => Promise.resolve([])),
   requestReviewers,
   parsePrUrl: (url: string) => {
     const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);

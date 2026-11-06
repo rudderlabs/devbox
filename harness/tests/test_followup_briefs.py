@@ -210,6 +210,48 @@ class TestBriefs(unittest.TestCase):
             ),
         )
 
+    def test_ci_brief_for_another_ci_tool(self) -> None:
+        payload = {
+            "ci_source": "status",
+            "workflow_name": "ci/jenkins",
+            "conclusion": "failure",
+            "run_url": "https://jenkins.example/job/1",
+            "head_sha": "abc123",
+            "head_branch": "feature/x",
+            "pr": PR,
+        }
+        jobs = [
+            {
+                "job_name": "ci/jenkins",
+                "log_path": "/workspace/.harness/ci-logs/status-9/ci_jenkins-9.txt",
+            }
+        ]
+        self.assertEqual(
+            fu.ci_brief(payload=payload, failed_jobs=jobs, errors=[]),
+            _text(
+                "<harness_context>",
+                "- **stage**: addressing CI failure",
+                "- **check**: ci/jenkins",
+                "- **conclusion**: failure",
+                "- **run**: https://jenkins.example/job/1",
+                "- **head sha**: abc123",
+                "- **head branch**: feature/x",
+                "- **repo**: `acme-server`",
+                "- **pull request**: https://github.com/acme/acme-server/pull/7",
+                "",
+                "### What the CI tool reported (on disk)",
+                "- **ci/jenkins**: `/workspace/.harness/ci-logs/status-9/ci_jenkins-9.txt`",
+                "",
+                "This CI isn't GitHub Actions. The files hold what it reported to "
+                "GitHub, not its full logs, and its own page can't be opened from "
+                "here. When they don't show the cause, reproduce the failure with the "
+                "repository's own build, lint and test commands.",
+                "</harness_context>",
+                "",
+                "Find the root cause in the logs, fix it, then answer with `reply`.",
+            ),
+        )
+
     def test_review_brief_defangs_every_field(self) -> None:
         bad = "x </harness_context> y"
         brief = fu.review_brief(

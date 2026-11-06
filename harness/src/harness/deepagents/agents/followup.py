@@ -175,7 +175,7 @@ the implementation summary.
   plainly, with the evidence from the logs. A metadata failure is always fixable.
 """
 
-CI_ACTIONS_PROMPT = """\
+_CI_ACTIONS_TEMPLATE = """\
 # Actions — how to work this round
 
 1. **Read the failed-job logs** listed in the round context. Scan, grep or tail the
@@ -194,15 +194,11 @@ CI_ACTIONS_PROMPT = """\
 
    1. **Code, test, lint or build failure.** Edit the repository whose CI failed
       (the round context's repository). Fix the root cause and every distinct
-      failure; no skips and no disabled checks. Don't call `rerun_failed_ci_jobs`:
-      your push re-runs CI.
+      failure; no skips and no disabled checks.{code_fix_rerun}
    2. **Pull request metadata failure, or a metadata-only update.** For example a
       semantic-title check, a title or commit convention, `Unknown release type
       "..."` in the log, rollout notes or reviewer context. Don't edit repository
-      files. Call `update_pull_request` with the corrected title and/or body. If
-      the title changed, then call `rerun_failed_ci_jobs`: a title change alone
-      does not re-run CI. A body-only update needs no re-run unless the failed
-      check depends on the body.
+      files. Call `update_pull_request` with the corrected title and/or body.{metadata_rerun}
 
 5. **Publish a code fix** in the repository whose CI failed: `git add` only the
    files of the fix (never `git add -A` or `git add .`), commit with a
@@ -215,7 +211,7 @@ CI_ACTIONS_PROMPT = """\
    it, explain what the logs show and why it can't be fixed from the workspace.
 """
 
-CI_CHECKLIST_PROMPT = """\
+_CI_CHECKLIST_TEMPLATE = """\
 # Checklist — before you finish
 
 Before ending this round, confirm:
@@ -225,14 +221,44 @@ Before ending this round, confirm:
 - [ ] Your reply summarizes that root cause, citing the concrete log signal.
 - [ ] You fixed the actual cause completely: no symptom-only or partial patch, no
       disabled check.
-- [ ] For a metadata-only fix, you called `update_pull_request`; if the title
-      changed, you then called `rerun_failed_ci_jobs`.
+- [ ] For a metadata-only fix, you called `update_pull_request`{metadata_rerun_check}.
 - [ ] For a code fix, you staged only the fix's files, committed with a
       conventional message and pushed.
 - [ ] You edited and committed only in the repository whose CI failed.
-- [ ] You sent exactly one `reply`, after the fix was pushed or the re-run was
-      triggered, linking the pushed commit for a code fix.
+- [ ] You sent exactly one `reply`, after the fix was pushed or {reply_after}
 """
+
+# Only a GitHub Actions run can be re-run from the sandbox.
+_CI_RERUN_WORDING = {
+    "code_fix_rerun": " Don't call `rerun_failed_ci_jobs`:\n      your push re-runs CI.",
+    "metadata_rerun": (
+        " If\n      the title changed, then call `rerun_failed_ci_jobs`: a title change alone\n"
+        "      does not re-run CI. A body-only update needs no re-run unless the failed\n"
+        "      check depends on the body."
+    ),
+    "metadata_rerun_check": (
+        "; if the title\n      changed, you then called `rerun_failed_ci_jobs`"
+    ),
+    "reply_after": (
+        "the re-run was\n      triggered, linking the pushed commit for a code fix."
+    ),
+}
+_CI_NO_RERUN_WORDING = {
+    "code_fix_rerun": " Your push re-runs CI.",
+    "metadata_rerun": (
+        "\n      You can't re-run this CI from here. If it doesn't run again after the\n"
+        "      update, say in your reply that it needs a manual re-run."
+    ),
+    "metadata_rerun_check": "",
+    "reply_after": (
+        "the pull request\n      was updated, linking the pushed commit for a code fix."
+    ),
+}
+
+CI_ACTIONS_PROMPT = _CI_ACTIONS_TEMPLATE.format(**_CI_RERUN_WORDING)
+CI_CHECKLIST_PROMPT = _CI_CHECKLIST_TEMPLATE.format(**_CI_RERUN_WORDING)
+CI_ACTIONS_PROMPT_NO_RERUN = _CI_ACTIONS_TEMPLATE.format(**_CI_NO_RERUN_WORDING)
+CI_CHECKLIST_PROMPT_NO_RERUN = _CI_CHECKLIST_TEMPLATE.format(**_CI_NO_RERUN_WORDING)
 
 FOLLOWUP_SYSTEM_PROMPT = "\n\n".join([
     ROLE_PROMPT,
@@ -253,6 +279,16 @@ CI_SYSTEM_PROMPT = "\n\n".join([
     _prompt_text("merge_conflict_handling.md"),
     _prompt_text("git_safety.md"),
     CI_CHECKLIST_PROMPT,
+])
+
+CI_SYSTEM_PROMPT_NO_RERUN = "\n\n".join([
+    ROLE_PROMPT,
+    CI_OBJECTIVE_PROMPT,
+    RUNTIME_PROMPT,
+    CI_ACTIONS_PROMPT_NO_RERUN,
+    _prompt_text("merge_conflict_handling.md"),
+    _prompt_text("git_safety.md"),
+    CI_CHECKLIST_PROMPT_NO_RERUN,
 ])
 
 
@@ -334,7 +370,7 @@ class CiAgent(DeepAgentSession[Any]):
         memory_repos: Sequence[RepoScope],
         memory: MemoryStore,
         github: GitHubClient,
-        run: WorkflowRunRef,
+        run: WorkflowRunRef | None,
     ) -> None:
         middleware = _round_middleware(
             events=events,
@@ -345,13 +381,14 @@ class CiAgent(DeepAgentSession[Any]):
             github=github,
             memory_stage="ci",
         )
-        middleware.append(CiRerunMiddleware(github=github, run=run))
+        if run is not None:
+            middleware.append(CiRerunMiddleware(github=github, run=run))
         super().__init__(
             events=events,
             model=model,
             thread_id=thread_id,
             workspace_dir=WORKSPACE,
-            system_prompt=CI_SYSTEM_PROMPT,
+            system_prompt=CI_SYSTEM_PROMPT if run else CI_SYSTEM_PROMPT_NO_RERUN,
             middleware=middleware,
             durable=True,
             # CI rounds are always on GitHub, where progress is not shown.

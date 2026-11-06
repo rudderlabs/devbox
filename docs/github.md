@@ -16,7 +16,8 @@ local stack (`bun run up`) or a Kubernetes install (`bun run k8s:install`,
 - **GitHub webhooks reach the agent**, on Compose too: an `@<slug>` mention on
   a pull request, a review or review comment on the agent's pull request, and
   a failed CI run on its branch all reach the running task, like
-  `bun run devbox send`.
+  `bun run devbox send`. CI can be GitHub Actions or any tool that reports
+  check runs or commit statuses to the pull request.
 - **The sandbox can look up who is trusted** (org members and users), so
   pull request discussion from your trusted orgs and users reaches the agent
   ([Trust lists](#trust-lists)).
@@ -433,6 +434,8 @@ The manifest sets these. Review them on GitHub's create page before you click
 | Pull requests | write | open and update pull requests, review comments and replies, reviewers, reactions on review comments |
 | Issues | write | pull request conversation comments, reactions, assignees |
 | Actions | write | read CI jobs and logs, re-run failed jobs; the `workflow_run` event |
+| Checks | read | read another CI tool's check run output; the `check_run` event |
+| Commit statuses | read | the `status` event |
 | Metadata | read | required by GitHub |
 | Members | read | list the members of a trusted org |
 
@@ -442,9 +445,33 @@ The manifest sets these. Review them on GitHub's create page before you click
 | `pull_request_review` | reviews on the agent's pull requests |
 | `pull_request_review_comment` | review comments |
 | `workflow_run` | a failed CI run on the agent's branch (when `ciResults` is `true`) |
+| `check_run` | a failed check from a CI tool other than GitHub Actions (when `ciResults` is `true`) |
+| `status` | a failed commit status on the agent's branch, as Jenkins and other CI tools post (when `ciResults` is `true`) |
 
 The App is private (it can be installed only on the account that owns it) and
 its webhook is `<publicUrl>/webhook/github`.
+
+**CI tools other than GitHub Actions.** A tool that reports to the pull
+request as a check run (CircleCI, Buildkite and others) or a commit status
+(Jenkins and others) reaches the task too, once you list the account it posts
+as in `github.ciReporters` ([CI reporters](#ci-reporters)). Only failures
+count: a check run that concludes `failure`, or a status in state `failure`. A
+status in state `error` means the CI system itself failed, so it is ignored.
+Actions' own check runs are ignored, since `workflow_run` already brings them.
+The agent gets what the tool reported to GitHub, not its full logs: a check
+run's output and annotations, or a status's description. It also gets the link
+to the tool's own page, but it can't open that page from the sandbox. When the
+report doesn't show the cause, the agent reproduces the failure with the repo's
+own build and test commands. A failed status reaches the task only while its
+commit is the head of the agent's open pull request. Each tool's failures count
+toward the same limit as Actions failures, `GITHUB_CI_RESULT_MAX_PER_TASK`.
+
+**An App created before Checks and Commit statuses were added.** The two
+permissions and two events above are not on it, so failures from other CI
+tools don't reach devbox. Open the App's settings page (`github:status` prints
+the link), Permissions & events. Set Repository permissions → Checks and
+Commit statuses to Read-only, and under Subscribe to events tick Check run and
+Status. Save, then accept the new permissions on the installation.
 
 **Adding Workflows (write).** The manifest leaves it out: with it, the agent
 can change `.github/workflows/`, which can read repo secrets. If you want
@@ -472,6 +499,23 @@ When none is set, `github:setup` adds the account that owns the installation:
 `trustedOrgs` for an organization, else `trustedUsers`. Edit it to widen or
 narrow it. More about the lists:
 [configuration.md](configuration.md#trust-settings).
+
+### CI reporters
+
+`github.ciReporters` lists the GitHub logins whose check runs and commit
+statuses reach a task: `<app-slug>[bot]` for a CI tool's App (for example
+`circleci-checks[bot]`), or the login of the service account a tool posts
+statuses as. It is empty by default, so no other CI tool reaches devbox until
+you set it. Set it like the trust lists:
+
+- **Compose:** top-level `github.ciReporters` in `devbox.config.json`.
+- **Kubernetes:** `github.ciReporters` in the chart values.
+
+It is separate from `trustedUsers`: a CI account can start a fix round with a
+failed check, but its `@mentions` don't reach the agent. A login is matched by
+its numeric id, looked up once. A check or status from an account not on the
+list is ignored. To find a tool's login, open a check it posted on a pull
+request: the App's name links to `github.com/apps/<app-slug>`.
 
 Both the control plane and the sandbox look the lists up on GitHub as the
 App's token (members of each org, and each user). iron-proxy allows exactly

@@ -152,6 +152,7 @@ export function githubComposeEnv(
   const trust = {
     GITHUB_TRUSTED_ORGS: cfg.github.trustedOrgs.join(","),
     GITHUB_TRUSTED_USERS: cfg.github.trustedUsers.join(","),
+    GITHUB_CI_REPORTERS: cfg.github.ciReporters.join(","),
   };
   const off = {
     GITHUB_TOKEN_FILE: "",

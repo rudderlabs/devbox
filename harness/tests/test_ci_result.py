@@ -249,5 +249,80 @@ class TestProcessCiResultDeepAgents(unittest.TestCase):
         )
 
 
+def _make_reported_entry(ci_source: str, **payload: str) -> dict:
+    entry = _make_entry(target_id="555")
+    entry["payload"].update({
+        "ci_source": ci_source,
+        "workflow_name": "ci/circleci: test",
+        "workflow_path": "",
+        "run_url": "https://github.com/acme/acme-server/runs/555",
+        "details_url": "https://circleci.com/gh/acme/acme-server/77",
+        "summary": "2 tests failed",
+        **payload,
+    })
+    return entry
+
+
+class TestProcessReportedCiFailure(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.state, _ = _make_state(self.dir)
+        self.logs_dir = self.dir / "ci-logs"
+        patcher = patch.object(ci_result_module, "CI_LOGS_DIR", self.logs_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _process(self, entry: dict, **fetch: object) -> tuple[object, object]:
+        with (
+            patch.object(ci_result_module, "fetch_failed_job_logs") as actions,
+            patch.object(ci_result_module, "fetch_check_run_report", **fetch) as check,
+            patch.object(ci_result_module, "run_followup_ci") as followup,
+            patch.object(ci_result_module, "fill_missed_replies_and_complete_round"),
+        ):
+            process_ci_result(entry, self.state)
+        actions.assert_not_called()
+        return check, followup
+
+    def test_check_run_fetches_its_output_and_runs_the_round(self) -> None:
+        jobs = [{"job_name": "test", "job_id": 555, "log_path": "/tmp/r.txt"}]
+        entry = _make_reported_entry("check_run")
+        check, followup = self._process(entry, return_value=(jobs, []))
+        check.assert_called_once_with(
+            "acme", "acme-server", 555, self.logs_dir / "check-run-555"
+        )
+        followup.assert_called_once_with(entry, self.state, failed_jobs=jobs, errors=[])
+
+    def test_check_run_fetch_failure_falls_back_to_the_webhook_report(self) -> None:
+        entry = _make_reported_entry("check_run")
+        _, followup = self._process(entry, side_effect=RuntimeError("404"))
+        kwargs = followup.call_args.kwargs
+        self.assertEqual(len(kwargs["failed_jobs"]), 1)
+        report = Path(kwargs["failed_jobs"][0]["log_path"]).read_text()
+        self.assertIn("Description: 2 tests failed", report)
+        self.assertEqual(
+            kwargs["errors"], ["failed to fetch the check run's output: 404"]
+        )
+
+    def test_status_writes_the_webhook_report_and_runs_the_round(self) -> None:
+        entry = _make_reported_entry(
+            "status",
+            workflow_name="ci/jenkins",
+            run_url="https://jenkins.example/job/1",
+            details_url="https://jenkins.example/job/1",
+            summary="Build failed",
+        )
+        check, followup = self._process(entry)
+        check.assert_not_called()
+        kwargs = followup.call_args.kwargs
+        self.assertEqual(kwargs["errors"], [])
+        path = Path(kwargs["failed_jobs"][0]["log_path"])
+        self.assertEqual(path.parent, self.logs_dir / "status-555")
+        self.assertIn("Description: Build failed", path.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
