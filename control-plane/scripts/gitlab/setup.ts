@@ -239,7 +239,11 @@ export async function setup(
   const signingOk = identity?.version
     ? versionAtLeast(identity.version, SIGNING_TOKEN_MIN_VERSION)
     : true;
-  const auth: "signing" | "secret" = opts.secretToken || !signingOk ? "secret" : "signing";
+  // A rerun that registers nothing keeps the saved mode: the webhooks in
+  // GitLab keep the credential they were created with, and are not updated.
+  const keptSecret = !opts.registerWebhooks && d.gitlab?.webhookAuth === "secret";
+  const auth: "signing" | "secret" =
+    opts.secretToken || !signingOk || keptSecret ? "secret" : "signing";
   if (!opts.secretToken && !signingOk) {
     log(
       `GitLab ${identity?.version} is below ${SIGNING_TOKEN_MIN_VERSION}: using the legacy secret token (X-Gitlab-Token) for the webhook`,
@@ -299,7 +303,7 @@ export async function setup(
         "Warning: this token can manage webhooks, so it holds the Maintainer role or more. devbox uses the same token for all its work, which needs only Developer: a Maintainer token could also change project settings, protected branches and members.",
       );
       log(
-        `  To keep it to Developer: replace it with a Developer-role token, then run ${again} with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working.`,
+        `  To keep it to Developer: replace it with a Developer-role token, then run ${again} with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working. If the webhook token is not in the keychain, set ${secretName} to it for that run.`,
       );
     }
   }
@@ -329,6 +333,13 @@ export async function setup(
     if (!kept) {
       log(`The webhook token, shown once (set it as ${secretName} before ${d.applyCommand}):`);
       log(`  ${webhookToken}`);
+    }
+    // A rerun that found no saved token made a new one, while webhooks created
+    // earlier hold the old one and are not updated here.
+    if (d.gitlab && !opts.registerWebhooks) {
+      log(
+        `Warning: this is a new webhook token; webhooks created earlier still hold the previous one, and their deliveries will be refused. Either run setup again with ${secretName} set to the original value, or put this new token on each webhook in GitLab.`,
+      );
     }
   } else {
     log(

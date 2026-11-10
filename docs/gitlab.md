@@ -130,6 +130,13 @@ installer writes (Kubernetes).
    webhook authentication and reuses the saved webhook token, so the webhooks
    already registered keep working.
 
+   Any rerun reuses the webhook token from the keychain or from its
+   environment variable (`GITLAB_WEBHOOK_SIGNING_TOKEN`, or
+   `GITLAB_WEBHOOK_SECRET` with the legacy secret). If it finds neither, it
+   makes a new one and warns you: the webhooks already in GitLab still hold
+   the old token, so set the variable to the original value and run setup
+   again, or put the new token on each webhook.
+
 3. Apply. On Compose, `bun run up`: it resolves `GITLAB_TOKEN` and the
    webhook token (environment, then the keychain, then a prompt), checks the
    token against the instance and the repos, clones the GitLab repos into the

@@ -204,7 +204,7 @@ describe("gitlab:setup", () => {
       `GitLab 19.5.3 at ${BASE}: devbox acts as devbox (id 2, a bot user)`,
       `Webhook on platform/backend/api: ${HOOK_URL} (note and pipeline events)`,
       "Warning: this token can manage webhooks, so it holds the Maintainer role or more. devbox uses the same token for all its work, which needs only Developer: a Maintainer token could also change project settings, protected branches and members.",
-      `  To keep it to Developer: replace it with a Developer-role token, then run bun run gitlab:setup --target ${h.configPath} with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working.`,
+      `  To keep it to Developer: replace it with a Developer-role token, then run bun run gitlab:setup --target ${h.configPath} with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working. If the webhook token is not in the keychain, set GITLAB_WEBHOOK_SIGNING_TOKEN to it for that run.`,
       `Wrote integrations.gitlab and values.gitlab to ${h.configPath}`,
       `Next: bun run k8s:install --target ${h.configPath}`,
       "With GitOps, set these chart values instead: integrations.gitlab {enabled: true, botUsername: devbox, botUserId: 2}, gitlab.trustedGroups, and GITLAB_WEBHOOK_SIGNING_TOKEN in the integrations Secret",
@@ -386,6 +386,47 @@ describe("gitlab:setup", () => {
     const signing = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
     await setup(signing.d, opts(), signing.deps);
     expect(signing.log.some((l) => l.includes("--secret-token"))).toBe(false);
+  });
+
+  it("a rerun that registers nothing keeps the saved secret-token mode and its token", async () => {
+    // Saved as the legacy secret on an instance that would now default to signing.
+    const h = harness({
+      gitlab: { ...GITLAB, webhookAuth: "secret" },
+      publicUrl: PUBLIC,
+      saved: {
+        [`${SCOPE}/GITLAB_TOKEN`]: "glpat-saved",
+        [`${SCOPE}/GITLAB_WEBHOOK_SECRET`]: "legacy-kept",
+      },
+    });
+    await setup(h.d, opts({ registerWebhooks: false, publicUrl: undefined }), h.deps);
+    expect(
+      (readJson(h.configPath) as { integrations: { gitlab: { webhookAuth?: string } } })
+        .integrations.gitlab.webhookAuth,
+    ).toBe("secret");
+    expect(h.log).toContain(
+      `Webhook token: GITLAB_WEBHOOK_SECRET from the system keychain (${SCOPE})`,
+    );
+    expect(h.log.some((l) => l.startsWith("Warning: this is a new webhook token"))).toBe(false);
+  });
+
+  it("a rerun that has to make a new webhook token says the existing webhooks still hold the old one", async () => {
+    const h = harness({
+      gitlab: GITLAB,
+      publicUrl: PUBLIC,
+      saved: { [`${SCOPE}/GITLAB_TOKEN`]: "glpat-saved" },
+    });
+    await setup(h.d, opts({ registerWebhooks: false, publicUrl: undefined }), h.deps);
+    expect(
+      h.log.some(
+        (l) =>
+          l.startsWith("Warning: this is a new webhook token") &&
+          l.includes("GITLAB_WEBHOOK_SIGNING_TOKEN set to the original value"),
+      ),
+    ).toBe(true);
+    // A first setup has no earlier webhooks to break.
+    const first = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
+    await setup(first.d, opts({ registerWebhooks: false }), first.deps);
+    expect(first.log.some((l) => l.startsWith("Warning: this is a new webhook token"))).toBe(false);
   });
 
   it("does not warn when the token may not manage webhooks, or was never read", async () => {
