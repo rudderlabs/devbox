@@ -1,43 +1,56 @@
 // GitHub REST wrappers + PR-URL parsing. Plain function exports, mirrors
 // integrations/linear/client.ts. This is the IMPLEMENTATION module; production
-// code and tests import it through the ../clients/github barrel. github.test.ts
+// code and tests import it through the ./client barrel. client.test.ts
 // imports it directly because this specifier is never mock.module'd — see
 // github.ts and control-plane/README.md (Conventions) for why that matters.
 //
-// Auth: a bearer token from the GitHub token provider (./githubToken):
+// Auth: a bearer token from the GitHub token provider (./token):
 // GITHUB_TOKEN_FILE re-read on a TTL, or GITHUB_TOKEN. The control plane is
 // not behind iron-proxy, so this is a real token.
 //
 // Never log the token. Error paths surface HTTP status + a body snippet only.
 
 import { readFileSync } from "node:fs";
-import { config } from "../config";
-import { githubApiBaseUrl } from "../githubToken/mint";
-import { HttpError, parseRetryAfter, rateLimitWaitMs } from "../integrations/http";
-import { logger } from "../logger";
+import { HttpError, parseRetryAfter, rateLimitWaitMs } from "../http";
+import type { Logger } from "../types";
 import {
   type GithubTokenProvider,
   type GithubTokenSettings,
   type GithubTokenState,
   githubTokenProvider,
-} from "./githubToken";
+} from "./token";
 
-const API_BASE = githubApiBaseUrl();
+// The same variable and default as the token minter's (src/githubToken/mint.ts),
+// which this folder may not import.
+const API_BASE = process.env.GITHUB_API_BASE_URL || "https://api.github.com";
 
 type ReactionContent = "eyes" | "+1" | "heart" | "confused";
 
 let githubToken: GithubTokenProvider | undefined;
 
+// What the integration, or a test, hands the client. Without it the client
+// reads the control plane's token settings from the environment itself, since
+// GitHub's status is served while the integration is off too.
+type Setup = { tokenSettings?: GithubTokenSettings; log?: Pick<Logger, "warn"> };
+let setup: Setup = {};
+export function configureGithubClient(next: Setup): void {
+  setup = next;
+  githubToken = undefined;
+}
+
+// GITHUB_TOKEN_FILE (a mounted Secret, re-read on a TTL) or GITHUB_TOKEN.
+// Core's config has already failed boot when neither is set.
+function envTokenSettings(): GithubTokenSettings {
+  const file = process.env.GITHUB_TOKEN_FILE?.trim();
+  return file ? { file } : { token: process.env.GITHUB_TOKEN ?? "proxy-github-dummy-token" };
+}
+
 function tokenProvider(): GithubTokenProvider {
   if (!githubToken) {
-    // Some test suites module-mock config; keep this client resilient by
-    // tolerating a missing codeHost section in the mocked shape.
-    const settings = (config as { codeHost?: { tokenSettings?: GithubTokenSettings } }).codeHost
-      ?.tokenSettings ?? { token: process.env.GITHUB_TOKEN ?? "proxy-github-dummy-token" };
-    githubToken = githubTokenProvider(settings, {
+    githubToken = githubTokenProvider(setup.tokenSettings ?? envTokenSettings(), {
       readFile: (path) => readFileSync(path, "utf8"),
       now: Date.now,
-      warn: (message, meta) => logger.warn(message, meta),
+      warn: (message, meta) => setup.log?.warn(message, meta),
     });
   }
   return githubToken;

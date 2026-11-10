@@ -135,8 +135,8 @@ and `gitlab` rounds (`harness/src/harness/followup.py`).
   round's integration, which checks it and refuses anything else.
 - **The boundary.** A file in the folder imports only its own folder, the
   shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), its
-  API clients (kept in its own folder, or in `control-plane/src/clients/` under
-  its name when core uses them too, as with GitHub's), the
+  API clients (kept in its own folder: `client.ts` and `token.ts` for GitHub
+  and GitLab, `api.ts` for Linear), the
   experimental-flag parser, the database row types and packages: never another
   integration or the rest of the control plane.
   `control-plane/src/integrations/__tests__/boundary.test.ts` checks this.

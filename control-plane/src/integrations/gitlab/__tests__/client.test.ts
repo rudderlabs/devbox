@@ -1,16 +1,9 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 
-// A complete-enough config before importing the real impl (see github.test.ts
-// for why this file pins its own).
-mock.module("../../config", () => ({
-  config: {
-    gitlab: { baseUrl: "https://gitlab.example.com", tokenSettings: { token: "test-token" } },
-  },
-}));
-
-// A fresh instance of ./gitlabApi, not the ../gitlab barrel other tests mock.
+// A fresh instance of ../clientApi, not the ../client barrel other tests mock.
 const {
   awardNoteEmoji,
+  configureGitlabClient,
   fetchGroupMembers,
   findDiscussionIdForNote,
   getUserIdByUsername,
@@ -20,8 +13,13 @@ const {
   parseMrUrl,
   postDiscussionNote,
   postMrNote,
-} = (await import("../gitlabApi.ts" + "?gitlab-impl-test")) as typeof import("../gitlabApi");
-const { HttpError, retryable } = await import("../../integrations/http");
+} = (await import("../clientApi.ts" + "?gitlab-impl-test")) as typeof import("../clientApi");
+const { HttpError, retryable } = await import("../../http");
+// The instance and the token, whatever the environment holds.
+configureGitlabClient({
+  baseUrl: "https://gitlab.example.com",
+  tokenSettings: { token: "test-token" },
+});
 
 type Call = { url: string; init: RequestInit | undefined };
 

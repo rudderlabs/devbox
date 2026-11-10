@@ -8,7 +8,7 @@ const postMrNote = mock(() => Promise.resolve({ id: 1 }));
 const postDiscussionNote = mock(() => Promise.resolve({ id: 2 }));
 const findDiscussionIdForNote = mock(() => Promise.resolve(null as string | null));
 const awardNoteEmoji = mock(() => Promise.resolve());
-mock.module("../../../clients/gitlab", () => ({
+mock.module("../client", () => ({
   postMrNote,
   postDiscussionNote,
   findDiscussionIdForNote,

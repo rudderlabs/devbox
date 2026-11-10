@@ -1,13 +1,4 @@
 import type { Context } from "hono";
-import {
-  addIssueCommentReaction,
-  addReviewCommentReaction,
-  githubTokenState,
-  parsePrUrl,
-  postIssueComment,
-  postReviewCommentReply,
-  requestReviewers,
-} from "../../clients/github";
 import type { Task } from "../../db/schema";
 import { retryable, SEND_TIMEOUT_MS, withTimeout } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
@@ -21,6 +12,18 @@ import type {
   Round,
 } from "../types";
 import { assignToTaskPerson } from "./assignee";
+import {
+  addIssueCommentReaction,
+  addReviewCommentReaction,
+  githubTokenState,
+  parsePrUrl,
+  postIssueComment,
+  postReviewCommentReply,
+  requestReviewers,
+} from "./client";
+// Not through the barrel, which tests replace: setting the client up is no
+// call to GitHub.
+import { configureGithubClient } from "./clientApi";
 import { type GithubConfig, parseGithubConfig } from "./config";
 import { type GithubSpec, isGithubSpec } from "./rounds";
 import { type GithubStatus, GithubStatusService } from "./status";
@@ -34,6 +37,7 @@ export const github: IntegrationDefinition<GithubConfig> = {
   createsTasks: false,
   parseConfig: parseGithubConfig,
   create(core, cfg) {
+    configureGithubClient({ log: core.log });
     const controller = new GitHubWebhookController(core.tasks, cfg, core.log);
     const status = new GithubStatusService(githubTokenState, {
       enabled: true,

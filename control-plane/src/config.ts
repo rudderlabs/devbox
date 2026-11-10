@@ -1,8 +1,7 @@
 import { parseApiConfig } from "./apiConfig";
-import { parseGithubTokenSettings } from "./clients/githubToken";
-import { parseGitlabTokenSettings } from "./clients/gitlabToken";
 import { pickForwardedEnv } from "./forwardedEnv";
 import { optionalNumber, parseTrustList } from "./integrations/env";
+import { parseGithubTokenSettings } from "./integrations/github/token";
 import { parseSlackConfig } from "./integrationsConfig";
 import {
   parseGitlabBaseUrl,
@@ -99,7 +98,9 @@ export const config = {
   codeHost: {
     // The control plane's own GitHub token (it runs outside the sandbox
     // egress path, so it needs a real one): GITHUB_TOKEN_FILE (a mounted
-    // Secret, re-read on a TTL) or GITHUB_TOKEN. See clients/githubToken.ts.
+    // Secret, re-read on a TTL) or GITHUB_TOKEN. Parsed here only so a
+    // deployment with neither fails at boot; the GitHub integration's client
+    // reads the same two variables (integrations/github/token.ts).
     tokenSettings: parseGithubTokenSettings(process.env),
     // Orgs whose members, and logins of users, whose comments the agent
     // trusts. Forwarded to every sandbox for PR-discussion trust. The GitHub
@@ -115,10 +116,6 @@ export const config = {
     // The GitLab instance repos may live on (GITLAB_BASE_URL), forwarded to
     // sandboxes so the harness opens merge requests there. See sandboxConfig.ts.
     baseUrl: parseGitlabBaseUrl(process.env),
-    // The control plane's own GitLab token, for replies on merge requests and
-    // the trust lookups: GITLAB_TOKEN_FILE (the mounted Secret, re-read on a
-    // TTL) or GITLAB_TOKEN. See clients/gitlabToken.ts.
-    tokenSettings: parseGitlabTokenSettings(process.env),
     // Groups whose members, and usernames of users, whose notes the agent
     // trusts. Forwarded to every sandbox for merge-request discussion trust.
     // The GitLab integration reads the same variables for its webhook gate.

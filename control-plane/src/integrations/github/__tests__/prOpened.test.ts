@@ -5,9 +5,9 @@ import type { Person } from "../../types";
 const postIssueComment = mock(() => Promise.resolve({ id: 1, url: "u" }));
 const addPrAssignees = mock(() => Promise.resolve({ assigned: [] as string[] }));
 const getUserById = mock(() => Promise.resolve({ login: "", id: 0 }));
-// The full export surface of the ../../clients/github barrel; the suite runs
+// The full export surface of the GitHub integration's client barrel; the suite runs
 // with --isolate, so this cannot leak.
-mock.module("../../../clients/github", () => ({
+mock.module("../client", () => ({
   postIssueComment,
   postReviewCommentReply: mock(() => Promise.resolve({ id: 1, url: "u" })),
   addIssueCommentReaction: mock(() => Promise.resolve()),

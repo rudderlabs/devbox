@@ -3,20 +3,20 @@ import { LinearClient } from "@linear/sdk";
 import type { ReplyTarget } from "../../repositories/inbox.repository";
 import { NO_WEBHOOK } from "./fakeIntegrations";
 
-// A token file that does not exist: the GitHub client has no token to send.
-mock.module("../../config", () => ({
-  config: { podId: "pod-test", codeHost: { tokenSettings: { file: "/nonexistent/devbox/token" } } },
-}));
+mock.module("../../config", () => ({ config: { podId: "pod-test" } }));
 
 const { HttpError, parseRetryAfter, retryable, withTimeout } = await import("../http");
 const { RetryableError } = await import("../outbound");
 const { LinearIntegration } = await import("../linear");
 const { LinearTokenError, requestClientCredentialsToken } = await import("../linear/oauth");
 const { LinearTokenProvider } = await import("../linear/tokenProvider");
-// A fresh instance (see github.test.ts): never the possibly-mocked barrel.
-const { postIssueComment } = (await import(
-  "../../clients/githubApi.ts" + "?http-test"
-)) as typeof import("../../clients/githubApi");
+// A fresh instance (see github/__tests__/client.test.ts): never the
+// possibly-mocked barrel.
+const { configureGithubClient, postIssueComment } = (await import(
+  "../github/clientApi.ts" + "?http-test"
+)) as typeof import("../github/clientApi");
+// A token file that does not exist: the GitHub client has no token to send.
+configureGithubClient({ tokenSettings: { file: "/nonexistent/devbox/token" } });
 const { logger } = await import("../../logger");
 
 // What fetch throws for `url`.

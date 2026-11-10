@@ -22,12 +22,12 @@ const fetchOrgMembers = mock(() => Promise.resolve(new Set([1, 2, 3]) as Readonl
 const getUserIdByLogin = mock((_login: string) => Promise.resolve(null as number | null));
 const addIssueCommentReaction = mock(() => Promise.resolve());
 const addReviewCommentReaction = mock(() => Promise.resolve());
-// Mock the full export surface of the ../../clients/github barrel. bun's
+// Mock the full export surface of the GitHub integration's client barrel. bun's
 // mock.module is process-global; the module split alone did NOT contain it --
 // in CI this mock reached github.test.ts and failed 25 of its tests. The suite
 // now runs with --isolate (package.json "test"), which gives every file a fresh
 // module registry, so this cannot leak. Do not drop that flag.
-mock.module("../../../clients/github", () => ({
+mock.module("../client", () => ({
   getReviewComments,
   fetchOrgMembers,
   getUserIdByLogin,

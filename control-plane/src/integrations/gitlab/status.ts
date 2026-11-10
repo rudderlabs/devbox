@@ -1,4 +1,4 @@
-import type { GitlabTokenState } from "../../clients/gitlabToken";
+import type { GitlabTokenState } from "./token";
 
 export type GitlabStatus = {
   token: GitlabTokenState;

@@ -34,7 +34,7 @@ const listOpenMergeRequestsForBranch = mock(() =>
 );
 // The whole barrel, as the GitHub controller test does; the suite runs with
 // --isolate so this cannot leak.
-mock.module("../../../clients/gitlab", () => ({
+mock.module("../client", () => ({
   fetchGroupMembers,
   getUserIdByUsername,
   awardNoteEmoji,

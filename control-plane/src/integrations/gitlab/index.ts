@@ -1,12 +1,4 @@
 import type { Context } from "hono";
-import {
-  awardNoteEmoji,
-  findDiscussionIdForNote,
-  gitlabTokenState,
-  parseMrUrl,
-  postDiscussionNote,
-  postMrNote,
-} from "../../clients/gitlab";
 import type { Task } from "../../db/schema";
 import { retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
@@ -18,6 +10,17 @@ import type {
   ReplyTarget,
   Round,
 } from "../types";
+import {
+  awardNoteEmoji,
+  findDiscussionIdForNote,
+  gitlabTokenState,
+  parseMrUrl,
+  postDiscussionNote,
+  postMrNote,
+} from "./client";
+// Not through the barrel, which tests replace: setting the client up is no
+// call to GitLab.
+import { configureGitlabClient } from "./clientApi";
 import { type GitlabConfig, parseGitlabConfig } from "./config";
 import { type GitlabSpec, isGitlabSpec } from "./rounds";
 import { type GitlabStatus, GitlabStatusService } from "./status";
@@ -31,6 +34,7 @@ export const gitlab: IntegrationDefinition<GitlabConfig> = {
   createsTasks: false,
   parseConfig: parseGitlabConfig,
   create(core, cfg) {
+    configureGitlabClient({ log: core.log });
     const controller = new GitlabWebhookController(core.tasks, cfg, core.log);
     const status = new GitlabStatusService(gitlabTokenState, {
       enabled: true,

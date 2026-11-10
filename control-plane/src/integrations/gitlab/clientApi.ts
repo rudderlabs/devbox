@@ -1,7 +1,7 @@
 // The control plane's GitLab REST v4 client: what the GitLab integration and
 // its webhook controller need, and nothing the sandboxes do (those go through
 // iron-proxy with the harness's own client). One instance is configured:
-// config.gitlab.baseUrl. Projects are addressed by their numeric id, which
+// GITLAB_BASE_URL. Projects are addressed by their numeric id, which
 // every webhook payload carries; the integration's onPrOpened, which has only
 // a merge request's URL, passes the project's path instead.
 //
@@ -9,27 +9,45 @@
 // `/merge_requests/<n>` path use; the global `id` never leaves the payload.
 
 import { readFileSync } from "node:fs";
-import { config } from "../config";
-import { HttpError, parseRetryAfter, rateLimitWaitMs } from "../integrations/http";
-import { logger } from "../logger";
+import { HttpError, parseRetryAfter, rateLimitWaitMs } from "../http";
+import type { Logger } from "../types";
 import {
   type GitlabTokenProvider,
   type GitlabTokenSettings,
   type GitlabTokenState,
   gitlabTokenProvider,
-} from "./gitlabToken";
+  parseGitlabTokenSettings,
+} from "./token";
 
 export type AwardName = "eyes" | "thumbsup" | "confused";
 
 let provider: GitlabTokenProvider | undefined;
+
+// What the integration, or a test, hands the client. Without it the client
+// reads the instance and the control plane's GitLab token from the
+// environment itself, since GitLab's status is served while the integration is
+// off too.
+type Setup = { baseUrl?: string; tokenSettings?: GitlabTokenSettings; log?: Pick<Logger, "warn"> };
+let setup: Setup = {};
+export function configureGitlabClient(next: Setup): void {
+  setup = next;
+  provider = undefined;
+}
+
+// GITLAB_BASE_URL without its trailing slash; core's config has already
+// validated it at boot (sandboxConfig.ts).
+function instanceBaseUrl(): string | undefined {
+  return setup.baseUrl ?? (process.env.GITLAB_BASE_URL?.trim().replace(/\/+$/, "") || undefined);
+}
+
 function tokenProvider(): GitlabTokenProvider {
   if (!provider) {
-    const settings =
-      (config as { gitlab?: { tokenSettings?: GitlabTokenSettings } }).gitlab?.tokenSettings ?? {};
+    // GITLAB_TOKEN_FILE (the mounted Secret, re-read on a TTL) or GITLAB_TOKEN.
+    const settings = setup.tokenSettings ?? parseGitlabTokenSettings(process.env);
     provider = gitlabTokenProvider(settings, {
       readFile: (path) => readFileSync(path, "utf8"),
       now: Date.now,
-      warn: (message, meta) => logger.warn(message, meta),
+      warn: (message, meta) => setup.log?.warn(message, meta),
     });
   }
   return provider;
@@ -47,7 +65,7 @@ export function gitlabTokenState(): GitlabTokenState {
 }
 
 function apiBase(): string {
-  const base = (config as { gitlab?: { baseUrl?: string } }).gitlab?.baseUrl;
+  const base = instanceBaseUrl();
   if (!base) throw new Error("GITLAB_BASE_URL is not set: no GitLab instance to talk to");
   return `${base}/api/v4`;
 }
@@ -258,7 +276,7 @@ export function mrWebUrl(projectWebUrl: string, mrIid: number): string {
 // null for anything else.
 export function parseMrUrl(
   url: string,
-  baseUrl: string | undefined = (config as { gitlab?: { baseUrl?: string } }).gitlab?.baseUrl,
+  baseUrl: string | undefined = instanceBaseUrl(),
 ): { project: string; mrIid: number } | null {
   if (!baseUrl) return null;
   const base = baseUrl.replace(/\/+$/, "");

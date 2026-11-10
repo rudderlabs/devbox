@@ -1,7 +1,7 @@
-import { addPrAssignees, getUserById } from "../../clients/github";
 import type { Task } from "../../db/schema";
 import { SEND_TIMEOUT_MS, withTimeout } from "../http";
 import type { PrOpenedCtx } from "../types";
+import { addPrAssignees, getUserById } from "./client";
 
 // Assigns a pull request the agent opened to the task's person, through the
 // GitHub account their platform links to them. Assignee is the right primitive

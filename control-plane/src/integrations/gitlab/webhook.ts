@@ -1,13 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
+import type { Logger, TaskService } from "../types";
 import {
   awardNoteEmoji,
   fetchGroupMembers,
   getUserIdByUsername,
   listOpenMergeRequestsForBranch,
   mrWebUrl,
-} from "../../clients/gitlab";
-import type { Logger, TaskService } from "../types";
+} from "./client";
 import type { GitlabConfig } from "./config";
 import { enqueueCiResult, enqueueComment, type GitlabSpec } from "./rounds";
 
