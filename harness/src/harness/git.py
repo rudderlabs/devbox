@@ -1162,6 +1162,64 @@ def commit_identity_env(repo: Path) -> dict[str, str] | None:
     }
 
 
+_IDENTITY_ENV = (
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+)
+
+
+def apply_repo_commit_identities(workspace: Path) -> list[Path]:
+    """Give each checkout on the GitLab instance its own commit identity, for
+    every commit made in it: the harness's and the agent's own.
+
+    commit_identity_env covers the commits the harness makes. In a follow-up
+    round the agent commits from its shell, where the sandbox's identity
+    (GIT_AUTHOR_* / GIT_COMMITTER_* in the environment) outranks any git
+    config, so a merge request's later commits carried the GitHub identity.
+
+    So, once, before any round runs: the sandbox's identity moves from the
+    environment into git's global config, where it still applies to every
+    repo, and each GitLab checkout gets the GitLab identity in its own config,
+    which outranks the global one. The variables are dropped from this
+    process, and with them from every shell it starts.
+
+    Nothing changes without a GitLab identity, or with harness-managed
+    signing, where the signer's identity must match the key. Returns the
+    checkouts that took the GitLab identity.
+    """
+    name = os.environ.get(GITLAB_GIT_NAME_ENV, "").strip()
+    email = os.environ.get(GITLAB_GIT_EMAIL_ENV, "").strip()
+    if not name or not email:
+        return []
+    if any(_git_signing_inputs()[:3]):
+        return []
+    for key, variable in (
+        ("user.name", "GIT_AUTHOR_NAME"),
+        ("user.email", "GIT_AUTHOR_EMAIL"),
+    ):
+        value = os.environ.get(variable, "").strip()
+        if value:
+            run_cmd(["git", "config", "--global", key, value], check=True)
+    for variable in _IDENTITY_ENV:
+        os.environ.pop(variable, None)
+    applied: list[Path] = []
+    if not workspace.is_dir():
+        return applied
+    for repo in sorted(p for p in workspace.iterdir() if (p / ".git").exists()):
+        try:
+            kind, _owner, _repo = parse_remote_url(remote_origin_url(repo))
+        except RuntimeError:
+            continue
+        if kind != "gitlab":
+            continue
+        run_cmd(["git", "-C", str(repo), "config", "user.name", name], check=True)
+        run_cmd(["git", "-C", str(repo), "config", "user.email", email], check=True)
+        applied.append(repo)
+    return applied
+
+
 def _git_signing_inputs() -> tuple[str | None, str | None, str | None, str | None]:
     return (
         os.environ.get(GIT_SIGNER_NAME_ENV),
