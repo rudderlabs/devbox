@@ -105,6 +105,12 @@ spec:
             {{- with include "devbox.gitlabBaseUrl" . }}
             - { name: GITLAB_BASE_URL, value: {{ . | quote }} }
             {{- end }}
+            {{- $gitlabGit := (.Values.gitlab.git | default dict) }}
+            {{- if and $gitlabGit.name $gitlabGit.email }}
+            # Commits on GitLab repos carry this identity instead of the one above.
+            - { name: SANDBOX_GITLAB_GIT_NAME, value: {{ $gitlabGit.name | quote }} }
+            - { name: SANDBOX_GITLAB_GIT_EMAIL, value: {{ $gitlabGit.email | quote }} }
+            {{- end }}
             - { name: GITHUB_TOKEN_FILE, value: /var/run/devbox/github/token }
             - { name: HARNESS_LLM_PROVIDER, value: {{ .Values.llm.provider | quote }} }
             - { name: HARNESS_LLM_BASE_URL, value: {{ .Values.llm.baseUrl | quote }} }

@@ -466,6 +466,8 @@ The checks also give the agent's commit identity:
 - **On Kubernetes, with your own GitHub Secret** (`existingSecret`): the
   installer doesn't read it, so the identity is `git.name` and `git.email`
   from the values, or the chart's default.
+- **On GitLab repos** ([docs/gitlab.md](gitlab.md#commit-identity)): the
+  GitLab user the GitLab token belongs to, whatever the identity above is.
 
 ### Where the secrets go
 
@@ -643,7 +645,7 @@ accepted or forwarded. Rename operator settings to the corresponding
 ### Configuring the local stack
 
 Configure the Compose deployment only through the supported settings in
-`devbox.config.json` and then run `bun run up` again. `llm`, `sandbox`, `github`
+`devbox.config.json` and then run `bun run up` again. `llm`, `sandbox`, `github`, `gitlab`
 and `integrations` are translated to the control-plane and sandbox environment
 by `up`; same-named values in your shell do not override them. Agent model and
 effort settings therefore belong in `llm`, not in hand-set `HARNESS_*` variables.
@@ -683,8 +685,9 @@ way.
 | `GITHUB_BOT_LOGIN`, `GITHUB_BOT_USER_ID` | | The App's slug and its bot's numeric user ID. Events from the bot itself, and on pull requests it did not open, are dropped. |
 | `GITHUB_CI_RESULT_ENABLED` | | `true` sends a failed CI run on a task's pull request to the task. The setting `integrations.githubApp.ciResults` sets it. |
 | `GITHUB_CI_RESULT_MAX_PER_TASK` | `20` | The most CI failures sent to one task; `0` or negative means no cap. Environment only: on Compose, set it in the shell you run `bun run up` from; on Kubernetes, with `extraEnv`. |
-| `GITLAB_CI_RESULT_MAX_PER_TASK` | `20` | The same cap for failed GitLab pipelines, counted on its own. Environment only, with `extraEnv`. |
+| `GITLAB_CI_RESULT_MAX_PER_TASK` | `20` | The same cap for failed GitLab pipelines, counted on its own. Environment only, set the same way. |
 | `SANDBOX_GIT_NAME`, `SANDBOX_GIT_EMAIL` | | The commit identity of the agent in every sandbox. Set both or neither. Unset, the harness image's own identity applies. The chart sets them from `git.name` and `git.email`. |
+| `SANDBOX_GITLAB_GIT_NAME`, `SANDBOX_GITLAB_GIT_EMAIL` | | The commit identity for commits on GitLab repos, instead of the one above. Set both or neither. Unset, GitLab repos get the one above too. `bun run up` sets them from the GitLab token's user; the chart sets them from `gitlab.git.name` and `gitlab.git.email`. |
 | `SHUTDOWN_DRAIN_MS` | `10000` | How long shutdown waits, in milliseconds, for in-flight provisions and integration hooks once it has finished the task it was reconciling. On Kubernetes, set it with `extraEnv` and raise `controlPlane.terminationGracePeriodSeconds` by as much. |
 
 ### Settings for the token minter

@@ -52,7 +52,7 @@ export async function disable(
     {
       command: "gitlab:disable --forget",
       items: [
-        `integrations.gitlab and values.gitlab in ${d.configPath}`,
+        `integrations.gitlab and the ${d.trustKey} trust lists in ${d.configPath}`,
         ...saved.map((name) => `${name} for ${scope} in the system keychain`),
       ],
       question: "Remove these? [y/N] ",
@@ -67,7 +67,11 @@ export async function disable(
   for (const name of saved) await k?.delete(entryName(d.deployment, name));
   writeConfigKeys(d.configPath, {
     "integrations.gitlab": undefined,
-    "values.gitlab": undefined,
+    // Only the trust lists go. The block holds more: the instance on Compose,
+    // the commit identity (values.gitlab.git) on k8s, which a later install
+    // can't learn again when the token sits in your own Secret.
+    [`${d.trustKey}.trustedGroups`]: undefined,
+    [`${d.trustKey}.trustedUsers`]: undefined,
   });
   log(`Next: ${d.applyCommand}`);
   if (d.instance) {

@@ -65,21 +65,22 @@ works with one Linear workspace. Everything:
 
 ## GitLab
 
-Kubernetes only. Repos under `gitlab.baseUrl` get draft merge requests; with
-the webhooks on, `@<bot>` notes on those merge requests and failed pipelines
-reach the task.
+Repos under `gitlab.baseUrl` get draft merge requests; with the webhooks on,
+`@<bot>` notes on those merge requests and failed pipelines reach the task.
 
 ```bash
-bun run gitlab:setup --target <file> [--public-url <url>]
-bun run k8s:install --target <file>
-bun run gitlab:status --target <file>
+bun run gitlab:setup [--target <file>] [--public-url <url>]
+bun run up                      # or k8s:install --target <file>
+bun run gitlab:status [--target <file>]
 ```
 
 Secrets: `GITLAB_TOKEN` (the bot's token; `devbox-gitlab`), and the webhook
 token `gitlab:setup` generates (`GITLAB_WEBHOOK_SIGNING_TOKEN`, or
 `GITLAB_WEBHOOK_SECRET` below GitLab 19.1). A private CA goes in
-`gitlab.caFile`. One GitLab instance per deployment, and a GitHub token is
-still required. Everything: [docs/gitlab.md](../../../docs/gitlab.md).
+`gitlab.caFile`; on Compose the trust lists are `gitlab.trustedGroups` and
+`gitlab.trustedUsers` in devbox.config.json. One GitLab instance per
+deployment. No GitHub token is needed with GitLab repos only. Everything:
+[docs/gitlab.md](../../../docs/gitlab.md).
 
 ## Slack
 

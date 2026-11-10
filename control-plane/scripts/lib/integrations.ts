@@ -1,6 +1,6 @@
 // The `integrations` block of a deployment's config: each
 // integration's `enabled` switch and its non-secret settings. Linear on both
-// platforms; the GitHub App on both; Slack and GitLab on Kubernetes only.
+// platforms; the GitHub App and GitLab on both; Slack on Kubernetes only.
 // Secrets never live here, and a secret never turns an integration on: only
 // `enabled: true` does. Unknown keys are refused so a typo (or a pasted
 // secret) fails loudly.
@@ -287,7 +287,7 @@ function parseGitlab(raw: unknown, fail: Fail): GitlabIntegration {
   };
 }
 
-const K8S_ONLY = ["slack", "gitlab"] as const;
+const K8S_ONLY = ["slack"] as const;
 
 export function parseIntegrations(
   raw: unknown,
@@ -305,9 +305,9 @@ export function parseIntegrations(
     const k8sOnly = K8S_ONLY.find((name) => name in raw);
     if (k8sOnly)
       return fail(`integrations.${k8sOnly}: supported on Kubernetes only (the target file)`);
-    onlyKeys(raw, ["linear", "githubApp"], "integrations", fail);
+    onlyKeys(raw, ["linear", "githubApp", "gitlab"], "integrations", fail);
   } else {
-    onlyKeys(raw, ["linear", ...K8S_ONLY, "githubApp"], "integrations", fail);
+    onlyKeys(raw, ["linear", ...K8S_ONLY, "gitlab", "githubApp"], "integrations", fail);
   }
   const out: Integrations = {};
   if (raw.linear !== undefined) out.linear = parseLinear(raw.linear, fail);
