@@ -167,10 +167,6 @@ class TestFetchFailedJobLogs(unittest.TestCase):
         self.assertNotIn(" ", log_path.name)
         self.assertTrue(log_path.exists())
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_uses_the_given_client(self) -> None:
         client = mock.Mock()
         client.get_workflow_run_jobs.return_value = [
@@ -185,3 +181,7 @@ if __name__ == "__main__":
         client.get_job_logs.assert_called_once_with("platform", "api", 9)
         self.assertEqual(errors, [])
         self.assertEqual(Path(results[0]["log_path"]).read_text(), "trace")
+
+
+if __name__ == "__main__":
+    unittest.main()

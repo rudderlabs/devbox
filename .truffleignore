@@ -30,3 +30,16 @@
 /bin/**
 /sbin/**
 /lib/**
+
+# devbox's own files where TruffleHog's legacy GitLab detector (v1: any 20 to
+# 22 character word after "gitlab") flags identifier names such as
+# GITLAB_WEBHOOK_SECRET and byoIntegrationsSecret. No token is in them. A
+# stopgap: the fix is --exclude-detectors=gitlab.v1 in build-scan-push-action
+# (real tokens carry the glpat- prefix, which detectors v2 and v3 catch); drop
+# these lines once it has that.
+/app/scripts/gitlab/**
+/app/scripts/k8s/secrets.ts
+/app/scripts/lib/integrations.ts
+/app/scripts/lib/secrets.ts
+/app/scripts/up.ts
+/app/src/integrations/gitlab/**
