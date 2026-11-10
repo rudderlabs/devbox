@@ -39,7 +39,9 @@ export type SetupOptions = {
   // own Secret and cannot be asked.
   botUsername?: string;
   botUserId?: number;
-  skipWebhook: boolean; // --skip-webhook
+  // --register-webhooks: let setup create the webhooks with the deployment's
+  // token, which then needs Maintainer. Without it they are created by hand.
+  registerWebhooks: boolean;
   skipPushCheck: boolean; // --skip-push-check
 };
 
@@ -237,7 +239,11 @@ export async function setup(
   const signingOk = identity?.version
     ? versionAtLeast(identity.version, SIGNING_TOKEN_MIN_VERSION)
     : true;
-  const auth: "signing" | "secret" = opts.secretToken || !signingOk ? "secret" : "signing";
+  // A rerun that registers nothing keeps the saved mode: the webhooks in
+  // GitLab keep the credential they were created with, and are not updated.
+  const keptSecret = !opts.registerWebhooks && d.gitlab?.webhookAuth === "secret";
+  const auth: "signing" | "secret" =
+    opts.secretToken || !signingOk || keptSecret ? "secret" : "signing";
   if (!opts.secretToken && !signingOk) {
     log(
       `GitLab ${identity?.version} is below ${SIGNING_TOKEN_MIN_VERSION}: using the legacy secret token (X-Gitlab-Token) for the webhook`,
@@ -253,8 +259,30 @@ export async function setup(
 
   // 6. The webhooks, one per project.
   let registered = true;
-  if (opts.skipWebhook) {
-    log("Webhooks: not registered (--skip-webhook)");
+  // Whether the token registered any hook: roles can differ per project.
+  let registeredAny = false;
+  // The manual steps name the token by its secret: its value is printed below
+  // only when it is new and not saved to the keychain.
+  const byHand = `  URL ${hookUrl}, triggers Comments and Pipeline events, ${auth === "signing" ? "signing" : "secret"} token: the value of ${secretName} (${
+    source === "env"
+      ? "from your environment"
+      : source === "keychain"
+        ? "in the system keychain"
+        : "new: saved or shown below"
+  })`;
+  // With the same webhook authentication: the hooks already registered keep
+  // the credential they were given, so the rerun must not pick the other mode.
+  const again = `bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""}${auth === "secret" ? " --secret-token" : ""}`;
+  if (!opts.registerWebhooks) {
+    // The default: devbox's token never needs more than Developer. Someone
+    // with Maintainer creates the webhook once, in GitLab.
+    log(
+      "Webhooks: create one on each project by hand (Settings → Webhooks; it takes the Maintainer role in GitLab, which devbox's token does not need):",
+    );
+    log(byHand);
+    log(
+      "  Or pass --register-webhooks to have setup create them with this token, which then needs Maintainer.",
+    );
   } else if (token === undefined) {
     registered = false;
   } else {
@@ -264,16 +292,26 @@ export async function setup(
         registered = false;
         break;
       }
+      registeredAny = true;
       log(`Webhook on ${repo.owner}/${repo.name}: ${hookUrl} (note and pipeline events)`);
+    }
+    // The token that registered the hooks is the one devbox then works with,
+    // on every push and API call. Managing hooks takes Maintainer; the work
+    // takes Developer.
+    if (registeredAny) {
+      log(
+        "Warning: this token can manage webhooks, so it holds the Maintainer role or more. devbox uses the same token for all its work, which needs only Developer: a Maintainer token could also change project settings, protected branches and members.",
+      );
+      log(
+        `  To keep it to Developer: replace it with a Developer-role token, then run ${again} with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working. If the webhook token is not in the keychain, set ${secretName} to it for that run.`,
+      );
     }
   }
   if (!registered) {
     log(
-      `The token may not manage webhooks (Maintainer role needed). Create one on each project by hand:`,
+      `The token may not manage webhooks${registeredAny ? " on every project" : ""} (Maintainer role needed). Create one on each project by hand:`,
     );
-    log(
-      `  URL ${hookUrl}, triggers Comments and Pipeline events, ${auth === "signing" ? "signing" : "secret"} token as below`,
-    );
+    log(byHand);
   }
 
   // 7. Save the webhook token where the apply command will find it.
@@ -295,6 +333,13 @@ export async function setup(
     if (!kept) {
       log(`The webhook token, shown once (set it as ${secretName} before ${d.applyCommand}):`);
       log(`  ${webhookToken}`);
+    }
+    // A rerun that found no saved token made a new one, while webhooks created
+    // earlier hold the old one and are not updated here.
+    if (d.gitlab && !opts.registerWebhooks) {
+      log(
+        `Warning: this is a new webhook token; webhooks created earlier still hold the previous one, and their deliveries will be refused. Either run setup again with ${secretName} set to the original value, or put this new token on each webhook in GitLab.`,
+      );
     }
   } else {
     log(

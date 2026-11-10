@@ -2,7 +2,7 @@
 //   bun run gitlab:setup --target <file> [--public-url <url>]
 //                        [--trusted-group <group>]... [--trusted-user <name>]...
 //                        [--secret-token] [--bot-username <name> --bot-user-id <id>]
-//                        [--skip-webhook] [--skip-push-check] [--no-keychain]
+//                        [--register-webhooks] [--skip-push-check] [--no-keychain]
 //   bun run gitlab:status  --target <file> [--no-keychain]
 //   bun run gitlab:disable --target <file> [--no-keychain] [--forget [--yes]]
 // Secret values are never printed, except the webhook token setup generated,
@@ -34,11 +34,13 @@ const USAGE = `Usage:
   bun run gitlab:setup [--target <file>] [--public-url <url>]
                        [--trusted-group <group>]... [--trusted-user <name>]...
                        [--secret-token] [--bot-username <name> --bot-user-id <id>]
-                       [--skip-webhook] [--skip-push-check] [--no-keychain]
+                       [--register-webhooks] [--skip-push-check] [--no-keychain]
 
 Checks the GitLab token against the instance in devbox.config.json (gitlab.baseUrl)
-and the repos under it, learns the bot's identity from it, registers a webhook
-on each project (comments and pipelines) with a token it generates, saves the
+and the repos under it, learns the bot's identity from it, generates the webhook
+token and prints how to create the webhook on each project (comments and
+pipelines) by hand, so the token needs only the Developer role; with
+--register-webhooks it creates them itself, which takes Maintainer. It saves the
 settings in devbox.config.json (Compose) or the target file (Kubernetes) and,
 if you choose, the secrets in the system keychain. It applies nothing: it names
 the command that does (bun run up, or k8s:install).
@@ -59,7 +61,8 @@ confirms without a terminal); the webhooks in GitLab are left for you to delete.
   --trusted-user <name>    a username who may drive devbox
   --secret-token           verify webhooks with the legacy secret token (X-Gitlab-Token)
   --bot-username, --bot-user-id  the bot, when the token is in your own Secret
-  --skip-webhook           do not register the webhooks (create them by hand)
+  --register-webhooks      create the webhooks with this token (it then needs Maintainer);
+                           without it, setup prints how to create them by hand
   --skip-push-check        do not check push and merge request access
   --no-keychain            never read or write the system keychain
   --forget                 disable: delete the configuration and saved secrets
@@ -78,6 +81,8 @@ const SETUP_FLAGS = {
   "secret-token": { type: "boolean" },
   "bot-username": { type: "string" },
   "bot-user-id": { type: "string" },
+  "register-webhooks": { type: "boolean" },
+  // Accepted and ignored: not registering is the default now.
   "skip-webhook": { type: "boolean" },
   "skip-push-check": { type: "boolean" },
   "no-keychain": { type: "boolean" },
@@ -142,7 +147,7 @@ async function main(command: string | undefined, argv: string[]): Promise<number
           secretToken: values["secret-token"] === true,
           botUsername: values["bot-username"],
           botUserId,
-          skipWebhook: values["skip-webhook"] === true,
+          registerWebhooks: values["register-webhooks"] === true,
           skipPushCheck: values["skip-push-check"] === true,
         },
         { resolver: resolverFor(d, noKeychain), promptLine, fetch, log, readFile },

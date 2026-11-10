@@ -25,8 +25,15 @@ mentioning note is one round) and approvals as a signal. Tracked in
   Sandboxes then have no GitHub credential: anonymous reads of public repos
   through the proxy's read-only rules are all that is left.
 - **A group or project access token** for the group that holds the repos,
-  with the `api`, `read_repository` and `write_repository` scopes and at least
-  the Developer role. Merge requests, commits and replies are attributed to the
+  with the `api`, `read_repository` and `write_repository` scopes and the
+  **Developer** role. Developer is all devbox's work needs, and devbox uses
+  this one token for every push and API call, so don't give it more: a
+  Maintainer token could also change project settings, protected branches and
+  members. Creating a project's webhook is the one step that takes Maintainer,
+  and someone with that role does it by hand, once per project (step 2
+  below); `gitlab:setup` only does it itself when you pass
+  `--register-webhooks`.
+  Merge requests, commits and replies are attributed to the
   token's bot user, whose username and numeric id the webhooks need (see
   below). The token does not rotate itself: set an expiry you can live with
   and replace it in the Secret before then. A personal access token works for
@@ -85,15 +92,15 @@ installer writes (Kubernetes).
    ```
    bun run gitlab:setup [--target <file>] [--public-url <url>]
                         [--trusted-group <group>]... [--trusted-user <name>]...
-                        [--secret-token] [--skip-webhook] [--skip-push-check] [--no-keychain]
+                        [--secret-token] [--register-webhooks] [--skip-push-check] [--no-keychain]
    ```
 
    It checks the token against the instance and every repo under it (the
    project exists, the token can push and open merge requests; with the
    webhooks, that it can read pipelines, jobs and the trusted groups'
-   members), learns the bot's identity from the token, registers a webhook
-   on each project with a signing token it generates, saves the token in the
-   system keychain (or shows it once), and writes `integrations.gitlab`, the
+   members), learns the bot's identity from the token, generates the
+   webhook's signing token, saves it in the system keychain (or shows it
+   once), prints how to create the webhook on each project, and writes `integrations.gitlab`, the
    trust lists and `publicUrl` to `devbox.config.json` (Compose) or the
    target file (Kubernetes, as `values.gitlab`). It applies nothing and never
    touches the stack or the cluster.
@@ -105,12 +112,30 @@ installer writes (Kubernetes).
    | `--trusted-group`, `--trusted-user` | Who may drive devbox from GitLab. Default: what the target file holds, else the first repo's group. |
    | `--secret-token` | Verify webhooks with the legacy `X-Gitlab-Token` instead of the signing token. Chosen by itself below GitLab 19.1. |
    | `--bot-username`, `--bot-user-id` | The bot, when the token sits in your own Secret and cannot be asked. |
-   | `--skip-webhook` | Register no webhook; create them by hand as below. |
+   | `--register-webhooks` | Create the webhooks with the deployment's token, which then needs Maintainer. Without it, you create them by hand as below. |
    | `--no-keychain` | Never read or write the system keychain. |
 
-   A token that may not manage webhooks (below Maintainer) gets the manual
-   instructions instead: URL `<public URL>/webhook/gitlab`, triggers
-   **Comments** and **Pipeline events**, the token setup printed.
+   **Create the webhook by hand**, once per project, as someone with the
+   Maintainer role: Settings → Webhooks, URL `<public URL>/webhook/gitlab`,
+   triggers **Comments** and **Pipeline events**, and the webhook token setup
+   named (it says which secret holds it and where). This way devbox's own
+   token never holds more than Developer.
+
+   With `--register-webhooks`, setup creates them with the deployment's token
+   instead. That token then holds Maintainer, more than devbox's work needs,
+   and setup says so. To drop back: replace it with a Developer-role token and
+   run `gitlab:setup` again before you apply (with `--secret-token` if you
+   registered the webhooks with it; setup prints the exact command). A new
+   token can be a new bot user, which setup records. The rerun keeps the
+   webhook authentication and reuses the saved webhook token, so the webhooks
+   already registered keep working.
+
+   Any rerun reuses the webhook token from the keychain or from its
+   environment variable (`GITLAB_WEBHOOK_SIGNING_TOKEN`, or
+   `GITLAB_WEBHOOK_SECRET` with the legacy secret). If it finds neither, it
+   makes a new one and warns you: the webhooks already in GitLab still hold
+   the old token, so set the variable to the original value and run setup
+   again, or put the new token on each webhook.
 
 3. Apply. On Compose, `bun run up`: it resolves `GITLAB_TOKEN` and the
    webhook token (environment, then the keychain, then a prompt), checks the
