@@ -58,6 +58,7 @@ const GITLAB_OFF = {
   IRON_PROXY_GITLAB_HOST: "",
   IRON_PROXY_SSL_CERT_FILE: "",
   CONTROL_PLANE_NODE_EXTRA_CA_CERTS: "",
+  GITLAB_CA_SHA256: "",
   SANDBOX_GITLAB_GIT_NAME: "",
   SANDBOX_GITLAB_GIT_EMAIL: "",
 };
@@ -643,6 +644,13 @@ describe("gitlabComposeEnv", () => {
         GITLAB_CI_RESULT_ENABLED: "true",
       },
     );
+    // The CA's digest follows its contents, so a replaced CA changes the
+    // control plane's environment and Compose recreates it.
+    const digest = (pem: string) =>
+      gitlabComposeEnv(withCa, undefined, { token: "glpat" }, undefined, pem).GITLAB_CA_SHA256;
+    expect(digest("ca-one")).toMatch(/^[0-9a-f]{64}$/);
+    expect(digest("ca-one")).toBe(digest("ca-one"));
+    expect(digest("ca-two")).not.toBe(digest("ca-one"));
     const legacy = gitlabComposeEnv(
       instance,
       { ...webhooks, webhookAuth: "secret" },

@@ -521,6 +521,19 @@ describe("parseConfig with gitlab", () => {
     ...(gitlab === null ? {} : { gitlab }),
   });
 
+  it("gitlab trust lists take only group paths and usernames: each group becomes a proxy allowlist path", () => {
+    const bad = (gitlab: Record<string, unknown>) => () =>
+      parseConfig(withGitlab([{ url: `${GITLAB}/acme/api.git` }], { baseUrl: GITLAB, ...gitlab }));
+    expect(bad({ trustedGroups: ["*"] })).toThrow(
+      "gitlab.trustedGroups[0]: not a group path, got *",
+    );
+    expect(bad({ trustedGroups: ["acme", "acme/*"] })).toThrow("gitlab.trustedGroups[1]");
+    expect(bad({ trustedGroups: ["../x"] })).toThrow("gitlab.trustedGroups[0]");
+    expect(bad({ trustedUsers: ["a/b"] })).toThrow("gitlab.trustedUsers[0]: not a username");
+    // Underscore-led segments are valid namespaces.
+    expect(bad({ trustedGroups: ["_platform/_backend"], trustedUsers: ["_bot"] })).not.toThrow();
+  });
+
   it("gitlab.trustedGroups and trustedUsers: Compose's trust lists", () => {
     const cfg = parseConfig(
       withGitlab([{ url: `${GITLAB}/acme/api.git` }], {

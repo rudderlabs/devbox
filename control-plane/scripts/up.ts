@@ -31,7 +31,7 @@
 // --dns-resolver <host:port> sets the resolver iron-proxy uses for its own
 // lookups (default 1.1.1.1:53): Docker's DNS would resolve the aliased hosts
 // back to the proxy, and some networks block public resolvers.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
@@ -243,6 +243,7 @@ type GitlabEnvName =
   | "IRON_PROXY_GITLAB_HOST"
   | "IRON_PROXY_SSL_CERT_FILE"
   | "CONTROL_PLANE_NODE_EXTRA_CA_CERTS"
+  | "GITLAB_CA_SHA256"
   | "SANDBOX_GITLAB_GIT_NAME"
   | "SANDBOX_GITLAB_GIT_EMAIL";
 
@@ -256,6 +257,8 @@ export function gitlabComposeEnv(
   secrets?: GitlabSecrets,
   // The commit identity for GitLab repos (the token's GitLab user), when known.
   commitIdentity?: Identity,
+  // The contents of gitlab.caFile, when there is one.
+  caPem?: string,
 ): Record<GitlabEnvName, string> {
   const off: Record<GitlabEnvName, string> = {
     GITLAB_BASE_URL: "",
@@ -271,6 +274,7 @@ export function gitlabComposeEnv(
     IRON_PROXY_GITLAB_HOST: "",
     IRON_PROXY_SSL_CERT_FILE: "",
     CONTROL_PLANE_NODE_EXTRA_CA_CERTS: "",
+    GITLAB_CA_SHA256: "",
     SANDBOX_GITLAB_GIT_NAME: "",
     SANDBOX_GITLAB_GIT_EMAIL: "",
   };
@@ -293,6 +297,12 @@ export function gitlabComposeEnv(
       ? {
           IRON_PROXY_SSL_CERT_FILE: GITLAB_CA_IN_PROXY,
           CONTROL_PLANE_NODE_EXTRA_CA_CERTS: GITLAB_CA_IN_CONTROL_PLANE,
+          // Bun reads the extra CAs once, at startup: the digest in the
+          // control plane's environment makes Compose recreate it when the
+          // CA's contents change behind the same mount path.
+          ...(caPem !== undefined
+            ? { GITLAB_CA_SHA256: createHash("sha256").update(caPem).digest("hex") }
+            : {}),
         }
       : {}),
   };
@@ -421,6 +431,7 @@ export function composeEnvFor(
     githubApp?: GithubAppSecrets;
     gitlab?: GitlabSecrets;
     gitlabGit?: Identity;
+    gitlabCa?: string;
   },
 ): Env {
   return {
@@ -440,7 +451,13 @@ export function composeEnvFor(
     ...llmComposeEnv(cfg.llm),
     ...linearComposeEnv(cfg.integrations.linear, values.linear),
     ...githubComposeEnv(enabledGithubApp(cfg.integrations), cfg, values.githubApp ?? {}),
-    ...gitlabComposeEnv(cfg.gitlab, cfg.integrations.gitlab, values.gitlab, values.gitlabGit),
+    ...gitlabComposeEnv(
+      cfg.gitlab,
+      cfg.integrations.gitlab,
+      values.gitlab,
+      values.gitlabGit,
+      values.gitlabCa,
+    ),
   };
 }
 
@@ -690,7 +707,13 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
         (token) =>
           checkGitlab(instance, token, gitlabRepos(cfg.repos), fetch, {
             ...(gitlabCa !== undefined ? { ca: gitlabCa } : {}),
-            ...(gitlabOn ? { webhooks: { trustedGroups: instance.trustedGroups ?? [] } } : {}),
+            ...(gitlabOn
+              ? {
+                  webhooks: { trustedGroups: instance.trustedGroups ?? [] },
+                  // Stands in when the token may not read its own user.
+                  identity: { id: gitlabOn.botUserId, username: gitlabOn.botUsername },
+                }
+              : {}),
           }),
       ));
       await offerSave(gitlabR.token, secretDeps);
@@ -699,10 +722,11 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
           ? `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
           : `GitLab ${gitlabIdentity.version || "(version unknown)"} at ${instance.baseUrl}: token accepted; its identity is unknown (no User: Read on the token)`,
       );
-      // Commits on GitLab repos carry the GitLab user's identity; with no
-      // GitHub identity at all, every commit does.
+      // Commits on GitLab repos carry the GitLab user's identity. Every commit
+      // does only when the deployment has no GitHub side at all: GitHub repos
+      // whose token names no user keep the default author.
       gitlabGit = gitlabCommitIdentity(instance, gitlabIdentity);
-      identity ??= gitlabGit;
+      if (!usesGithub) identity ??= gitlabGit;
       if (
         gitlabOn &&
         identityKnown(gitlabIdentity) &&
@@ -771,6 +795,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     githubApp: gh.app && { webhookSecret: gh.webhook.value, pem: gh.key?.pem },
     gitlab: gitlabR && { token: gitlabR.token.value, webhookToken: gitlabR.webhook?.value },
     ...(gitlabGit ? { gitlabGit } : {}),
+    ...(gitlabCa !== undefined ? { gitlabCa } : {}),
   });
   writeFileSync(
     OUTPUT_PATH,

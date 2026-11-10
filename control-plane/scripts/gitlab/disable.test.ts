@@ -29,13 +29,17 @@ async function run(o: {
   isTTY?: boolean;
   answer?: boolean;
   saved?: Record<string, string>;
+  valuesGitlab?: Record<string, unknown>;
 }) {
   const path = join(dir, `t${n++}.json`);
   writeFileSync(
     path,
     JSON.stringify({
       context: "prod",
-      values: { gitlab: { trustedGroups: ["platform"] }, storage: { storageClass: "gp3" } },
+      values: {
+        gitlab: o.valuesGitlab ?? { trustedGroups: ["platform"] },
+        storage: { storageClass: "gp3" },
+      },
       ...(o.gitlab ? { integrations: { gitlab: o.gitlab } } : {}),
     }),
   );
@@ -124,6 +128,21 @@ describe("gitlab:disable", () => {
     expect((r.file.values as Record<string, unknown>).storage).toEqual({ storageClass: "gp3" });
     expect(Object.keys(r.keychain)).toEqual(["k8s:prod/devbox/GITHUB_TOKEN"]);
     expect(r.log.at(-1)).toContain("Delete the devbox webhook on each project in GitLab");
+  });
+
+  it("--forget keeps the rest of values.gitlab: the commit identity is not a trust list", async () => {
+    const r = await run({
+      gitlab: GITLAB,
+      forget: true,
+      valuesGitlab: {
+        trustedGroups: ["platform"],
+        trustedUsers: ["alice"],
+        git: { name: "devbox", email: "2-devbox@users.noreply.gitlab.example.com" },
+      },
+    });
+    expect((r.file.values as Record<string, unknown>).gitlab).toEqual({
+      git: { name: "devbox", email: "2-devbox@users.noreply.gitlab.example.com" },
+    });
   });
 
   it("--forget declined removes nothing", async () => {

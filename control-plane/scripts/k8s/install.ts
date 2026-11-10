@@ -422,10 +422,11 @@ export async function install(
         ? `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
         : `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: the token may not read /api/v4/user (no User: Read); its identity is unknown`,
     );
-    // Commits on GitLab repos carry the GitLab user's identity; with no GitHub
-    // identity at all, every commit does.
+    // Commits on GitLab repos carry the GitLab user's identity. Every commit
+    // does only when the deployment has no GitHub side at all: GitHub repos
+    // whose token names no user (your own Secret) keep the default author.
     gitlabGit = gitlabCommitIdentity(instance, gitlabIdentity);
-    identity ??= gitlabGit;
+    if (!usesGithub) identity ??= gitlabGit;
     const mismatch = gitlab && identityKnown(gitlabIdentity) && botMismatch(gitlab, gitlabIdentity);
     if (mismatch)
       throw new KubeError(
@@ -508,8 +509,8 @@ export async function install(
     // The minter may only update its token Secret, so it must exist; and
     // without GitHub the chart still mounts it (iron-proxy, the control plane,
     // the snapshot builder all take an empty token). Created empty when
-    // missing; an existing one is left as it is (create never replaces), so no
-    // token is ever read or overwritten here.
+    // missing. For the minter an existing one is left as it is (create never
+    // replaces), so its token is never read or overwritten here.
     const r = await k.kubectl(["create", "-f", "-"], {
       stdin: secretManifest({ name: GITHUB_SECRET, data: { token: "" } }),
     });
@@ -517,6 +518,15 @@ export async function install(
       throw new KubeError(
         `kubectl create secret ${GITHUB_SECRET} failed: ${r.stderr.trim() || `exit ${r.code}`}`,
       );
+    }
+    // The Secret is the installer's own here (own.github). Without GitHub, one
+    // left from before, when the deployment had GitHub repos, still holds
+    // that token: empty it, or sandboxes keep reading with it through the
+    // proxy's read-only GitHub rules. The minter's Secret is never touched.
+    if (noGithub && r.code !== 0) {
+      await k.kubectlOk(["apply", "-f", "-"], {
+        stdin: secretManifest({ name: GITHUB_SECRET, data: { token: "" } }),
+      });
     }
     log(
       noGithub

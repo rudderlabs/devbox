@@ -279,6 +279,13 @@ describe("checkGitlab", () => {
 
 describe("gitlabCommitIdentity", () => {
   const instance = { baseUrl: "https://git.example.com/gitlab" };
+  it("strips shell quoting characters from the display name; the username stands in for an empty one", () => {
+    const named = (name: string) =>
+      gitlabCommitIdentity(instance, { id: 42, username: "devbox", name, bot: true, version: "" })
+        ?.gitName;
+    expect(named('D\'Angelo "Dee" $(id) `x` \\')).toBe("DAngelo Dee (id) x");
+    expect(named("'\"$")).toBe("devbox");
+  });
   it("is the user's name and GitLab's private commit email; none for an unknown identity", () => {
     expect(
       gitlabCommitIdentity(instance, {

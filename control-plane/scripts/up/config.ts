@@ -206,10 +206,24 @@ function parseGitlab(raw: unknown): GitlabConfig | undefined {
   return {
     baseUrl: `${url.origin}${url.pathname.replace(/\/+$/, "")}`,
     ...(caFile !== undefined ? { caFile } : {}),
-    trustedGroups: parseTrustList(raw, "trustedGroups", "gitlab"),
-    trustedUsers: parseTrustList(raw, "trustedUsers", "gitlab"),
+    trustedGroups: parseTrustList(raw, "trustedGroups", "gitlab").map((group, i) =>
+      GITLAB_GROUP_PATH.test(group)
+        ? group
+        : fail(`gitlab.trustedGroups[${i}]: not a group path, got ${group}`),
+    ),
+    trustedUsers: parseTrustList(raw, "trustedUsers", "gitlab").map((user, i) =>
+      GITLAB_USERNAME.test(user)
+        ? user
+        : fail(`gitlab.trustedUsers[${i}]: not a username, got ${user}`),
+    ),
   };
 }
+
+// A group's full path and a username, as the chart's validate.yaml takes
+// them. Each trusted group becomes a path in the proxy's allowlist
+// (/api/v4/groups/<group>/members/all), where a `*` would be a wildcard.
+const GITLAB_GROUP_PATH = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
+const GITLAB_USERNAME = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
 function parseReasoningEffort(raw: unknown, provider: Provider, field: string): ReasoningEffort {
   const supported = SUPPORTED_REASONING_EFFORTS[provider];

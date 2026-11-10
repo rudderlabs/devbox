@@ -67,11 +67,11 @@ export async function disable(
   for (const name of saved) await k?.delete(entryName(d.deployment, name));
   writeConfigKeys(d.configPath, {
     "integrations.gitlab": undefined,
-    // On Compose the `gitlab` block also holds the instance: only its trust
-    // lists go; on k8s values.gitlab holds nothing else.
-    ...(d.trustKey === "values.gitlab"
-      ? { "values.gitlab": undefined }
-      : { "gitlab.trustedGroups": undefined, "gitlab.trustedUsers": undefined }),
+    // Only the trust lists go. The block holds more: the instance on Compose,
+    // the commit identity (values.gitlab.git) on k8s, which a later install
+    // can't learn again when the token sits in your own Secret.
+    [`${d.trustKey}.trustedGroups`]: undefined,
+    [`${d.trustKey}.trustedUsers`]: undefined,
   });
   log(`Next: ${d.applyCommand}`);
   if (d.instance) {

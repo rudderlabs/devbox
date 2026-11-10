@@ -199,6 +199,9 @@ services:
       # it once, at start); empty without one. The file always exists:
       # `bun run up` writes it empty when gitlab.caFile is not set.
       NODE_EXTRA_CA_CERTS: ${CONTROL_PLANE_NODE_EXTRA_CA_CERTS:-}
+      # The CA's digest, read by nothing: it changes with the CA's contents,
+      # so Compose recreates this container and Bun loads the new CA.
+      GITLAB_CA_SHA256: ${GITLAB_CA_SHA256:-}
     ports:
       - "3000:3000"
     volumes:

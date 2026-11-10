@@ -356,7 +356,10 @@ export function gitlabCommitIdentity(
   if (!identityKnown(identity)) return undefined;
   const host = new URL(instance.baseUrl).hostname;
   return {
-    gitName: identity.name || identity.username,
+    // The name ends up in a quoted ENV line of the local harness image
+    // (harness/Makefile): without quotes, $, backticks and backslashes, like
+    // the GitHub name in up/preflight.ts.
+    gitName: (identity.name ?? "").replace(/["'$`\\]/g, "").trim() || identity.username,
     gitEmail: `${identity.id}-${identity.username}@users.noreply.${host}`,
   };
 }

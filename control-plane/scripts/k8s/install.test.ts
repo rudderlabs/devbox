@@ -2918,6 +2918,50 @@ devbox is installed in context kind-devbox. The CLI uses profile "k8s-kind-devbo
       });
     });
 
+    it("GitLab repos only, switched from GitHub: the installer's old token Secret is emptied, not left with its token", async () => {
+      const CREATE = kc("create", "-f", "-");
+      const fresh = FRESH([TOKEN]);
+      const j = fresh.findIndex((st) => st.cmd === DELETE_INTEGRATIONS);
+      const i = fresh.findIndex((st) => st.cmd === DELETE_APP_KEY);
+      // ns, then the empty token Secret's create, then gitlab and llm; the CA
+      // Secret (no gitlab.caFile) goes with the installer's other unused ones.
+      const script = [
+        ...fresh.slice(0, j - 2),
+        step(CREATE, {
+          code: 1,
+          stderr: 'Error from server (AlreadyExists): secrets "devbox-github" already exists\n',
+        }),
+        step(APPLY),
+        ...fresh.slice(j - 2, i + 1),
+        step(deleteOwned("devbox-gitlab-ca")),
+        ...fresh.slice(i + 1),
+      ];
+      const s = setup(script, { env: { LLM_API_KEY: "sk-y", GITLAB_TOKEN: "glpat-x" } });
+      s.deps.cfg = {
+        ...config(),
+        repos: [
+          {
+            url: `${BASE}/platform/api.git`,
+            branch: "main",
+            host: "gitlab",
+            owner: "platform",
+            name: "api",
+          },
+        ],
+        gitlab: { baseUrl: BASE },
+      };
+      const calls = appFetch(s, GITLAB_ROUTES);
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(commands(s.f)).toEqual(script.map((c) => c.cmd.join(" ")));
+      // Created would not replace it, so it is applied empty.
+      const github = s.f.calls.filter((c) => c.stdin?.includes('"name":"devbox-github"'));
+      expect(github.map((c) => c.cmd)).toEqual([CREATE, APPLY]);
+      expect(JSON.parse(github[1]?.stdin as string)).toEqual(
+        JSON.parse(secretManifest({ name: "devbox-github", data: { token: "" } })),
+      );
+    });
+
     it("the user's own token Secret: no check, the installer's GitLab Secrets go", async () => {
       const fresh = FRESH([TOKEN]);
       // After the installer's own key Secret goes, its GitLab ones do.

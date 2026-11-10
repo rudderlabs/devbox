@@ -69,8 +69,9 @@ read -r gitlab_token || true
 export GIT_CONFIG_COUNT=0
 # Scopes a Basic Authorization header to one URL prefix.
 add_auth_header() {
-  eval "export GIT_CONFIG_KEY_$GIT_CONFIG_COUNT=\"http.$1.extraheader\""
-  eval "export GIT_CONFIG_VALUE_$GIT_CONFIG_COUNT=\"Authorization: Basic $2\""
+  # No eval: the URL prefix is data, never reparsed as shell.
+  export "GIT_CONFIG_KEY_$GIT_CONFIG_COUNT=http.$1.extraheader"
+  export "GIT_CONFIG_VALUE_$GIT_CONFIG_COUNT=Authorization: Basic $2"
   GIT_CONFIG_COUNT=$((GIT_CONFIG_COUNT + 1))
 }
 if [ -n "$token" ]; then
