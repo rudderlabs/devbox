@@ -253,7 +253,18 @@ export async function setup(
 
   // 6. The webhooks, one per project.
   let registered = true;
-  const byHand = `  URL ${hookUrl}, triggers Comments and Pipeline events, ${auth === "signing" ? "signing" : "secret"} token as below`;
+  // Whether the token registered any hook: roles can differ per project.
+  let registeredAny = false;
+  // The manual steps name the token by its secret: its value is printed below
+  // only when it is new and not saved to the keychain.
+  const byHand = `  URL ${hookUrl}, triggers Comments and Pipeline events, ${auth === "signing" ? "signing" : "secret"} token: the value of ${secretName} (${
+    source === "env"
+      ? "from your environment"
+      : source === "keychain"
+        ? "in the system keychain"
+        : "new: saved or shown below"
+  })`;
+  const again = `bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""} --skip-webhook`;
   if (opts.skipWebhook) {
     log("Webhooks: not registered (--skip-webhook). Create one on each project by hand:");
     log(byHand);
@@ -266,23 +277,24 @@ export async function setup(
         registered = false;
         break;
       }
+      registeredAny = true;
       log(`Webhook on ${repo.owner}/${repo.name}: ${hookUrl} (note and pipeline events)`);
     }
     // The token that registered the hooks is the one devbox then works with,
     // on every push and API call. Managing hooks takes Maintainer; the work
     // takes Developer.
-    if (registered && d.repos.length > 0) {
+    if (registeredAny) {
       log(
         "Warning: this token can manage webhooks, so it holds the Maintainer role or more. devbox uses the same token for all its work, which needs only Developer: a Maintainer token could also change project settings, protected branches and members.",
       );
       log(
-        "  To keep it to Developer: replace it with a Developer-role token before you apply. The webhooks registered now keep working; later runs of gitlab:setup then print the manual steps instead (or pass --skip-webhook).",
+        `  To keep it to Developer: replace it with a Developer-role token, then run ${again} with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working.`,
       );
     }
   }
   if (!registered) {
     log(
-      `The token may not manage webhooks (Maintainer role needed). Create one on each project by hand:`,
+      `The token may not manage webhooks${registeredAny ? " on every project" : ""} (Maintainer role needed). Create one on each project by hand:`,
     );
     log(byHand);
   }

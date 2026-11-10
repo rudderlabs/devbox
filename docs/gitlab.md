@@ -106,8 +106,10 @@ installer writes.
    triggers **Comments** and **Pipeline events**, the token setup printed. A
    Maintainer does this once in the GitLab UI; devbox's token never needs the
    role. When the token does register the webhooks itself, setup warns that
-   it holds more than devbox needs: replace it with a Developer-role token
-   before you apply, and the webhooks keep working.
+   it holds more than devbox needs. Replace it with a Developer-role token and
+   run `gitlab:setup` again with `--skip-webhook` before you apply: a new
+   token can be a new bot user, which setup records, and it reuses the saved
+   webhook token, so the webhooks already registered keep working.
 
 3. `bun run k8s:install --target <file>` as usual. It checks the token again,
    writes `devbox-gitlab` (the token), `devbox-gitlab-ca` (the CA, with

@@ -202,7 +202,7 @@ describe("gitlab:setup", () => {
       `GitLab 19.5.3 at ${BASE}: devbox acts as devbox (id 2, a bot user)`,
       `Webhook on platform/backend/api: ${HOOK_URL} (note and pipeline events)`,
       "Warning: this token can manage webhooks, so it holds the Maintainer role or more. devbox uses the same token for all its work, which needs only Developer: a Maintainer token could also change project settings, protected branches and members.",
-      "  To keep it to Developer: replace it with a Developer-role token before you apply. The webhooks registered now keep working; later runs of gitlab:setup then print the manual steps instead (or pass --skip-webhook).",
+      `  To keep it to Developer: replace it with a Developer-role token, then run bun run gitlab:setup --target ${h.configPath} --skip-webhook with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working.`,
       `Wrote integrations.gitlab and values.gitlab to ${h.configPath}`,
       `Next: bun run k8s:install --target ${h.configPath}`,
       "With GitOps, set these chart values instead: integrations.gitlab {enabled: true, botUsername: devbox, botUserId: 2}, gitlab.trustedGroups, and GITLAB_WEBHOOK_SIGNING_TOKEN in the integrations Secret",
@@ -342,7 +342,7 @@ describe("gitlab:setup", () => {
     const h = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" }, hooksStatus: 403 });
     await setup(h.d, opts(), h.deps);
     expect(h.log).toContain(
-      `  URL ${HOOK_URL}, triggers Comments and Pipeline events, signing token as below`,
+      `  URL ${HOOK_URL}, triggers Comments and Pipeline events, signing token: the value of GITLAB_WEBHOOK_SIGNING_TOKEN (new: saved or shown below)`,
     );
     expect(readJson(h.configPath)).toMatchObject({ integrations: { gitlab: GITLAB } });
   });
@@ -355,7 +355,7 @@ describe("gitlab:setup", () => {
       "Webhooks: not registered (--skip-webhook). Create one on each project by hand:",
     );
     expect(h.log).toContain(
-      `  URL ${HOOK_URL}, triggers Comments and Pipeline events, signing token as below`,
+      `  URL ${HOOK_URL}, triggers Comments and Pipeline events, signing token: the value of GITLAB_WEBHOOK_SIGNING_TOKEN (new: saved or shown below)`,
     );
     expect(warned(h.log)).toBe(false);
   });
@@ -365,7 +365,10 @@ describe("gitlab:setup", () => {
     await setup(h.d, opts(), h.deps);
     expect(h.requests.some((r) => r.url.includes("/hooks") && r.method === "POST")).toBe(true);
     expect(warned(h.log)).toBe(true);
-    expect(h.log.some((l) => l.includes("replace it with a Developer-role token"))).toBe(true);
+    // Replacing the token can change the bot: the advice is to run setup again, without re-registering.
+    expect(
+      h.log.some((l) => l.includes(`gitlab:setup --target ${h.configPath} --skip-webhook`)),
+    ).toBe(true);
   });
 
   it("does not warn when the token may not manage webhooks, or was never read", async () => {
