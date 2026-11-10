@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { homedir } from "node:os";
-import { enabledGithubApp, enabledJira, enabledLinear, parseIntegrations } from "./integrations";
+import {
+  enabledGithubApp,
+  enabledGitlab,
+  enabledJira,
+  enabledLinear,
+  gitlabWebhookSecretName,
+  parseIntegrations,
+} from "./integrations";
 
 class Failed extends Error {}
 const fail = (msg: string): never => {
@@ -121,10 +128,10 @@ describe("parseIntegrations", () => {
 
   it("refuses an unknown key in integrations", () => {
     expect(failure({ clickup: {} })).toBe(
-      'integrations: unknown key "clickup" (allowed: linear, slack, githubApp, jira)',
+      'integrations: unknown key "clickup" (allowed: linear, slack, gitlab, githubApp, jira)',
     );
     expect(failure({ clickup: {} }, COMPOSE)).toBe(
-      'integrations: unknown key "clickup" (allowed: linear, githubApp, jira)',
+      'integrations: unknown key "clickup" (allowed: linear, githubApp, gitlab, jira)',
     );
   });
 
@@ -470,5 +477,93 @@ describe("integrations.jira", () => {
     expect(enabledJira({ jira: JIRA })).toEqual(JIRA);
     expect(enabledJira({ jira: { ...JIRA, enabled: false } })).toBeUndefined();
     expect(enabledJira({})).toBeUndefined();
+  });
+});
+
+describe("integrations.gitlab", () => {
+  const parse = (gitlab: unknown, platform: "k8s" | "compose" = "k8s") =>
+    parseIntegrations({ gitlab }, fail, { platform });
+  const failure = (gitlab: unknown, platform: "k8s" | "compose" = "k8s") => {
+    try {
+      parse(gitlab, platform);
+    } catch (err) {
+      return (err as Error).message;
+    }
+    return undefined;
+  };
+
+  it("fills the defaults and keeps explicit values", () => {
+    expect(parse({ enabled: true, botUsername: "devbox", botUserId: 2 })).toEqual({
+      gitlab: {
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: true,
+        webhookAuth: "signing",
+      },
+    });
+    expect(
+      parse({
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: false,
+        webhookAuth: "secret",
+      }),
+    ).toEqual({
+      gitlab: {
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: false,
+        webhookAuth: "secret",
+      },
+    });
+  });
+
+  it("the bot is required when enabled, optional when off", () => {
+    expect(failure({ enabled: true })).toBe(
+      "integrations.gitlab.botUsername: required when enabled is true",
+    );
+    expect(failure({ enabled: true, botUsername: "devbox" })).toBe(
+      "integrations.gitlab.botUserId: required when enabled is true",
+    );
+    expect(parse({ enabled: false })).toEqual({
+      gitlab: { enabled: false, ciResults: true, webhookAuth: "signing" },
+    });
+  });
+
+  it("refuses bad values and unknown keys", () => {
+    expect(failure({ enabled: true, botUsername: "devbox", botUserId: 0 })).toBe(
+      "integrations.gitlab.botUserId: must be a positive integer",
+    );
+    expect(failure({ enabled: false, webhookAuth: "hmac" })).toBe(
+      'integrations.gitlab.webhookAuth: must be "signing" or "secret"',
+    );
+    expect(failure({ enabled: false, token: "x" })).toBe(
+      'integrations.gitlab: unknown key "token" (allowed: enabled, botUsername, botUserId, ciResults, webhookAuth)',
+    );
+  });
+
+  it("is accepted on Compose as on Kubernetes", () => {
+    expect(parse({ enabled: true, botUsername: "devbox", botUserId: 2 }, "compose").gitlab).toEqual(
+      {
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: true,
+        webhookAuth: "signing",
+      },
+    );
+  });
+
+  it("enabledGitlab and the webhook Secret key", () => {
+    const on = parse({ enabled: true, botUsername: "devbox", botUserId: 2 });
+    expect(enabledGitlab(on)?.botUserId).toBe(2);
+    expect(enabledGitlab(parse({ enabled: false }))).toBeUndefined();
+    expect(gitlabWebhookSecretName({ webhookAuth: "signing" })).toBe(
+      "GITLAB_WEBHOOK_SIGNING_TOKEN",
+    );
+    expect(gitlabWebhookSecretName({ webhookAuth: "secret" })).toBe("GITLAB_WEBHOOK_SECRET");
   });
 });

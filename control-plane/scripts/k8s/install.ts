@@ -13,6 +13,13 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
+import {
+  botMismatch,
+  checkGitlab,
+  type GitlabIdentity,
+  gitlabCommitIdentity,
+  identityKnown,
+} from "../gitlab/check";
 import { type JiraSecrets, jiraPreflight } from "../jira/check";
 import {
   appIdentity,
@@ -24,8 +31,10 @@ import { type PrivateKey, PrivateKeyError, resolvePrivateKey } from "../lib/gith
 import {
   type EnabledGithubApp,
   enabledGithubApp,
+  enabledGitlab,
   enabledJira,
   enabledLinear,
+  gitlabWebhookSecretName,
 } from "../lib/integrations";
 import type { Keychain } from "../lib/keychain";
 import {
@@ -37,7 +46,7 @@ import {
 } from "../lib/secrets";
 import { checkLinear, type LinearIdentity } from "../linear/check";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput, readCliProfile } from "../up/cliLogin";
-import type { DevboxConfig } from "../up/config";
+import { type DevboxConfig, githubRepos, gitlabRepos, needsGithub } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, type Identity } from "../up/preflight";
 import { pickClusterIP } from "./clusterIP";
 import { freePort, profileFor } from "./connect";
@@ -66,6 +75,8 @@ import {
   existingSecret,
   GITHUB_APP_SECRET,
   GITHUB_SECRET,
+  GITLAB_CA_SECRET,
+  GITLAB_SECRET,
   INSTALLER_LABEL,
   INTEGRATIONS_SECRET,
   type IntegrationSecretName,
@@ -171,7 +182,11 @@ const repoKeys = (repos: unknown): string[] =>
 
 // The chart refuses these when it renders, in the same words; refused here,
 // they stop before anything is checked or written.
-function refuseGithubApp(app: EnabledGithubApp | undefined, values: Values): void {
+function refuseGithubApp(
+  app: EnabledGithubApp | undefined,
+  values: Values,
+  githubRepoCount: number,
+): void {
   if (!app) return;
   const fail = (why: string): never => {
     throw new GithubAppSetupError(`integrations.githubApp.enabled is true: ${why}`);
@@ -182,6 +197,12 @@ function refuseGithubApp(app: EnabledGithubApp | undefined, values: Values): voi
     const repos = values.repos;
     if (app.tokenScope !== "installation" && !(Array.isArray(repos) && repos.length > 0)) {
       fail("tokenScope: repos needs at least one entry in repos (or use tokenScope: installation)");
+    }
+    // Only GitLab repos: the same, before the whole-installation token is minted.
+    if (app.tokenScope !== "installation" && githubRepoCount === 0) {
+      fail(
+        "tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation)",
+      );
     }
     // The minter writes only a Secret devbox owns, never the user's.
     if (userToken) {
@@ -225,10 +246,21 @@ export async function install(
   const linear = enabledLinear(integrations ?? {});
   const jira = enabledJira(integrations ?? {});
   const app = enabledGithubApp(integrations ?? {});
-  refuseGithubApp(app, chartValues(cfg, deps.target.values, {}, overlay));
+  refuseGithubApp(
+    app,
+    chartValues(cfg, deps.target.values, {}, overlay),
+    githubRepos(cfg.repos).length,
+  );
   // Commits link to the App's bot; git values the user set still win.
   const appCommitIdentity = app ? appIdentity(app.slug, app.botUserId) : undefined;
 
+  // GitLab: the installer writes the token Secret unless the user brings
+  // one, and the CA bundle Secret from gitlab.caFile.
+  const ownGitlab = cfg.gitlab !== undefined && !existingSecret(deps.target.values, "gitlab");
+  const gitlabSecrets = {
+    ...(ownGitlab ? { gitlabSecret: GITLAB_SECRET } : {}),
+    ...(cfg.gitlab?.caFile ? { gitlabCaSecret: GITLAB_CA_SECRET } : {}),
+  };
   if (opts.render) {
     const values = chartValues(
       cfg,
@@ -237,6 +269,7 @@ export async function install(
         clusterIP: userClusterIP ?? (await pickClusterIP(k)),
         identity: appCommitIdentity,
         integrations,
+        ...gitlabSecrets,
       },
       overlay,
     );
@@ -282,7 +315,11 @@ export async function install(
   // With devbox-minted tokens and the user's own key Secret, the key is not
   // read here: the seed job mints the first token, and k8s:check checks it.
   const userAppKey = app?.tokens === "devbox" ? existingSecret(values0, "githubApp") : undefined;
-  let githubR = own.github && !app ? await resolveSecret("GITHUB_TOKEN", secretDeps) : undefined;
+  // No GitHub repo and no App: no GitHub token is asked for or checked; the
+  // token Secret the chart mounts is then created empty below.
+  const usesGithub = needsGithub(cfg.repos, app);
+  let githubR =
+    own.github && !app && usesGithub ? await resolveSecret("GITHUB_TOKEN", secretDeps) : undefined;
   let appKey: PrivateKey | undefined;
   if (app?.tokens === "devbox" && !userAppKey) {
     appKey = await resolvePrivateKey(secretDeps);
@@ -313,6 +350,19 @@ export async function install(
   };
   const slackR = await resolveIf(integrations?.slack?.enabled, "SLACK_BOT_TOKEN");
   const webhookR = await resolveIf(integrations?.githubApp?.enabled, "GITHUB_WEBHOOK_SECRET");
+  // GitLab: the token, and with the webhooks on, the webhook token under the
+  // key integrations.gitlab.webhookAuth names. The CA file is read now, for
+  // the check and the Secret.
+  const gitlab = enabledGitlab(integrations ?? {});
+  let gitlabCa: string | undefined;
+  if (cfg.gitlab?.caFile) {
+    gitlabCa = deps.readFile(cfg.gitlab.caFile);
+    if (!gitlabCa) throw new KubeError(`gitlab.caFile ${cfg.gitlab.caFile}: cannot read it`);
+  }
+  let gitlabR = ownGitlab ? await resolveSecret("GITLAB_TOKEN", secretDeps) : undefined;
+  const gitlabWebhookR = gitlab
+    ? await resolveIf(true, gitlabWebhookSecretName(gitlab))
+    : undefined;
   // Unchecked: offered now, so a failing GitHub check does not lose them.
   if (llmR && opts.skipLlmCheck) await offerSave(llmR, secretDeps);
   if (linearR && opts.skipLinearCheck) {
@@ -325,18 +375,19 @@ export async function install(
   }
   if (slackR) await offerSave(slackR, secretDeps);
   if (webhookR) await offerSave(webhookR, secretDeps);
+  if (gitlabWebhookR) await offerSave(gitlabWebhookR, secretDeps);
   // The commit identity is the App's bot, or comes from a token resolved
   // here; otherwise the chart uses `git` from the values or its default.
   let identity: Identity | undefined = appCommitIdentity;
   let minted: { token: string; expiresAt: string } | undefined;
   if (app && appKey) {
-    minted = await mintAppToken(app, appKey.pem, cfg.repos, {
+    minted = await mintAppToken(app, appKey.pem, githubRepos(cfg.repos), {
       fetch: deps.fetch,
       checkCoverage: true,
       target: deps.targetPath,
     });
     log(`GitHub App ${app.slug}: minted a token for installation ${app.installationId}`);
-    await checkGithub(minted.token, cfg.repos, deps.fetch, {
+    await checkGithub(minted.token, githubRepos(cfg.repos), deps.fetch, {
       requirePush: !opts.skipPushCheck,
       tokenName: "the GitHub App's token",
     });
@@ -347,9 +398,63 @@ export async function install(
   }
   if (githubR) {
     ({ resolved: githubR, result: identity } = await checkWithRetry(githubR, secretDeps, (token) =>
-      checkGithub(token, cfg.repos, deps.fetch, { requirePush: !opts.skipPushCheck }),
+      checkGithub(token, githubRepos(cfg.repos), deps.fetch, { requirePush: !opts.skipPushCheck }),
     ));
     await offerSave(githubR, secretDeps);
+  }
+  // The instance's CA in the user's own Secret (ironProxy.caBundle, no
+  // gitlab.caFile): the installer never reads a Secret it does not own, so the
+  // TLS-dependent checks are k8s:check's, as for a token in the user's Secret.
+  const userCa = userValue(deps.target, ["ironProxy", "caBundle"]);
+  const caOnlyInCluster = typeof userCa === "string" && userCa !== "" && gitlabCa === undefined;
+  let gitlabGit: Identity | undefined;
+  if (gitlabR && cfg.gitlab && caOnlyInCluster) {
+    await offerSave(gitlabR, secretDeps);
+    log(
+      `Skipping the GitLab checks: the instance's CA is in your Secret "${userCa}"; run bun run k8s:check --target ${deps.targetPath} after install`,
+    );
+  } else if (gitlabR && cfg.gitlab) {
+    const instance = cfg.gitlab;
+    const trust = (deps.target.values.gitlab ?? {}) as { trustedGroups?: unknown };
+    const trustedGroups = Array.isArray(trust.trustedGroups)
+      ? trust.trustedGroups.filter((g): g is string => typeof g === "string")
+      : [];
+    let gitlabIdentity: GitlabIdentity;
+    ({ resolved: gitlabR, result: gitlabIdentity } = await checkWithRetry(
+      gitlabR,
+      secretDeps,
+      (token) =>
+        checkGitlab(instance, token, gitlabRepos(cfg.repos), deps.fetch, {
+          requirePush: !opts.skipPushCheck,
+          ...(gitlabCa !== undefined ? { ca: gitlabCa } : {}),
+          ...(gitlab
+            ? {
+                webhooks: { trustedGroups },
+                identity: { id: gitlab.botUserId, username: gitlab.botUsername },
+              }
+            : {}),
+        }),
+    ));
+    await offerSave(gitlabR, secretDeps);
+    log(
+      identityKnown(gitlabIdentity)
+        ? `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
+        : `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: the token may not read /api/v4/user (no User: Read); its identity is unknown`,
+    );
+    // Commits on GitLab repos carry the GitLab user's identity. Every commit
+    // does only when the deployment has no GitHub side at all: GitHub repos
+    // whose token names no user (your own Secret) keep the default author.
+    gitlabGit = gitlabCommitIdentity(instance, gitlabIdentity);
+    if (!usesGithub) identity ??= gitlabGit;
+    const mismatch = gitlab && identityKnown(gitlabIdentity) && botMismatch(gitlab, gitlabIdentity);
+    if (mismatch)
+      throw new KubeError(
+        `${mismatch} Run bun run gitlab:setup --target ${deps.targetPath} to re-register the webhooks for this token.`,
+      );
+  } else if (cfg.gitlab) {
+    log(
+      `Skipping the GitLab checks: the token is in your Secret "${existingSecret(values0, "gitlab")}"; run bun run k8s:check --target ${deps.targetPath} after install`,
+    );
   }
   if (opts.skipPushCheck) {
     log(
@@ -398,6 +503,7 @@ export async function install(
     jiraR?.webhook,
     slackR,
     webhookR,
+    gitlabWebhookR,
   ]) {
     if (r) integrationSecrets[r.name as IntegrationSecretName] = r.value;
   }
@@ -430,10 +536,13 @@ export async function install(
 
   log("[4/7] Namespaces and Secrets");
   await k.kubectlOk(["apply", "-f", "-"], { stdin: namespacesManifest() });
-  if (userAppKey) {
-    // The minter may only update its token Secret, so it must exist. Created
-    // empty when missing; an existing one is left as it is (create never
-    // replaces), so no token is ever read or overwritten here.
+  const noGithub = own.github && !app && !usesGithub;
+  if (userAppKey || noGithub) {
+    // The minter may only update its token Secret, so it must exist; and
+    // without GitHub the chart still mounts it (iron-proxy, the control plane,
+    // the snapshot builder all take an empty token). Created empty when
+    // missing. For the minter an existing one is left as it is (create never
+    // replaces), so its token is never read or overwritten here.
     const r = await k.kubectl(["create", "-f", "-"], {
       stdin: secretManifest({ name: GITHUB_SECRET, data: { token: "" } }),
     });
@@ -442,20 +551,39 @@ export async function install(
         `kubectl create secret ${GITHUB_SECRET} failed: ${r.stderr.trim() || `exit ${r.code}`}`,
       );
     }
-    log("The token Secret is filled by the devbox-github-token-seed job");
+    // The Secret is the installer's own here (own.github). Without GitHub, one
+    // left from before, when the deployment had GitHub repos, still holds
+    // that token: empty it, or sandboxes keep reading with it through the
+    // proxy's read-only GitHub rules. The minter's Secret is never touched.
+    if (noGithub && r.code !== 0) {
+      await k.kubectlOk(["apply", "-f", "-"], {
+        stdin: secretManifest({ name: GITHUB_SECRET, data: { token: "" } }),
+      });
+    }
+    log(
+      noGithub
+        ? `No GitHub repo and no GitHub App: the token Secret ${GITHUB_SECRET} stays empty`
+        : "The token Secret is filled by the devbox-github-token-seed job",
+    );
   }
   const secrets = userSecrets(values0, {
     github,
     githubApp: appKey && { pem: appKey.pem },
+    gitlab: gitlabR && { token: gitlabR.value },
+    gitlabCa: gitlabCa !== undefined ? { pem: gitlabCa } : undefined,
     llm,
     integrations: integrationSecrets,
   });
   // kubectl says "configured" only when the Secret's data changed.
   let integrationsChanged = false;
+  let caChanged = false;
   for (const s of secrets) {
     const out = await k.kubectlOk(["apply", "-f", "-"], { stdin: secretManifest(s) });
     if (s.name === INTEGRATIONS_SECRET) {
       integrationsChanged = /^secret\/devbox-integrations configured$/m.test(out);
+    }
+    if (s.name === GITLAB_CA_SECRET) {
+      caChanged = /^secret\/devbox-gitlab-ca configured$/m.test(out);
     }
   }
   // An installer-owned Secret this install does not use goes; the user's own
@@ -486,6 +614,27 @@ export async function install(
       "this install does not use the installer's copy of the GitHub App's private key",
     );
   }
+  // The GitLab Secrets the installer wrote for an instance that is gone
+  // (the installed release knew one), or whose token the user now brings,
+  // or whose CA is no longer configured.
+  // Never one the effective values still name: a user who adopted the
+  // installer's copy as their existingSecret / caBundle keeps it, label and all.
+  const hadGitlab = cfg.gitlab !== undefined || previous?.gitlab !== undefined;
+  if (hadGitlab && !gitlabR && existingSecret(values0, "gitlab") !== GITLAB_SECRET) {
+    await deleteOwned(
+      GITLAB_SECRET,
+      cfg.gitlab
+        ? `the GitLab token comes from Secret "${existingSecret(values0, "gitlab")}"`
+        : "no GitLab instance is configured",
+    );
+  }
+  if (
+    hadGitlab &&
+    gitlabCa === undefined &&
+    userValue(deps.target, ["ironProxy", "caBundle"]) !== GITLAB_CA_SECRET
+  ) {
+    await deleteOwned(GITLAB_CA_SECRET, "gitlab.caFile is not set");
+  }
   // External tokens live in the user's Secret; a token the installer wrote
   // before is stale.
   if (app?.tokens === "external") {
@@ -503,7 +652,14 @@ export async function install(
   const values = chartValues(
     cfg,
     deps.target.values,
-    { clusterIP, publicBaseUrl: url, identity, integrations },
+    {
+      clusterIP,
+      publicBaseUrl: url,
+      identity,
+      integrations,
+      ...gitlabSecrets,
+      ...(gitlabGit ? { gitlabGit } : {}),
+    },
     overlay,
   );
   const before = await templateHash(k);
@@ -564,6 +720,13 @@ export async function install(
   if (integrationsChanged && generationBefore && generationBefore === generationAfter) {
     log(`The integrations secrets changed; the control plane keeps the old values until it restarts:
   kubectl --context ${context} -n ${NAMESPACE} rollout restart deploy/devbox-control-plane
+then: bun run k8s:check --target ${deps.targetPath}`);
+  }
+  // The chart's checksum sees the Secret's name, not its content: a CA rotated
+  // under the same name rolls nothing, and both readers load CAs at start.
+  if (caChanged && previous) {
+    log(`gitlab.caFile changed; the control plane and iron-proxy keep the old CA until they restart:
+  kubectl --context ${context} -n ${NAMESPACE} rollout restart deploy/devbox-control-plane deploy/devbox-iron-proxy
 then: bun run k8s:check --target ${deps.targetPath}`);
   }
 
@@ -670,7 +833,7 @@ then: bun run k8s:check --target ${deps.targetPath}`);
 devbox is installed in context ${context}. The CLI uses profile "${profile}".
 ${local ? `\n  bun run k8s:connect --target ${deps.targetPath}     # keep it running in another terminal` : ""}
   bun run devbox create "Add a /health endpoint to ${cfg.repos[0]?.owner}/${cfg.repos[0]?.name}"
-  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}${jira ? `\n\nCheck Jira with: bun run jira:status --target ${deps.targetPath}` : ""}`);
+  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}${gitlab ? `\n\nCheck GitLab with: bun run gitlab:status --target ${deps.targetPath}` : ""}${jira ? `\n\nCheck Jira with: bun run jira:status --target ${deps.targetPath}` : ""}`);
 }
 
 // A running `k8s:connect` already holds the profile's port: use it.

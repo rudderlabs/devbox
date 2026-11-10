@@ -66,7 +66,13 @@ class TestParseOwnerRepoFromGitRemote(unittest.TestCase):
                 git.parse_owner_repo_from_git_remote(Path(d))
 
     def test_unsupported_host_raises(self) -> None:
-        with self.assertRaises(RuntimeError):
+        # A GitLab remote is recognised only under GITLAB_BASE_URL (see
+        # tests/test_codehost.py); unset, it stays unsupported.
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            self.assertRaises(RuntimeError),
+        ):
+            os.environ.pop("GITLAB_BASE_URL", None)
             self._with_remote("https://gitlab.com/acme/foo.git")
 
 
@@ -300,7 +306,7 @@ class TestCommitFlowWithoutHarnessSigning(unittest.TestCase):
 
             with (
                 mock.patch.object(_common, "WORKSPACE", Path(workspace)),
-                mock.patch.object(assignment, "GitHubClient", return_value=client),
+                mock.patch.object(_common, "client_for_repo", return_value=client),
                 mock.patch.object(
                     _common,
                     "parse_owner_repo_from_git_remote",
@@ -360,14 +366,14 @@ class TestCommitFlowWithoutHarnessSigning(unittest.TestCase):
             ],
         }
 
-        # GitHubClient must never be constructed when the stage is skipped.
+        # No code-host client may be resolved when the stage is skipped.
         with (
             mock.patch.dict(os.environ, {"HARNESS_SKIP_COMMIT": "1"}, clear=False),
             mock.patch.object(
-                assignment,
-                "GitHubClient",
+                _common,
+                "client_for_repo",
                 side_effect=AssertionError(
-                    "skip-commit must not construct a GitHubClient"
+                    "skip-commit must not resolve a code-host client"
                 ),
             ),
         ):
@@ -795,9 +801,12 @@ class TestNativeSignedPublish(unittest.TestCase):
                     check=True,
                 ),
                 mock.call(["git", "-C", str(repo), "add", "-A"], check=True),
+                # env=None: no GitLab commit identity is configured, so the
+                # commit keeps the sandbox's own.
                 mock.call(
                     ["git", "-C", str(repo), "commit", "-m", "test: signed commit"],
                     check=True,
+                    env=None,
                 ),
                 mock.call(
                     [

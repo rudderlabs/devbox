@@ -14,6 +14,7 @@ workspace:
   size: 15Gi
 
 # -- Required. Repos the agent works on: [{url: "https://github.com/<owner>/<repo>.git", branch: main}].
+# With gitlab.baseUrl, a repo may also be "<gitlab.baseUrl>/<group>[/<subgroup>]/<project>.git".
 # `bun run k8s:install` fills this from devbox.config.json.
 repos: []
 
@@ -46,6 +47,10 @@ ironProxy:
   clusterIP: ""
   # -- Extra allowlist rules ({host, methods, paths}), appended as-is.
   extraAllowlist: []
+  # -- Name of a Secret (key `ca.crt`, a PEM bundle) whose CAs iron-proxy trusts for its own
+  # upstream connections, in addition to the system roots: for a GitLab instance with a private
+  # CA. Sandboxes need nothing: they see iron-proxy's own certificate. Changing it rolls the pods.
+  caBundle: ""
   # -- More than one adds a PodDisruptionBudget.
   replicas: 1
   image:
@@ -100,6 +105,10 @@ secrets:
   llm: { existingSecret: "" }
   # -- Optional Secret instead of `devbox-integrations`; its keys become control-plane env.
   integrations: { existingSecret: "" }
+  # -- Required with gitlab.baseUrl: a Secret (key `token`) holding a GitLab group or project
+  # access token with the api, read_repository and write_repository scopes. iron-proxy swaps it
+  # into sandboxes' requests and the snapshot builder clones with it. You keep it fresh.
+  gitlab: { existingSecret: "" }
 
 integrations:
   linear:
@@ -134,6 +143,19 @@ integrations:
     tokenScope: repos
     # -- Posts CI failures on the agent's pull requests back to the agent (GITHUB_CI_RESULT_ENABLED).
     ciResults: true
+  gitlab:
+    # -- Turns GitLab webhooks on at /webhook/gitlab (GITLAB_WEBHOOKS_ENABLED): `@<botUsername>` notes
+    # and failed pipelines on the agent's merge requests reach the agent. Needs gitlab.baseUrl. The
+    # webhook's signing token goes in the integrations Secret as GITLAB_WEBHOOK_SIGNING_TOKEN (or the
+    # legacy secret token as GITLAB_WEBHOOK_SECRET). See docs/gitlab.md.
+    enabled: false
+    # -- Required when enabled: the username of the user the GitLab token belongs to (a group or
+    # project access token's bot user). Notes mention it; its own notes are ignored.
+    botUsername: ""
+    # -- Required when enabled: that user's numeric GitLab user ID (0 means unset).
+    botUserId: 0
+    # -- Posts failed pipelines on the agent's merge requests back to the agent (GITLAB_CI_RESULT_ENABLED).
+    ciResults: true
   jira:
     # -- Turns Jira on (JIRA_ENABLED). JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET go in the integrations
     # Secret. Set by bun run jira:setup through bun run k8s:install. Off, none of the block renders.
@@ -163,6 +185,24 @@ github:
   trustedOrgs: []
   # -- GitHub users who may drive devbox. Required with trustedOrgs (either) when the GitHub App is enabled.
   trustedUsers: []
+
+gitlab:
+  # -- A GitLab instance repos may live on, self-managed or https://gitlab.com, for example
+  # https://gitlab.example.com (a relative URL root such as https://example.com/gitlab is fine; the
+  # default port only). Repos under it clone, push and open merge requests there with the token
+  # in secrets.gitlab.existingSecret. Empty turns GitLab off.
+  baseUrl: ""
+  # -- GitLab groups (`group` or `group/subgroup`) whose members may drive devbox. Required with
+  # trustedUsers (either) when integrations.gitlab is enabled.
+  trustedGroups: []
+  # -- GitLab usernames who may drive devbox. Required with trustedGroups (either) when
+  # integrations.gitlab is enabled.
+  trustedUsers: []
+  git:
+    # -- Commit identity for commits on GitLab repos, instead of `git` above (the GitHub
+    # user's). `bun run k8s:install` sets the token's GitLab user. Both or neither.
+    name: ""
+    email: ""
 
 controlPlane:
   # -- More than one adds a PodDisruptionBudget.
@@ -200,7 +240,7 @@ snapshotBuilder:
 
 ingress:
   webhooks:
-    # -- Public Ingress for /webhook/ only (GitHub, Linear, Jira).
+    # -- Public Ingress for /webhook/ only (GitHub, GitLab, Linear, Jira).
     enabled: false
     # -- The Ingress class.
     className: ""

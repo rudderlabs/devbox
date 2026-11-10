@@ -14,6 +14,12 @@ export type InstallerValues = {
   identity?: Identity;
   // The target file's integrations block.
   integrations?: Integrations;
+  // The GitLab Secrets the installer wrote: the token Secret (none when the
+  // user brings one) and the CA bundle (none without gitlab.caFile).
+  gitlabSecret?: string;
+  gitlabCaSecret?: string;
+  // The commit identity for GitLab repos (the token's GitLab user).
+  gitlabGit?: Identity;
 };
 
 const isPlainObject = (v: unknown): v is Values =>
@@ -30,7 +36,7 @@ export function deepMerge(base: Values, top: Values): Values {
 
 // The block as chart values, verbatim; nothing when it is empty.
 function integrationValues(integrations: Integrations = {}): Values {
-  const { linear, slack, githubApp, jira } = integrations;
+  const { linear, slack, githubApp, gitlab, jira } = integrations;
   const out: Values = {
     ...(linear
       ? {
@@ -57,6 +63,17 @@ function integrationValues(integrations: Integrations = {}): Values {
             ...(githubApp.tokens !== undefined ? { tokens: githubApp.tokens } : {}),
             tokenScope: githubApp.tokenScope,
             ciResults: githubApp.ciResults,
+          },
+        }
+      : {}),
+    // webhookAuth names the Secret key; the chart reads whichever is set.
+    ...(gitlab
+      ? {
+          gitlab: {
+            enabled: gitlab.enabled,
+            ...(gitlab.botUsername !== undefined ? { botUsername: gitlab.botUsername } : {}),
+            ...(gitlab.botUserId !== undefined ? { botUserId: gitlab.botUserId } : {}),
+            ciResults: gitlab.ciResults,
           },
         }
       : {}),
@@ -93,7 +110,25 @@ export function chartValues(
   const ours: Values = {
     repos: cfg.repos.map(({ url, branch }) => ({ url, branch })),
     llm: llmValues(cfg.llm),
-    ...(extra.clusterIP ? { ironProxy: { clusterIP: extra.clusterIP } } : {}),
+    ...(cfg.gitlab
+      ? {
+          gitlab: {
+            baseUrl: cfg.gitlab.baseUrl,
+            ...(extra.gitlabGit
+              ? { git: { name: extra.gitlabGit.gitName, email: extra.gitlabGit.gitEmail } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(extra.gitlabSecret ? { secrets: { gitlab: { existingSecret: extra.gitlabSecret } } } : {}),
+    ...(extra.clusterIP || extra.gitlabCaSecret
+      ? {
+          ironProxy: {
+            ...(extra.clusterIP ? { clusterIP: extra.clusterIP } : {}),
+            ...(extra.gitlabCaSecret ? { caBundle: extra.gitlabCaSecret } : {}),
+          },
+        }
+      : {}),
     ...(extra.publicBaseUrl ? { controlPlane: { publicBaseUrl: extra.publicBaseUrl } } : {}),
     ...(extra.identity
       ? { git: { name: extra.identity.gitName, email: extra.identity.gitEmail } }

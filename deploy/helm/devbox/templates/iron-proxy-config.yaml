@@ -42,6 +42,19 @@ data:
               methods: [POST]
               paths: ["/*/*/git-upload-pack"]
             {{- range .Values.repos }}
+            {{- if include "devbox.repoIsGitlab" (dict "ctx" $ "url" .url) }}
+            {{- $path := include "devbox.gitlabProjectPath" (dict "ctx" $ "url" .url) }}
+            {{- $prefix := include "devbox.gitlabPrefix" $ }}
+            # A GitLab project: git over HTTPS (info/refs, git-upload-pack and
+            # git-receive-pack under <project>.git) and its REST API. Clients
+            # send the project path as one URL-encoded segment
+            # (group%2Fproject), but iron-proxy matches the decoded path, so
+            # the rule spells it out with slashes.
+            - host: {{ include "devbox.gitlabHost" $ | quote }}
+              paths: [{{ printf "%s/%s/*" $prefix $path | quote }}, {{ printf "%s/%s.git/*" $prefix $path | quote }}]
+            - host: {{ include "devbox.gitlabHost" $ | quote }}
+              paths: [{{ printf "%s/api/v4/projects/%s" $prefix $path | quote }}, {{ printf "%s/api/v4/projects/%s/*" $prefix $path | quote }}]
+            {{- else }}
             {{- $owner := include "devbox.repoOwner" .url }}
             {{- $name := include "devbox.repoName" .url }}
             - host: github.com
@@ -50,6 +63,7 @@ data:
               paths: [{{ printf "/repos/%s/%s/*" $owner $name | quote }}]
             - host: raw.githubusercontent.com
               paths: [{{ printf "/%s/%s/*" $owner $name | quote }}]
+            {{- end }}
             {{- end }}
             {{- $orgs := .Values.github.trustedOrgs }}
             {{- range $orgs }}
@@ -68,6 +82,18 @@ data:
             - host: api.github.com
               methods: [GET, HEAD]
               paths: ["/users/*"]
+            {{- if include "devbox.gitlabBaseUrl" . }}
+            {{- $prefix := include "devbox.gitlabPrefix" . }}
+            # Trust lookups on GitLab: a trusted group's members (inherited
+            # ones included) and a username's id. Group paths decoded, as above.
+            - host: {{ include "devbox.gitlabHost" . | quote }}
+              methods: [GET, HEAD]
+              paths:
+                {{- range .Values.gitlab.trustedGroups }}
+                - {{ printf "%s/api/v4/groups/%s/members/all" $prefix . | quote }}
+                {{- end }}
+                - {{ printf "%s/api/v4/users" $prefix | quote }}
+            {{- end }}
             - host: "*.blob.core.windows.net"
               methods: [GET, HEAD]
               paths: ["/actions-results/*"]
@@ -87,6 +113,15 @@ data:
                 - host: github.com
                 - host: api.github.com
                 - host: raw.githubusercontent.com
+            {{- if include "devbox.gitlabBaseUrl" . }}
+            # The GitLab token. git sends the placeholder as a Basic password,
+            # the harness as a Bearer token: both on the Authorization header.
+            - source: { type: file, path: /var/run/devbox/gitlab/token, ttl: 60s }
+              proxy_value: proxy-gitlab-dummy-token
+              match_headers: [Authorization, PRIVATE-TOKEN]
+              rules:
+                - host: {{ include "devbox.gitlabHost" . | quote }}
+            {{- end }}
             - source: { type: file, path: /var/run/devbox/llm/api-key, ttl: 60s }
               proxy_value: proxy-llm-dummy-token
               # api-key: Azure OpenAI's header. x-api-key: Anthropic's.

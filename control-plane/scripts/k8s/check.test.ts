@@ -39,7 +39,13 @@ const GITHUB_APP = {
 } as const;
 const config = (): DevboxConfig => ({
   repos: [
-    { url: "https://github.com/acme/widgets.git", branch: "main", owner: "acme", name: "widgets" },
+    {
+      url: "https://github.com/acme/widgets.git",
+      branch: "main",
+      host: "github",
+      owner: "acme",
+      name: "widgets",
+    },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "m" },
   github: { trustedOrgs: [], trustedUsers: [] },
@@ -159,6 +165,7 @@ async function run(
     integrations?: Integrations;
     skipPushCheck?: boolean;
     fetch?: ReturnType<typeof fakeFetch>;
+    cfg?: DevboxConfig;
   } = {},
 ) {
   const f = fakeRunner(script);
@@ -171,7 +178,7 @@ async function run(
   };
   const code = await k8sCheck(
     {
-      cfg: config(),
+      cfg: opts.cfg ?? config(),
       target,
       targetPath: "devbox.k8s.json",
       runner: f.runner,
@@ -739,5 +746,161 @@ describe("k8sCheck", () => {
         "POST https://llm.example.com/v1/responses",
       ]);
     });
+  });
+});
+
+describe("k8sCheck with a GitLab instance", () => {
+  const BASE = "https://gitlab.example.com";
+  const GITLAB_TOKEN = "glpat-PLANTED_9";
+  const PROJECT = `${BASE}/api/v4/projects/${encodeURIComponent("platform/api")}`;
+  const gitlabConfig = (caFile?: string): DevboxConfig => ({
+    ...config(),
+    repos: [
+      ...config().repos,
+      {
+        url: `${BASE}/platform/api.git`,
+        branch: "main",
+        host: "gitlab",
+        owner: "platform",
+        name: "api",
+      },
+    ],
+    gitlab: { baseUrl: BASE, ...(caFile ? { caFile } : {}) },
+  });
+  const GITLAB_ON: Integrations = {
+    gitlab: {
+      enabled: true,
+      botUsername: "devbox",
+      botUserId: 2,
+      ciResults: true,
+      webhookAuth: "signing",
+    },
+  };
+  // GitHub, the LLM endpoint and the GitLab instance; the token must match.
+  function gitlabFetch() {
+    const inner = fakeFetch();
+    const calls: string[] = [];
+    const fetch: Fetch = async (url, init) => {
+      const u = String(url);
+      if (!u.startsWith(BASE)) return inner.fetch(url, init);
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${u}`);
+      const auth = new Headers(init?.headers).get("Authorization") ?? "";
+      if (!auth.includes(GITLAB_TOKEN) && !auth.includes(btoa(`oauth2:${GITLAB_TOKEN}`))) {
+        return Response.json({ message: "401 Unauthorized" }, { status: 401 });
+      }
+      if (u === `${BASE}/api/v4/version`) return Response.json({ version: "19.5.3" });
+      if (u === `${BASE}/api/v4/user`)
+        return Response.json({ id: 2, username: "devbox", bot: true });
+      if (u === PROJECT) return Response.json({ id: 1 });
+      if (u === `${BASE}/platform/api.git/info/refs?service=git-receive-pack`) {
+        return new Response("001f# service=git-receive-pack\n");
+      }
+      if (u === `${PROJECT}/merge_requests`)
+        return Response.json({ message: ["no branch"] }, { status: 400 });
+      if (u.startsWith(`${PROJECT}/pipelines`) || u.startsWith(`${PROJECT}/jobs`))
+        return Response.json([]);
+      if (u.startsWith(`${BASE}/api/v4/groups/`)) return Response.json([{ id: 3 }]);
+      return new Response("", { status: 404 });
+    };
+    return { fetch, calls };
+  }
+
+  it("checks the token Secret, the CA Secret, the token against the instance and the webhook key", async () => {
+    const r = await run(
+      [
+        GITHUB_OK,
+        LLM_OK,
+        found("devbox-gitlab", { token: GITLAB_TOKEN }),
+        found("devbox-gitlab-ca", { "ca.crt": "-----BEGIN CERTIFICATE-----\nCA\n" }),
+        found("devbox-integrations", { GITLAB_WEBHOOK_SIGNING_TOKEN: "whsec_x" }),
+      ],
+      {
+        cfg: gitlabConfig("/etc/corp-ca.pem"),
+        integrations: GITLAB_ON,
+        values: { gitlab: { trustedGroups: ["platform"] } },
+        fetch: gitlabFetch(),
+      },
+    );
+    expect(r.logs).toEqual([
+      HEADER,
+      "  ok    Secret devbox-github",
+      "  ok    Secret devbox-llm",
+      "  ok    Secret devbox-gitlab",
+      "  ok    Secret devbox-gitlab-ca",
+      "  ok    Secret devbox-integrations",
+      "  ok    GitHub token",
+      "  ok    LLM key",
+      "  ok    GitLab token (devbox acts as devbox, id 2, on GitLab 19.5.3)",
+      "  ok    Secret devbox-integrations: GITLAB_WEBHOOK_SIGNING_TOKEN",
+      "All checks passed.",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.fetchCalls).toContain(`GET ${BASE}/api/v4/groups/platform/members/all?per_page=1`);
+  });
+
+  it("a newline in the token, a wrong token and a missing webhook key each fail", async () => {
+    const r = await run(
+      [
+        GITHUB_OK,
+        LLM_OK,
+        found("devbox-gitlab", { token: `${GITLAB_TOKEN}\n` }),
+        found("devbox-integrations", { GITLAB_WEBHOOK_SECRET: "legacy" }),
+      ],
+      { cfg: gitlabConfig(), integrations: GITLAB_ON, fetch: gitlabFetch() },
+    );
+    expect(r.logs).toContain('  FAIL  Secret devbox-gitlab: key "token" ends with a newline');
+    expect(r.logs).toContain('  skip  GitLab token: no usable key "token" in Secret devbox-gitlab');
+    expect(r.logs).toContain(
+      '  FAIL  Secret devbox-integrations: GITLAB_WEBHOOK_SIGNING_TOKEN: no key "GITLAB_WEBHOOK_SIGNING_TOKEN"',
+    );
+    expect(r.code).toBe(1);
+
+    const wrong = await run([GITHUB_OK, LLM_OK, found("devbox-gitlab", { token: "glpat-other" })], {
+      cfg: gitlabConfig(),
+      fetch: gitlabFetch(),
+    });
+    expect(
+      wrong.logs.some((l) => l.startsWith("  FAIL  GitLab token: GitLab rejected GITLAB_TOKEN")),
+    ).toBe(true);
+  });
+
+  it("GitLab repos only: the GitHub token Secret may be empty and the GitHub check is skipped", async () => {
+    const only: DevboxConfig = {
+      ...config(),
+      repos: [
+        {
+          url: `${BASE}/platform/api.git`,
+          branch: "main",
+          host: "gitlab",
+          owner: "platform",
+          name: "api",
+        },
+      ],
+      gitlab: { baseUrl: BASE },
+    };
+    const r = await run(
+      [
+        found("devbox-github", { token: "" }),
+        LLM_OK,
+        found("devbox-gitlab", { token: GITLAB_TOKEN }),
+      ],
+      { cfg: only, fetch: gitlabFetch() },
+    );
+    expect(r.logs).toContain("  ok    Secret devbox-github");
+    expect(r.logs).toContain("  skip  GitHub token: no GitHub repo and no GitHub App: not used");
+    expect(r.logs.some((l) => l.includes("FAIL") && l.includes("devbox-github"))).toBe(false);
+  });
+
+  it("the user's own GitLab Secret is read by its name", async () => {
+    const r = await run([GITHUB_OK, LLM_OK, found("my-gitlab", { token: GITLAB_TOKEN })], {
+      cfg: gitlabConfig(),
+      values: { secrets: { gitlab: { existingSecret: "my-gitlab" } } },
+      fetch: gitlabFetch(),
+    });
+    expect(r.logs).toContain("  ok    Secret my-gitlab");
+    expect(r.logs).toContain(
+      "  ok    GitLab token (devbox acts as devbox, id 2, on GitLab 19.5.3)",
+    );
   });
 });

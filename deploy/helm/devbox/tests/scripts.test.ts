@@ -237,12 +237,32 @@ describe("snapshot-builder.sh", () => {
   it("fetches repos already in the scratch volume", async () => {
     setup();
     mkdirSync(obj("repos", "widgets", ".git"), { recursive: true });
-    await runScript("snapshot-builder.sh", env());
+    await runScript("snapshot-builder.sh", {
+      ...env(),
+      FAKE_REMOTE_URL: "https://github.com/acme/widgets.git",
+    });
     const git = readFileSync(obj("git.log"), "utf8").trim().split("\n").map((l) => l.split("|")[0]);
-    expect(git.slice(0, 3)).toEqual([
+    expect(git.slice(0, 4)).toEqual([
+      `-C ${obj("repos")}/widgets config --get remote.origin.url`,
       `-C ${obj("repos")}/widgets -c core.fsync=all fetch -q --depth 1 origin +refs/heads/main:refs/remotes/origin/main`,
       `-C ${obj("repos")}/widgets checkout -q -f -B main origin/main`,
       `-C ${obj("repos")}/widgets clean -q -ffdx`,
+    ]);
+  });
+
+  it("re-points a checkout whose remote changed before fetching it", async () => {
+    setup();
+    mkdirSync(obj("repos", "widgets", ".git"), { recursive: true });
+    const r = await runScript("snapshot-builder.sh", {
+      ...env(),
+      FAKE_REMOTE_URL: "https://gitlab.example.com/old/widgets.git",
+    });
+    expect(r.stdout).toContain("origin of widgets changed; pointing it at https://github.com/acme/widgets.git");
+    const git = readFileSync(obj("git.log"), "utf8").trim().split("\n").map((l) => l.split("|")[0]);
+    expect(git.slice(0, 3)).toEqual([
+      `-C ${obj("repos")}/widgets config --get remote.origin.url`,
+      `-C ${obj("repos")}/widgets remote set-url origin https://github.com/acme/widgets.git`,
+      `-C ${obj("repos")}/widgets -c core.fsync=all fetch -q --depth 1 origin +refs/heads/main:refs/remotes/origin/main`,
     ]);
   });
 
@@ -261,5 +281,103 @@ describe("snapshot-builder.sh", () => {
     const r = await runScript("snapshot-builder.sh", { ...env(), REPOS: "-oProxyCommand=x main" });
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain("unsupported repo url: -oProxyCommand=x");
+  });
+
+  describe("with a GitLab instance", () => {
+    const GITLAB_TOKEN = "glpat-realtoken456";
+    const gitlabEnv = () => ({
+      ...env(),
+      REPOS: "https://github.com/acme/widgets.git main\nhttps://git.example.com/gitlab/platform/backend/api.git develop",
+      GITLAB_BASE_URL: "https://git.example.com/gitlab",
+      GITLAB_SECRET: "my-gitlab-token",
+    });
+    const gitlabSetup = (token = GITLAB_TOKEN) => {
+      setup();
+      mkdirSync(obj("devbox", "secret", "my-gitlab-token"), { recursive: true });
+      writeFileSync(obj("devbox", "secret", "my-gitlab-token", "token"), `${token}\n`);
+    };
+    const gitlabBasic = Buffer.from(`oauth2:${GITLAB_TOKEN}`).toString("base64");
+
+    it("clones repos under the instance with its token, each host with its own header", async () => {
+      gitlabSetup();
+      const r = await runScript("snapshot-builder.sh", gitlabEnv());
+      expect(r.code).toBe(0);
+      // fake-git logs GIT_CONFIG_VALUE_0 (GitHub's header); GitLab's is slot 1.
+      expect(readFileSync(obj("git.log"), "utf8").trim().split("\n")).toEqual([
+        `-c core.fsync=all clone -q --depth 1 --single-branch --branch main -- https://github.com/acme/widgets.git ${obj("repos")}/widgets|Authorization: Basic ${basic}`,
+        `-c core.fsync=all clone -q --depth 1 --single-branch --branch develop -- https://git.example.com/gitlab/platform/backend/api.git ${obj("repos")}/api|Authorization: Basic ${basic}`,
+      ]);
+      expect(calls().slice(0, 2)).toEqual([
+        "get secret devbox-github -n devbox -o jsonpath={.data.token}",
+        "get secret my-gitlab-token -n devbox -o jsonpath={.data.token}",
+      ]);
+    });
+
+    it("adds a private CA to the system bundle for git, so GitHub keeps working", async () => {
+      gitlabSetup();
+      writeFileSync(obj("system-ca.crt"), "SYSTEM-CA\n");
+      mkdirSync(obj("devbox", "secret", "corp-ca"), { recursive: true });
+      writeFileSync(obj("devbox", "secret", "corp-ca", "ca.crt"), "PRIVATE-CA\n");
+      const r = await runScript("snapshot-builder.sh", {
+        ...gitlabEnv(),
+        GITLAB_CA_SECRET: "corp-ca",
+        SYSTEM_CA_BUNDLE: obj("system-ca.crt"),
+        TMPDIR: obj(""),
+      });
+      expect(r.code).toBe(0);
+      expect(calls()[2]).toContain("get secret corp-ca -n devbox -o jsonpath={.data.ca");
+      const bundle = readFileSync(obj("ssl.log"), "utf8").trim();
+      expect(bundle).toBe(obj("devbox-ca-bundle.crt"));
+      // The script ends the bundle with a newline of its own, for a PEM without one.
+      expect(readFileSync(bundle, "utf8")).toBe("SYSTEM-CA\nPRIVATE-CA\n\n");
+    });
+
+    it("stops when the CA Secret cannot be read, without cloning unverified", async () => {
+      gitlabSetup();
+      const r = await runScript("snapshot-builder.sh", { ...gitlabEnv(), GITLAB_CA_SECRET: "corp-ca" });
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('secret "corp-ca" not found');
+      expect(existsSync(obj("git.log"))).toBe(false);
+    });
+
+    it("leaves git on the system store without a private CA", async () => {
+      gitlabSetup();
+      await runScript("snapshot-builder.sh", gitlabEnv());
+      expect(existsSync(obj("ssl.log"))).toBe(false);
+    });
+
+    it("puts the GitLab header in the first slot when the GitHub token is empty", async () => {
+      gitlabSetup();
+      writeFileSync(obj("devbox", "secret", "devbox-github", "token"), "");
+      const r = await runScript("snapshot-builder.sh", {
+        ...gitlabEnv(),
+        REPOS: "https://git.example.com/gitlab/platform/backend/api.git develop",
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("the GitHub token is empty: cloning anonymously");
+      expect(readFileSync(obj("git.log"), "utf8").trim().split("\n")).toEqual([
+        `-c core.fsync=all clone -q --depth 1 --single-branch --branch develop -- https://git.example.com/gitlab/platform/backend/api.git ${obj("repos")}/api|Authorization: Basic ${gitlabBasic}`,
+      ]);
+    });
+
+    it("stops when it cannot read the GitLab Secret", async () => {
+      setup();
+      const r = await runScript("snapshot-builder.sh", gitlabEnv());
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('secret "my-gitlab-token" not found');
+      expect(existsSync(obj("git.log"))).toBe(false);
+    });
+
+    it("refuses a repo outside github.com and the instance", async () => {
+      gitlabSetup();
+      const r = await runScript("snapshot-builder.sh", {
+        ...gitlabEnv(),
+        REPOS: "https://git.example.com/other/acme/api.git main",
+      });
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain(
+        "unsupported repo url: https://git.example.com/other/acme/api.git (expected https://github.com/<owner>/<repo>.git or https://git.example.com/gitlab/<group>/<project>.git)",
+      );
+    });
   });
 });

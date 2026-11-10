@@ -252,12 +252,10 @@ describe("JiraIntegration status", () => {
 });
 
 const ISSUE_TASK = { ...TASK, externalId: "10042" } as Task;
-// What the code host hands the hook: the URL and its github.com coordinates.
 const PR: PrRef = {
   url: "https://github.com/acme/widgets/pull/42",
   repo: "widgets",
   branch: "devbox/x",
-  github: { owner: "acme", repo: "widgets", prNumber: 42 },
 };
 
 // The issue as the hooks read it: its status and assignee (null: unassigned).
@@ -392,16 +390,15 @@ describe("JiraIntegration onPrOpened", () => {
   });
 
   it.each([
-    // The code host gives no coordinates for these.
-    ["a lookalike host", "https://github.com.evil.example/acme/widgets/pull/42", null],
-    ["credentials", "https://user:secret@github.com/acme/widgets/pull/42", null],
-    ["another host", "https://git.example.com/acme/widgets/pull/42", null],
-    ["a script", "javascript:alert(1)", null],
-    // It does for http, which Jira would still show as a link.
-    ["http", "http://github.com/acme/widgets/pull/42", PR.github],
-  ])("never links a URL with %s, and says so", async (_, url, github) => {
+    ["a lookalike host", "https://github.com.evil.example/acme/widgets/pull/42"],
+    ["credentials", "https://user:secret@github.com/acme/widgets/pull/42"],
+    ["another host", "https://git.example.com/acme/widgets/pull/42"],
+    ["a script", "javascript:alert(1)"],
+    ["http", "http://github.com/acme/widgets/pull/42"],
+    ["a pull request number that isn't one", "https://github.com/acme/widgets/pull/42x"],
+  ])("never links a URL with %s, and says so", async (_, url) => {
     const { jira, jiraCalls } = setup();
-    await jira.onPrOpened(hookCtx([]), ISSUE_TASK, { ...PR, url, github });
+    await jira.onPrOpened(hookCtx([]), ISSUE_TASK, { ...PR, url });
     expect(jiraCalls).toEqual([]);
     expect(logged(warn)).toEqual([
       ["jira PR link skipped: not a GitHub pull request URL", { taskId: "task-1" }],

@@ -10,8 +10,8 @@ import {
 import { type Doc, type Rendered, renderWith } from "./render";
 
 const REPOS = [
-  { url: "https://github.com/acme/widgets.git", branch: "main", owner: "acme", name: "widgets" },
-  { url: "https://github.com/acme/gadgets.git", branch: "dev", owner: "acme", name: "gadgets" },
+  { url: "https://github.com/acme/widgets.git", branch: "main", host: "github", owner: "acme", name: "widgets" },
+  { url: "https://github.com/acme/gadgets.git", branch: "dev", host: "github", owner: "acme", name: "gadgets" },
 ];
 const setRepos = `repos=${JSON.stringify(REPOS.map(({ url, branch }) => ({ url, branch })))}`;
 
@@ -116,5 +116,227 @@ describe("iron-proxy config", () => {
     const b = (await chartConfig("https://other.example.com/v1")).rendered;
     expect(checksum(a)).toMatch(/^[0-9a-f]{64}$/);
     expect(checksum(a)).not.toBe(checksum(b));
+  });
+});
+
+// Bun.YAML reads the chart's 0440 as decimal 440 (YAML 1.2 has no leading-zero octal).
+const MODE_0440 = 440;
+
+describe("iron-proxy config with a GitLab instance", () => {
+  const GITLAB = [
+    "gitlab.baseUrl=https://git.example.com/gitlab",
+    "secrets.gitlab.existingSecret=my-gitlab-token",
+  ];
+  const repos = `repos=${JSON.stringify([
+    { url: "https://github.com/acme/widgets.git", branch: "main" },
+    { url: "https://git.example.com/gitlab/platform/backend/api.git", branch: "develop" },
+  ])}`;
+
+  it("matches the Compose renderer, GitLab rules and token swap included", async () => {
+    const compose = Bun.YAML.parse(
+      renderIronProxyConfig(
+        readFileSync(TEMPLATE_PATH, "utf8"),
+        {
+          repos: [
+            ...REPOS.slice(0, 1),
+            {
+              url: "https://git.example.com/gitlab/platform/backend/api.git",
+              branch: "develop",
+              host: "gitlab",
+              owner: "platform/backend",
+              name: "api",
+            },
+          ],
+          github: { trustedOrgs: ["example-org"], trustedUsers: [] },
+          gitlab: {
+            baseUrl: "https://git.example.com/gitlab",
+            trustedGroups: ["platform", "platform/backend"],
+          },
+          llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "m" },
+        },
+        "1.1.1.1:53",
+        { githubTokenSource: "file" },
+      ),
+    ) as Doc;
+    const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      "github.trustedOrgs={example-org}",
+      "gitlab.trustedGroups={platform,platform/backend}",
+    ]);
+    expect(config.transforms[0]).toEqual(compose.transforms[0]);
+    expect(withoutSource(config.transforms[1])).toEqual(withoutSource(compose.transforms[1]));
+    expect(config.transforms[1].config.secrets.map((s: Doc) => s.source)).toEqual([
+      { type: "file", path: "/var/run/devbox/github/token", ttl: "60s" },
+      { type: "file", path: "/var/run/devbox/gitlab/token", ttl: "60s" },
+      { type: "file", path: "/var/run/devbox/llm/api-key", ttl: "60s" },
+    ]);
+  });
+
+  // iron-proxy matched "/api/v4/projects/g/sg/p/..." (decoded) against a
+  // "%2F" rule and rejected it, in the first live run on EKS.
+  it("allows the project's git and API paths under the instance's URL root, and nothing else there", async () => {
+    const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
+    const rules = config.transforms[0].config.rules as Doc[];
+    // The project rules (any method); the read-only trust rules are tested below.
+    const gitlab = rules.filter((r) => r.host === "git.example.com" && !r.methods);
+    expect(gitlab).toEqual([
+      { host: "git.example.com", paths: ["/gitlab/platform/backend/api/*", "/gitlab/platform/backend/api.git/*"] },
+      {
+        host: "git.example.com",
+        // Decoded, not %2F: iron-proxy matches the decoded request path.
+        paths: ["/gitlab/api/v4/projects/platform/backend/api", "/gitlab/api/v4/projects/platform/backend/api/*"],
+      },
+    ]);
+    // The GitHub repo keeps its usual rules; the GitLab one gets none on github.com.
+    expect(rules).toContainEqual({ host: "github.com", paths: ["/acme/widgets/*", "/acme/widgets.git/*"] });
+    expect(JSON.stringify(rules.filter((r) => r.host !== "git.example.com"))).not.toContain("backend");
+  });
+
+  it("allows the trust lookups read-only: each trusted group's members, and usernames", async () => {
+    const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      'gitlab.trustedGroups={platform,platform/backend}',
+    ]);
+    const rules = config.transforms[0].config.rules as Doc[];
+    expect(rules.filter((r) => r.host === "git.example.com" && r.methods)).toEqual([
+      {
+        host: "git.example.com",
+        methods: ["GET", "HEAD"],
+        paths: [
+          "/gitlab/api/v4/groups/platform/members/all",
+          "/gitlab/api/v4/groups/platform/backend/members/all",
+          "/gitlab/api/v4/users",
+        ],
+      },
+    ]);
+    // Without groups, usernames can still be resolved.
+    const plain = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
+    const plainRules = plain.config.transforms[0].config.rules as Doc[];
+    expect(plainRules.filter((r) => r.host === "git.example.com" && r.methods)).toEqual([
+      { host: "git.example.com", methods: ["GET", "HEAD"], paths: ["/gitlab/api/v4/users"] },
+    ]);
+  });
+
+  it("swaps the GitLab token on the Authorization header for that host only", async () => {
+    const { config, rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
+    const secrets = config.transforms[1].config.secrets as Doc[];
+    expect(secrets.map((s) => s.source.path)).toEqual([
+      "/var/run/devbox/github/token",
+      "/var/run/devbox/gitlab/token",
+      "/var/run/devbox/llm/api-key",
+    ]);
+    expect(secrets[1]).toEqual({
+      source: { type: "file", path: "/var/run/devbox/gitlab/token", ttl: "60s" },
+      proxy_value: "proxy-gitlab-dummy-token",
+      match_headers: ["Authorization", "PRIVATE-TOKEN"],
+      rules: [{ host: "git.example.com" }],
+    });
+    const spec = (rendered["Deployment/devbox/devbox-iron-proxy"] as Doc).spec.template.spec;
+    expect(spec.volumes).toContainEqual({
+      name: "gitlab",
+      secret: { secretName: "my-gitlab-token", defaultMode: MODE_0440, items: [{ key: "token", path: "token" }] },
+    });
+    expect(spec.containers[0].volumeMounts).toContainEqual({
+      name: "gitlab",
+      mountPath: "/var/run/devbox/gitlab",
+      readOnly: true,
+    });
+  });
+
+  it("mounts an optional CA bundle for the proxy's own upstream connections", async () => {
+    const { rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      "ironProxy.caBundle=corp-ca",
+    ]);
+    const deployment = rendered["Deployment/devbox/devbox-iron-proxy"] as Doc;
+    const spec = deployment.spec.template.spec;
+    expect(spec.containers[0].env).toEqual([{ name: "SSL_CERT_FILE", value: "/etc/devbox/ca/ca.crt" }]);
+    expect(spec.containers[0].volumeMounts).toContainEqual({
+      name: "ca-bundle",
+      mountPath: "/etc/devbox/ca",
+      readOnly: true,
+    });
+    expect(spec.volumes).toContainEqual({
+      name: "ca-bundle",
+      secret: { secretName: "corp-ca", defaultMode: MODE_0440, items: [{ key: "ca.crt", path: "ca.crt" }] },
+    });
+    expect(deployment.spec.template.metadata.annotations["checksum/ca-bundle"]).toMatch(/^[0-9a-f]{64}$/);
+    // The control plane (its own GitLab calls) and the snapshot builder (clones)
+    // talk to the instance directly too, so they get the bundle as well.
+    const caVolume = {
+      name: "ca-bundle",
+      secret: { secretName: "corp-ca", defaultMode: MODE_0440, items: [{ key: "ca.crt", path: "ca.crt" }] },
+    };
+    const caMount = { name: "ca-bundle", mountPath: "/etc/devbox/ca", readOnly: true };
+    const cp = (rendered["Deployment/devbox/devbox-control-plane"] as Doc).spec.template;
+    expect(cp.spec.containers[0].env).toContainEqual({ name: "NODE_EXTRA_CA_CERTS", value: "/etc/devbox/ca/ca.crt" });
+    expect(cp.spec.containers[0].volumeMounts).toContainEqual(caMount);
+    // 0444: the control plane runs as uid 1000 without an fsGroup, and a CA
+    // certificate is public.
+    expect(cp.spec.volumes).toContainEqual({ ...caVolume, secret: { ...caVolume.secret, defaultMode: 444 } });
+    expect(cp.metadata.annotations["checksum/ca-bundle"]).toMatch(/^[0-9a-f]{64}$/);
+    // The builder runs in the sandbox namespace, so it reads the Secret
+    // through the API like the tokens, and its Role names it.
+    const builder = (rendered["CronJob/devbox-sandboxes/devbox-snapshot-builder"] as Doc).spec.jobTemplate.spec.template.spec;
+    expect(builder.containers[0].env).toContainEqual({ name: "GITLAB_CA_SECRET", value: "corp-ca" });
+    expect(JSON.stringify(builder.volumes)).not.toContain("ca-bundle");
+    expect((rendered["Role/devbox/devbox-snapshot-builder-token"] as Doc).rules[0].resourceNames).toEqual([
+      "devbox-github",
+      "my-gitlab-token",
+      "corp-ca",
+    ]);
+    // Without it: no env, no mount, as before.
+    const plain = (await chartConfig("https://llm.example.com/v1")).rendered;
+    const plainSpec = (plain["Deployment/devbox/devbox-iron-proxy"] as Doc).spec.template.spec;
+    expect(plainSpec.containers[0].env).toBeUndefined();
+    expect(JSON.stringify(plainSpec.volumes)).not.toContain("ca-bundle");
+    expect(JSON.stringify(plainSpec.volumes)).not.toContain("gitlab");
+    expect(JSON.stringify(plain["Deployment/devbox/devbox-control-plane"])).not.toContain("ca-bundle");
+    expect(JSON.stringify(plain["CronJob/devbox-sandboxes/devbox-snapshot-builder"])).not.toContain("ca-bundle");
+  });
+
+  it("lets the snapshot builder read the GitLab token Secret, and only with GitLab on", async () => {
+    const names = (r: Rendered) =>
+      (r["Role/devbox/devbox-snapshot-builder-token"] as Doc).rules[0].resourceNames;
+    const { rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
+    expect(names(rendered)).toEqual(["devbox-github", "my-gitlab-token"]);
+    expect(names((await chartConfig("https://llm.example.com/v1")).rendered)).toEqual(["devbox-github"]);
+    // The Secret still named but the instance cleared: GitLab is off, so no access.
+    const cleared = await chartConfig("https://llm.example.com/v1", [], "openai", [
+      "secrets.gitlab.existingSecret=my-gitlab-token",
+    ]);
+    expect(names(cleared.rendered)).toEqual(["devbox-github"]);
+  });
+
+  it("tells the control plane and the snapshot builder about the instance", async () => {
+    const { rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
+    const envOf = (doc: Doc) =>
+      Object.fromEntries(doc.spec.template.spec.containers[0].env.map((e: Doc) => [e.name, e.value]));
+    expect(envOf(rendered["Deployment/devbox/devbox-control-plane"] as Doc).GITLAB_BASE_URL).toBe(
+      "https://git.example.com/gitlab",
+    );
+    const builder = (rendered["Job/devbox-sandboxes/devbox-snapshot-builder-install"] as Doc).spec.template.spec
+      .containers[0].env;
+    expect(builder).toContainEqual({ name: "GITLAB_BASE_URL", value: "https://git.example.com/gitlab" });
+    expect(builder).toContainEqual({ name: "GITLAB_SECRET", value: "my-gitlab-token" });
+    const plain = (await chartConfig("https://llm.example.com/v1")).rendered;
+    expect("GITLAB_BASE_URL" in envOf(plain["Deployment/devbox/devbox-control-plane"] as Doc)).toBe(false);
+  });
+
+  it("passes gitlab.git as the commit identity for GitLab repos, next to git, only when set", async () => {
+    const envOf = (doc: Doc) =>
+      Object.fromEntries(doc.spec.template.spec.containers[0].env.map((e: Doc) => [e.name, e.value]));
+    const { rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      "gitlab.git.name=devbox",
+      "gitlab.git.email=2-devbox@users.noreply.git.example.com",
+    ]);
+    const env = envOf(rendered["Deployment/devbox/devbox-control-plane"] as Doc);
+    expect(env.SANDBOX_GITLAB_GIT_NAME).toBe("devbox");
+    expect(env.SANDBOX_GITLAB_GIT_EMAIL).toBe("2-devbox@users.noreply.git.example.com");
+    // The deployment's own identity is untouched.
+    expect(env.SANDBOX_GIT_NAME).toBe("devbox");
+    const unset = (await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB)).rendered;
+    expect("SANDBOX_GITLAB_GIT_NAME" in envOf(unset["Deployment/devbox/devbox-control-plane"] as Doc)).toBe(false);
   });
 });

@@ -1,4 +1,17 @@
 import type { Context } from "hono";
+import type { Task } from "../../db/schema";
+import { retryable, SEND_TIMEOUT_MS, withTimeout } from "../http";
+import type { Outbound, SendCtx } from "../outbound";
+import type {
+  HookCtx,
+  Integration,
+  IntegrationDefinition,
+  PrOpenedCtx,
+  PrRef,
+  ReplyTarget,
+  Round,
+} from "../types";
+import { assignToTaskPerson } from "./assignee";
 import {
   addIssueCommentReaction,
   addReviewCommentReaction,
@@ -7,11 +20,10 @@ import {
   postIssueComment,
   postReviewCommentReply,
   requestReviewers,
-} from "../../clients/github";
-import type { Task } from "../../db/schema";
-import { retryable } from "../http";
-import type { Outbound, SendCtx } from "../outbound";
-import type { HookCtx, Integration, IntegrationDefinition, ReplyTarget, Round } from "../types";
+} from "./client";
+// Not through the barrel, which tests replace: setting the client up is no
+// call to GitHub.
+import { configureGithubClient } from "./clientApi";
 import { type GithubConfig, parseGithubConfig } from "./config";
 import { type GithubSpec, isGithubSpec } from "./rounds";
 import { type GithubStatus, GithubStatusService } from "./status";
@@ -25,6 +37,7 @@ export const github: IntegrationDefinition<GithubConfig> = {
   createsTasks: false,
   parseConfig: parseGithubConfig,
   create(core, cfg) {
+    configureGithubClient({ log: core.log });
     const controller = new GitHubWebhookController(core.tasks, cfg, core.log);
     const status = new GithubStatusService(githubTokenState, {
       enabled: true,
@@ -45,14 +58,16 @@ export const github: IntegrationDefinition<GithubConfig> = {
 // live progress, and it is public: a failure's raw detail never goes there.
 export class GithubIntegration implements Integration {
   // Its webhooks turn @-mentions of the bot into rounds.
-  readonly prMentionLogin: string;
+  private readonly botLogin: string;
 
   constructor(
     cfg: Pick<GithubConfig, "botLogin">,
     private statusService: Pick<GithubStatusService, "status">,
     private controller: Pick<GitHubWebhookController, "handleWebhook">,
+    // Bounds the onboarding comment.
+    private readonly sendTimeoutMs = SEND_TIMEOUT_MS,
   ) {
-    this.prMentionLogin = cfg.botLogin;
+    this.botLogin = cfg.botLogin;
   }
 
   // Today's responses: 403 for untrusted actors, 503 when the trusted set
@@ -77,13 +92,56 @@ export class GithubIntegration implements Integration {
       case "progress":
         return;
       case "failure":
-        await deliverFailure(ctx, spec, message, this.prMentionLogin);
+        await deliverFailure(ctx, spec, message, this.botLogin);
         return;
       default: {
         const _exhaustive: never = message;
         void _exhaustive;
       }
     }
+  }
+
+  // github.com pull requests are GitHub's: core hands it each new one.
+  hostsPr(url: string): boolean {
+    return parsePrUrl(url) !== null;
+  }
+
+  // The agent opened a pull request on github.com (core calls this as the
+  // PR's code host's integration, once per PR). Two things, each on its own:
+  // a failed comment doesn't cost the PR its assignee.
+  // - The onboarding comment, awaited: comment interactivity is invisible
+  //   unless users know it exists.
+  // - The assignee: the task's person, through their linked GitHub account.
+  //   In the background, since its round trips (the task's integration, then
+  //   GitHub) must not stall the tick and nothing reads its result.
+  // Both happen only while GitHub is on, that is while its webhooks are: a
+  // deployment on a personal token, with no webhooks, gets neither.
+  async onPrOpened(ctx: PrOpenedCtx, task: Task, pr: PrRef): Promise<void> {
+    if (!ctx.firstTime) return;
+    const gh = parsePrUrl(pr.url);
+    if (!gh) return;
+    // Under its own timeout, not only the hook's: a post that never settles,
+    // whatever its abort signal, would leave this hook suspended, and the
+    // assignee below would never start. The PR is recorded either way, and a
+    // replay skips this hook.
+    await withTimeout(this.sendTimeoutMs, (signal) =>
+      postIssueComment(
+        gh.owner,
+        gh.repo,
+        gh.prNumber,
+        onboardingCommentBody(this.botLogin, task.key),
+        signal,
+      ),
+    ).catch((err: unknown) => {
+      const e = err instanceof Error ? err : new Error(String(err));
+      ctx.log.error("onboarding comment post failed", {
+        taskId: task.id,
+        prUrl: pr.url,
+        message: e.message,
+        stack: e.stack,
+      });
+    });
+    ctx.background(assignToTaskPerson(ctx, task, { url: pr.url, ...gh }));
   }
 
   // A finished review re-requests review from its reviewer, once (a replayed
@@ -97,6 +155,18 @@ export class GithubIntegration implements Integration {
       await requestReviewFromOriginalReviewer(ctx, round, task);
     }
   }
+}
+
+// Built per-call from the login @-mentions go to, so the displayed name and
+// the `@mention` example always match the actual GitHub App identity
+// (GITHUB_BOT_LOGIN).
+function onboardingCommentBody(botLogin: string, taskKey: string): string {
+  return [
+    `👋 I'm **${botLogin}**. I opened this PR from task \`${taskKey}\`.`,
+    "",
+    `Mention \`@${botLogin}\` and I'll act on it — on a top-level PR comment,`,
+    "in a review summary, or on an inline comment on the diff. Without a mention I won't see it.",
+  ].join("\n");
 }
 
 async function requestReviewFromOriginalReviewer(

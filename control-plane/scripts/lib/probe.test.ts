@@ -69,6 +69,18 @@ describe("probeWebhook", () => {
     });
   });
 
+  it("GitLab: probes /webhook/gitlab and names integrations.gitlab.enabled on 404", async () => {
+    const opts = { fromApiIngress: false, integration: "GitLab" } as const;
+    const ok = fakeFetch(() => Response.json({ error: "invalid signature" }, { status: 401 }));
+    expect(await probeWebhook(PUBLIC, "/webhook/gitlab", ok.fetch, opts)).toEqual({ ok: true });
+    expect(ok.requests.map((r) => r.url)).toEqual([`${PUBLIC}/webhook/gitlab`]);
+    const missing = fakeFetch(() => new Response("404 Not Found", { status: 404 }));
+    expect(await probeWebhook(PUBLIC, "/webhook/gitlab", missing.fetch, opts)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("that integrations.gitlab.enabled is true and applied"),
+    });
+  });
+
   it("Jira: probes /webhook/jira and names integrations.jira.enabled on 404", async () => {
     const hook = "https://hooks.example.com/webhook/jira";
     const ok = fakeFetch(() => Response.json({ error: "invalid signature" }, { status: 401 }));

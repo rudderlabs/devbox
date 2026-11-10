@@ -1,9 +1,11 @@
-"""Handler for `kind='ci_result'` inbox rows — a CI failure on a harness PR.
+"""Handler for `kind='ci_result'` inbox rows — a CI failure on a harness PR
+or merge request.
 
-Fetches failed job logs from GitHub Actions, feeds them to the DeepAgents CI
-agent for analysis and fix, then backfills any missing reply and marks the
-round complete via fill_missed_replies_and_complete_round. No agent_action
-progress events — ci_result is always source='github' and GitHub has no
+Fetches failed job logs from the run's code host (GitHub Actions, or a GitLab
+pipeline), feeds them to the DeepAgents CI agent for analysis and fix, then
+backfills any missing reply and marks the round complete via
+fill_missed_replies_and_complete_round. No agent_action progress events —
+ci_result comes only from GitHub or GitLab, neither of which has an
 agent-session UI.
 """
 
@@ -13,6 +15,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from harness.ci_logs import fetch_failed_job_logs, parse_run_url
+from harness.codehost import client_for_run_url
 from harness.followup import ci_thread_id, round_started, run_followup_ci
 from harness.handlers._common import (
     fill_missed_replies_and_complete_round,
@@ -70,9 +73,8 @@ def process_ci_result(entry: dict[str, Any], state: DaemonState) -> None:
     else:
         owner, repo, run_id = "", "", None
 
-    # No agent_action progress emit — ci_result is always source='github'
-    # and GitHub has no agent-session UI (comment/review handlers also skip
-    # progress events for GitHub source).
+    # No agent_action progress emit — a code host has no agent-session UI
+    # (the comment/review handlers also skip progress for GitHub and GitLab).
 
     failed_jobs: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -84,6 +86,7 @@ def process_ci_result(entry: dict[str, Any], state: DaemonState) -> None:
                 repo,
                 int(run_id),
                 log_dir,
+                client=client_for_run_url(run_url),
             )
         except Exception as exc:
             print(

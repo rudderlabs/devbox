@@ -12,6 +12,8 @@ export const INSTALLER_LABEL = "app.kubernetes.io/managed-by=devbox-installer";
 export const INTEGRATIONS_SECRET = "devbox-integrations";
 export const GITHUB_SECRET = "devbox-github";
 export const GITHUB_APP_SECRET = "devbox-github-app";
+export const GITLAB_SECRET = "devbox-gitlab";
+export const GITLAB_CA_SECRET = "devbox-gitlab-ca";
 
 // The secrets of every integration, as env names, the keys of the
 // integrations Secret. The installer resolves only those of enabled integrations.
@@ -20,6 +22,8 @@ export type IntegrationSecretName =
   | "LINEAR_WEBHOOK_SECRET"
   | "SLACK_BOT_TOKEN"
   | "GITHUB_WEBHOOK_SECRET"
+  | "GITLAB_WEBHOOK_SIGNING_TOKEN"
+  | "GITLAB_WEBHOOK_SECRET"
   | "JIRA_API_TOKEN"
   | "JIRA_WEBHOOK_SECRET";
 
@@ -36,6 +40,9 @@ export function userSecrets(
     github?: { token: string; expiresAt?: string };
     // The GitHub App's private key, for its devbox-minted tokens.
     githubApp?: { pem: string };
+    // The GitLab token, and the instance's private CA (gitlab.caFile).
+    gitlab?: { token: string };
+    gitlabCa?: { pem: string };
     llm: string;
     integrations: Partial<Record<IntegrationSecretName, string>>;
   },
@@ -51,6 +58,12 @@ export function userSecrets(
   if (tokens.githubApp && !existingSecret(values, "githubApp")) {
     out.push({ name: GITHUB_APP_SECRET, data: { "private-key": tokens.githubApp.pem } });
   }
+  if (tokens.gitlab && !existingSecret(values, "gitlab")) {
+    out.push({ name: GITLAB_SECRET, data: { token: tokens.gitlab.token } });
+  }
+  // The CA is public; a Secret only because that is what the chart mounts.
+  if (tokens.gitlabCa)
+    out.push({ name: GITLAB_CA_SECRET, data: { "ca.crt": tokens.gitlabCa.pem } });
   if (!existingSecret(values, "llm")) {
     if (!tokens.llm) {
       throw new KubeError(

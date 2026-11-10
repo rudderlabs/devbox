@@ -11,6 +11,7 @@ import {
   type ResolverDeps,
   resolveSecret,
   SecretError,
+  type SecretName,
   secretNamesFor,
 } from "./secrets";
 
@@ -403,28 +404,22 @@ describe("source lines", () => {
 });
 
 describe("secretNamesFor", () => {
-  it("Compose gets eight, k8s nine", () => {
-    expect(secretNamesFor(COMPOSE)).toEqual([
+  it("Compose gets eleven, k8s twelve (Slack)", () => {
+    const compose: SecretName[] = [
       "GITHUB_TOKEN",
       "LLM_API_KEY",
       "LINEAR_CLIENT_SECRET",
       "LINEAR_WEBHOOK_SECRET",
       "GITHUB_APP_PRIVATE_KEY",
       "GITHUB_WEBHOOK_SECRET",
+      "GITLAB_TOKEN",
+      "GITLAB_WEBHOOK_SIGNING_TOKEN",
+      "GITLAB_WEBHOOK_SECRET",
       "JIRA_API_TOKEN",
       "JIRA_WEBHOOK_SECRET",
-    ]);
-    expect(secretNamesFor(K8S)).toEqual([
-      "GITHUB_TOKEN",
-      "LLM_API_KEY",
-      "LINEAR_CLIENT_SECRET",
-      "LINEAR_WEBHOOK_SECRET",
-      "GITHUB_APP_PRIVATE_KEY",
-      "GITHUB_WEBHOOK_SECRET",
-      "JIRA_API_TOKEN",
-      "JIRA_WEBHOOK_SECRET",
-      "SLACK_BOT_TOKEN",
-    ]);
+    ];
+    expect(secretNamesFor(COMPOSE)).toEqual(compose);
+    expect(secretNamesFor(K8S)).toEqual([...compose, "SLACK_BOT_TOKEN"]);
   });
 });
 

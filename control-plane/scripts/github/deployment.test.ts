@@ -30,6 +30,7 @@ const APP = {
 const REPO = {
   url: "https://github.com/example-org/example-repo.git",
   branch: "main",
+  host: "github" as const,
   owner: "example-org",
   name: "example-repo",
 };

@@ -69,15 +69,15 @@ mock.module("../../integrations/linear/client", () => ({
   },
 }));
 
-// taskProcessor.service imports the ../../clients/github barrel. Loading the
+// taskProcessor.service imports the GitHub integration's client barrel. Loading the
 // real barrel here lets a later file's mock.module of it patch the shared
-// ./githubApi exports, so github.test.ts gets stubs (order-dependent, Linux
+// ./clientApi exports, so its client.test.ts gets stubs (order-dependent, Linux
 // only). Mock the barrel before importing, like the other consumers' tests.
 // The mock leaks to later files too, so it stubs every export they import.
 // See control-plane/README.md (Conventions).
 const postIssueComment = mock(() => Promise.resolve({ id: 1, url: "u" }));
 const postReviewCommentReply = mock(() => Promise.resolve({ id: 1, url: "u" }));
-mock.module("../../clients/github", () => ({
+mock.module("../../integrations/github/client", () => ({
   addIssueCommentReaction: mock(() => Promise.resolve()),
   addReviewCommentReaction: mock(() => Promise.resolve()),
   postIssueComment,
@@ -101,7 +101,6 @@ const { ReplyHolds } = await import("../replyHolds");
 const { IntegrationRegistry, parseIntegrationConfigs } = await import("../integrationRegistry");
 const { BackgroundWork } = await import("../backgroundWork");
 const { EventDispatcher: RealEventDispatcher } = await import("../eventDispatcher");
-const { CodeHost } = await import("../codeHost.service");
 const { InboxService: RealInboxService } = await import("../inbox.service");
 const { WORKSPACE_MISSING_MESSAGE } = await import("../../integrations/outbound");
 const { config: mockedConfig } = (await import("../../config")) as unknown as {
@@ -1372,7 +1371,6 @@ describe("TaskProcessorService", () => {
           sandboxManager,
           slackNotifier,
           registry,
-          new CodeHost(registry, background),
           holds,
           background,
         );

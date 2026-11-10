@@ -46,7 +46,13 @@ const { privateKey: PEM } = generateKeyPairSync("rsa", {
 });
 const config = (): DevboxConfig => ({
   repos: [
-    { url: "https://github.com/acme/widgets.git", branch: "main", owner: "acme", name: "widgets" },
+    {
+      url: "https://github.com/acme/widgets.git",
+      branch: "main",
+      host: "github",
+      owner: "acme",
+      name: "widgets",
+    },
   ],
   llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "m" },
   github: { trustedOrgs: [], trustedUsers: [] },
@@ -2811,6 +2817,285 @@ devbox is installed in context kind-devbox. The CLI uses profile "k8s-kind-devbo
       s.f.done();
       expect(calls).toEqual([]);
       expect(s.written).toEqual({});
+    });
+
+    it("refuses tokenScope repos with GitLab repos only, before minting an installation-wide token", async () => {
+      const tgt = appTarget();
+      const s = setup([], { target: tgt, env: APP_ENV });
+      s.deps.cfg = {
+        ...config(),
+        gitlab: { baseUrl: "https://gitlab.example.com" },
+        repos: [
+          {
+            url: "https://gitlab.example.com/acme/app.git",
+            branch: "main",
+            host: "gitlab",
+            owner: "acme",
+            name: "app",
+          },
+        ],
+      };
+      const calls = appFetch(s);
+      await expect(install(s.deps, OPTS, OVERLAY)).rejects.toThrow(
+        "tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation)",
+      );
+      s.f.done();
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("GitLab", () => {
+    const BASE = "https://gitlab.example.com";
+    const CA = "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n";
+    const PROJECT = `${BASE}/api/v4/projects/${encodeURIComponent("platform/api")}`;
+    const gitlabConfig = (caFile?: string): DevboxConfig => ({
+      ...config(),
+      repos: [
+        ...config().repos,
+        {
+          url: `${BASE}/platform/api.git`,
+          branch: "main",
+          host: "gitlab",
+          owner: "platform",
+          name: "api",
+        },
+      ],
+      gitlab: { baseUrl: BASE, ...(caFile ? { caFile } : {}) },
+    });
+    const GITLAB = {
+      gitlab: {
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: true,
+        webhookAuth: "signing" as const,
+      },
+    };
+    const GITLAB_ROUTES: Record<string, [number, unknown]> = {
+      [`GET ${BASE}/api/v4/version`]: [200, { version: "19.5.3" }],
+      [`GET ${BASE}/api/v4/user`]: [200, { id: 2, username: "devbox", bot: true }],
+      [`GET ${PROJECT}`]: [200, { id: 1 }],
+      [`GET ${BASE}/platform/api.git/info/refs?service=git-receive-pack`]: [
+        200,
+        "001f# service=git-receive-pack",
+      ],
+      [`POST ${PROJECT}/merge_requests`]: [400, { message: ["Source branch does not exist"] }],
+      [`GET ${PROJECT}/pipelines?per_page=1`]: [200, []],
+      [`GET ${PROJECT}/jobs?per_page=1`]: [200, []],
+      [`GET ${BASE}/api/v4/groups/platform/members/all?per_page=1`]: [200, [{ id: 3 }]],
+    };
+    const ENV = {
+      GITHUB_TOKEN: "ghp_x",
+      LLM_API_KEY: "sk-y",
+      GITLAB_TOKEN: "glpat-x",
+      GITLAB_WEBHOOK_SIGNING_TOKEN: "whsec_x",
+    };
+    const withGitlab = (s: ReturnType<typeof setup>, caFile?: string) => {
+      s.deps.cfg = gitlabConfig(caFile);
+      s.deps.readFile = (path) => (path === "/ca.pem" ? CA : undefined);
+      return appFetch(s, GITLAB_ROUTES);
+    };
+
+    it("renders the installer's Secret names for the token and the CA", async () => {
+      const s = setup(CLUSTER_IP, { target: { ...target(), integrations: GITLAB }, env: ENV });
+      withGitlab(s, "/ca.pem");
+      await install(s.deps, { ...OPTS, render: "/tmp/x.yaml" }, OVERLAY);
+      s.f.done();
+      const values = parse(s.written["/tmp/x.yaml"] as string) as Values;
+      expect(values.gitlab).toEqual({ baseUrl: BASE });
+      expect(values.secrets).toEqual({ gitlab: { existingSecret: "devbox-gitlab" } });
+      expect(values.ironProxy).toEqual({ clusterIP: "10.96.0.20", caBundle: "devbox-gitlab-ca" });
+      expect((values.integrations as Values).gitlab).toEqual({
+        enabled: true,
+        botUsername: "devbox",
+        botUserId: 2,
+        ciResults: true,
+      });
+    });
+
+    it("checks the token, writes the token, CA and webhook Secrets, and names gitlab:status", async () => {
+      const fresh = FRESH([TOKEN]);
+      const i = fresh.findIndex((st) => st.cmd === DELETE_INTEGRATIONS);
+      // ns, github, gitlab, gitlab-ca, llm, integrations: six applies, no delete.
+      const script = [
+        ...fresh.slice(0, i),
+        step(APPLY),
+        step(APPLY),
+        step(APPLY),
+        ...fresh.slice(i + 1),
+      ];
+      const tgt: Target = {
+        ...target({ gitlab: { trustedGroups: ["platform"] } }),
+        integrations: GITLAB,
+      };
+      const s = setup(script, { target: tgt, env: ENV });
+      const calls = withGitlab(s, "/ca.pem");
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(commands(s.f)).toEqual(script.map((c) => c.cmd.join(" ")));
+      expect(stdinOf(s.f, APPLY).map((t) => JSON.parse(t as string))).toEqual([
+        ...NETPOL_STDIN,
+        namespaces,
+        JSON.parse(userSecretStdin[0] as string),
+        JSON.parse(secretManifest({ name: "devbox-gitlab", data: { token: "glpat-x" } })),
+        JSON.parse(secretManifest({ name: "devbox-gitlab-ca", data: { "ca.crt": CA } })),
+        JSON.parse(userSecretStdin[1] as string),
+        JSON.parse(
+          secretManifest({
+            name: "devbox-integrations",
+            data: { GITLAB_WEBHOOK_SIGNING_TOKEN: "whsec_x" },
+          }),
+        ),
+      ]);
+      expect(JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string)).toEqual(
+        chartValues(
+          gitlabConfig("/ca.pem"),
+          tgt.values,
+          {
+            clusterIP: "10.96.0.20",
+            publicBaseUrl: URL_,
+            identity: IDENTITY,
+            integrations: GITLAB,
+            gitlabSecret: "devbox-gitlab",
+            gitlabCaSecret: "devbox-gitlab-ca",
+            // Both hosts: git stays the GitHub user's, gitlab.git is the bot's.
+            gitlabGit: {
+              gitName: "devbox",
+              gitEmail: "2-devbox@users.noreply.gitlab.example.com",
+            },
+          },
+          OVERLAY,
+        ),
+      );
+      const both = JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string) as Values;
+      expect(both.git).toEqual({ name: IDENTITY.gitName, email: IDENTITY.gitEmail });
+      expect((both.gitlab as Values).git).toEqual({
+        name: "devbox",
+        email: "2-devbox@users.noreply.gitlab.example.com",
+      });
+      expect(calls.filter((c) => c.includes(BASE))).toEqual(Object.keys(GITLAB_ROUTES));
+      expect(s.logs).toContain(`GitLab 19.5.3 at ${BASE}: devbox acts as devbox (id 2)`);
+      expect(s.logs.at(-1)).toContain(
+        "Check GitLab with: bun run gitlab:status --target devbox.k8s.json",
+      );
+    });
+
+    it("GitLab repos only: no GitHub token is asked for or checked, and the token Secret is created empty", async () => {
+      const CREATE = kc("create", "-f", "-");
+      const fresh = FRESH([TOKEN]);
+      const j = fresh.findIndex((st) => st.cmd === DELETE_INTEGRATIONS);
+      const i = fresh.findIndex((st) => st.cmd === DELETE_APP_KEY);
+      // ns, then the empty token Secret's create, then gitlab and llm; the CA
+      // Secret (no gitlab.caFile) goes with the installer's other unused ones.
+      const script = [
+        ...fresh.slice(0, j - 2),
+        step(CREATE),
+        ...fresh.slice(j - 2, i + 1),
+        step(deleteOwned("devbox-gitlab-ca")),
+        ...fresh.slice(i + 1),
+      ];
+      const s = setup(script, { env: { LLM_API_KEY: "sk-y", GITLAB_TOKEN: "glpat-x" } });
+      s.deps.cfg = {
+        ...config(),
+        repos: [
+          {
+            url: `${BASE}/platform/api.git`,
+            branch: "main",
+            host: "gitlab",
+            owner: "platform",
+            name: "api",
+          },
+        ],
+        gitlab: { baseUrl: BASE },
+      };
+      const calls = appFetch(s, GITLAB_ROUTES);
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(commands(s.f)).toEqual(script.map((c) => c.cmd.join(" ")));
+      expect(calls.filter((c) => c.includes("github.com"))).toEqual([]);
+      expect(stdinOf(s.f, CREATE).map((t) => JSON.parse(t as string))).toEqual([
+        JSON.parse(secretManifest({ name: "devbox-github", data: { token: "" } })),
+      ]);
+      expect(s.logs).toContain(
+        "No GitHub repo and no GitHub App: the token Secret devbox-github stays empty",
+      );
+      // Commits carry the GitLab user's identity, there being no GitHub one.
+      const values = JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string) as Values;
+      expect(values.git).toEqual({
+        name: "devbox",
+        email: "2-devbox@users.noreply.gitlab.example.com",
+      });
+    });
+
+    it("GitLab repos only, switched from GitHub: the installer's old token Secret is emptied, not left with its token", async () => {
+      const CREATE = kc("create", "-f", "-");
+      const fresh = FRESH([TOKEN]);
+      const j = fresh.findIndex((st) => st.cmd === DELETE_INTEGRATIONS);
+      const i = fresh.findIndex((st) => st.cmd === DELETE_APP_KEY);
+      // ns, then the empty token Secret's create, then gitlab and llm; the CA
+      // Secret (no gitlab.caFile) goes with the installer's other unused ones.
+      const script = [
+        ...fresh.slice(0, j - 2),
+        step(CREATE, {
+          code: 1,
+          stderr: 'Error from server (AlreadyExists): secrets "devbox-github" already exists\n',
+        }),
+        step(APPLY),
+        ...fresh.slice(j - 2, i + 1),
+        step(deleteOwned("devbox-gitlab-ca")),
+        ...fresh.slice(i + 1),
+      ];
+      const s = setup(script, { env: { LLM_API_KEY: "sk-y", GITLAB_TOKEN: "glpat-x" } });
+      s.deps.cfg = {
+        ...config(),
+        repos: [
+          {
+            url: `${BASE}/platform/api.git`,
+            branch: "main",
+            host: "gitlab",
+            owner: "platform",
+            name: "api",
+          },
+        ],
+        gitlab: { baseUrl: BASE },
+      };
+      const calls = appFetch(s, GITLAB_ROUTES);
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(commands(s.f)).toEqual(script.map((c) => c.cmd.join(" ")));
+      // Created would not replace it, so it is applied empty.
+      const github = s.f.calls.filter((c) => c.stdin?.includes('"name":"devbox-github"'));
+      expect(github.map((c) => c.cmd)).toEqual([CREATE, APPLY]);
+      expect(JSON.parse(github[1]?.stdin as string)).toEqual(
+        JSON.parse(secretManifest({ name: "devbox-github", data: { token: "" } })),
+      );
+    });
+
+    it("the user's own token Secret: no check, the installer's GitLab Secrets go", async () => {
+      const fresh = FRESH([TOKEN]);
+      // After the installer's own key Secret goes, its GitLab ones do.
+      const i = fresh.findIndex((st) => st.cmd === DELETE_APP_KEY);
+      const script = [
+        ...fresh.slice(0, i + 1),
+        step(deleteOwned("devbox-gitlab")),
+        step(deleteOwned("devbox-gitlab-ca")),
+        ...fresh.slice(i + 1),
+      ];
+      const s = setup(script, {
+        target: target({ secrets: { gitlab: { existingSecret: "mine" } } }),
+        env: { GITHUB_TOKEN: "ghp_x", LLM_API_KEY: "sk-y" },
+      });
+      const calls = withGitlab(s);
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(commands(s.f)).toEqual(script.map((c) => c.cmd.join(" ")));
+      expect(calls.filter((c) => c.includes(BASE))).toEqual([]);
+      expect(s.logs).toContain(
+        'Skipping the GitLab checks: the token is in your Secret "mine"; run bun run k8s:check --target devbox.k8s.json after install',
+      );
+      const values = JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string) as Values;
+      expect(values.secrets).toEqual({ gitlab: { existingSecret: "mine" } });
+      expect(values.ironProxy).toEqual({ clusterIP: "10.96.0.20" });
     });
   });
 });

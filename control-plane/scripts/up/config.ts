@@ -31,19 +31,50 @@ export type LlmConfig = {
   stages?: Partial<Record<LlmStage, LlmStageConfig>>;
 };
 
+export type CodeHost = "github" | "gitlab";
 export type RepoConfig = {
   url: string;
   branch: string;
-  // From the URL: https://github.com/<owner>/<name>.git
+  // github for https://github.com/<owner>/<name>.git; gitlab for a repo under
+  // gitlab.baseUrl, <base>/<owner>/<name>.git, where owner is the namespace
+  // path (a group, or group/subgroup).
+  host: CodeHost;
   owner: string;
   name: string;
 };
+
+// The configured GitLab instance, or undefined: {baseUrl} with no trailing
+// slash; caFile, the PEM of the private CA that signed its certificate, when
+// it has one (the installer puts it in a Secret for the chart; `up` mounts
+// it); and who may drive the agent from GitLab (Compose; on k8s these are the
+// target's values.gitlab). Empty lists by default.
+export type GitlabConfig = {
+  baseUrl: string;
+  caFile?: string;
+  // Always set by the parser; optional so callers that only know the instance
+  // (the k8s commands, which take trust from the target) can build one.
+  trustedGroups?: string[];
+  trustedUsers?: string[];
+};
+
+// The repos on GitHub: what the GitHub token checks and the App's token cover.
+export const githubRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
+  repos.filter((r) => r.host === "github");
+export const gitlabRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
+  repos.filter((r) => r.host === "gitlab");
+// Whether the deployment talks to GitHub at all: a repo there, or the GitHub
+// App. Without either no GitHub token is asked for, checked or needed (the
+// token Secret then exists empty on Kubernetes, a placeholder on Compose).
+export const needsGithub = (repos: readonly RepoConfig[], githubApp: unknown): boolean =>
+  githubApp !== undefined || githubRepos(repos).length > 0;
 
 export type SandboxConfig = { maxConcurrent: number; cpu: string; memory: string };
 
 type BaseDevboxConfig = {
   repos: RepoConfig[];
   llm: LlmConfig;
+  // Set when any repo may live on a GitLab instance.
+  gitlab?: GitlabConfig;
   // The deployment's public URL for webhooks, validated.
   publicUrl?: string;
   // Who may drive the agent from GitHub (Compose; on k8s these are chart
@@ -65,6 +96,8 @@ export type ConfigOptions = { integrations?: boolean };
 
 const FILE = "devbox.config.json";
 const REPO_URL = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([^/]+)\.git$/;
+// Under gitlab.baseUrl: <group>[/<subgroup>...]/<project>.git.
+const GITLAB_REPO_PATH = /^([A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)\/([^/]+)\.git$/;
 const REPO_NAME = /^[A-Za-z0-9._-]+$/;
 const BRANCH = /^[A-Za-z0-9._/-]+$/;
 // The LLM host becomes a Docker network alias: a DNS name, no IP literals.
@@ -90,13 +123,35 @@ const fail = (message: string): never => {
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-function parseRepo(raw: unknown, i: number): RepoConfig {
+// The GitLab part of a repo URL, "<owner>/<name>.git" under the instance, or
+// undefined when the URL is not under it.
+function gitlabRepoPath(url: string, gitlab: GitlabConfig | undefined): string | undefined {
+  if (!gitlab) return undefined;
+  const prefix = `${gitlab.baseUrl}/`;
+  return url.startsWith(prefix) ? url.slice(prefix.length) : undefined;
+}
+
+function parseRepo(raw: unknown, i: number, gitlab: GitlabConfig | undefined): RepoConfig {
   const field = `repos[${i}]`;
   if (!isObject(raw)) return fail(`${field}: must be an object with a url`);
   const url = raw.url;
-  const m = typeof url === "string" ? REPO_URL.exec(url) : null;
+  let host: CodeHost = "github";
+  let m = typeof url === "string" ? REPO_URL.exec(url) : null;
+  const underGitlab = typeof url === "string" ? gitlabRepoPath(url, gitlab) : undefined;
+  if (!m && underGitlab !== undefined) {
+    host = "gitlab";
+    m = GITLAB_REPO_PATH.exec(underGitlab);
+    if (!m) {
+      return fail(
+        `${field}.url: a GitLab repo is ${gitlab?.baseUrl}/<group>[/<subgroup>]/<project>.git, got ${url}`,
+      );
+    }
+  }
   if (!m?.[1] || !m[2]) {
-    return fail(`${field}.url: must be https://github.com/<owner>/<repo>.git, got ${String(url)}`);
+    const alt = gitlab ? ` or ${gitlab.baseUrl}/<group>/<project>.git` : "";
+    return fail(
+      `${field}.url: must be https://github.com/<owner>/<repo>.git${alt}, got ${String(url)}`,
+    );
   }
   const [, owner, name] = m;
   if (!REPO_NAME.test(name) || name === "." || name === ".." || name.startsWith("-")) {
@@ -111,8 +166,64 @@ function parseRepo(raw: unknown, i: number): RepoConfig {
   ) {
     return fail(`${field}.branch: bad branch "${String(branch)}"`);
   }
-  return { url: m[0], branch, owner, name };
+  return { url: url as string, branch, host, owner, name };
 }
+
+// gitlab: {baseUrl, caFile, trustedGroups, trustedUsers}. The URL's origin
+// and path, no trailing slash; like llm.baseUrl it must use the default port,
+// because iron-proxy intercepts only 443. The chart validates the same way
+// (templates/validate.yaml). caFile is read by `up` and the installer, not
+// here. The trust lists are Compose's; a k8s target holds its own.
+function parseGitlab(raw: unknown): GitlabConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObject(raw)) return fail("gitlab: must be an object");
+  const allowed = ["baseUrl", "caFile", "trustedGroups", "trustedUsers"];
+  const extra = Object.keys(raw).find((k) => !allowed.includes(k));
+  if (extra !== undefined) {
+    return fail(`gitlab: unknown key ${JSON.stringify(extra)} (allowed: ${allowed.join(", ")})`);
+  }
+  let caFile: string | undefined;
+  if (raw.caFile !== undefined) {
+    if (typeof raw.caFile !== "string" || !raw.caFile.startsWith("/")) {
+      return fail("gitlab.caFile: must be an absolute path to a PEM file");
+    }
+    caFile = raw.caFile;
+  }
+  const baseUrl = raw.baseUrl;
+  const url = typeof baseUrl === "string" && URL.canParse(baseUrl) ? new URL(baseUrl) : null;
+  if (!url || url.protocol !== "https:") {
+    return fail(`gitlab.baseUrl: must be an https URL, got ${String(baseUrl)}`);
+  }
+  if (!HOSTNAME.test(url.hostname)) {
+    return fail(`gitlab.baseUrl: the host must be a DNS name, got ${url.hostname}`);
+  }
+  if (url.port) {
+    return fail(`gitlab.baseUrl: must use the default port (443), got ${url.port}`);
+  }
+  if (url.search || url.hash || url.username || url.password) {
+    return fail("gitlab.baseUrl: must not have a query, fragment or credentials");
+  }
+  return {
+    baseUrl: `${url.origin}${url.pathname.replace(/\/+$/, "")}`,
+    ...(caFile !== undefined ? { caFile } : {}),
+    trustedGroups: parseTrustList(raw, "trustedGroups", "gitlab").map((group, i) =>
+      GITLAB_GROUP_PATH.test(group)
+        ? group
+        : fail(`gitlab.trustedGroups[${i}]: not a group path, got ${group}`),
+    ),
+    trustedUsers: parseTrustList(raw, "trustedUsers", "gitlab").map((user, i) =>
+      GITLAB_USERNAME.test(user)
+        ? user
+        : fail(`gitlab.trustedUsers[${i}]: not a username, got ${user}`),
+    ),
+  };
+}
+
+// A group's full path and a username, as the chart's validate.yaml takes
+// them. Each trusted group becomes a path in the proxy's allowlist
+// (/api/v4/groups/<group>/members/all), where a `*` would be a wildcard.
+const GITLAB_GROUP_PATH = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
+const GITLAB_USERNAME = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
 function parseReasoningEffort(raw: unknown, provider: Provider, field: string): ReasoningEffort {
   const supported = SUPPORTED_REASONING_EFFORTS[provider];
@@ -218,10 +329,10 @@ function parseLlm(raw: unknown): DevboxConfig["llm"] {
   };
 }
 
-function parseTrustList(raw: Record<string, unknown>, key: string): string[] {
+function parseTrustList(raw: Record<string, unknown>, key: string, block = "github"): string[] {
   const v = raw[key];
   if (v === undefined) return [];
-  const field = `github.${key}`;
+  const field = `${block}.${key}`;
   if (!Array.isArray(v)) return fail(`${field}: must be a list of non-empty strings`);
   return v.map((item, i) =>
     typeof item === "string" && item.trim()
@@ -282,7 +393,8 @@ export function parseConfig(raw: unknown, opts: ConfigOptions = {}): DevboxConfi
   if (!Array.isArray(raw.repos) || raw.repos.length === 0) {
     return fail("repos: must be a non-empty list");
   }
-  const repos = raw.repos.map(parseRepo);
+  const gitlab = parseGitlab(raw.gitlab);
+  const repos = raw.repos.map((r: unknown, i: number) => parseRepo(r, i, gitlab));
   // Every repo is cloned to /workspace/<name>, so names must be unique.
   repos.forEach((r, i) => {
     if (repos.findIndex((o) => o.name === r.name) !== i) {
@@ -310,6 +422,7 @@ export function parseConfig(raw: unknown, opts: ConfigOptions = {}): DevboxConfi
   const base: BaseDevboxConfig = {
     repos,
     llm: parseLlm(raw.llm),
+    ...(gitlab ? { gitlab } : {}),
     github,
     integrations,
   };

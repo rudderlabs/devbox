@@ -40,12 +40,12 @@ from harness.events import (
     append_event,
     iter_events,
 )
-from harness.git import setup_git_signing
+from harness.git import apply_repo_commit_identities, setup_git_signing
 from harness.handlers.assignment import process_assignment
 from harness.handlers.ci_result import process_ci_result
 from harness.handlers.comment import process_comment
 from harness.handlers.user_review import process_user_review
-from harness.paths import EVENTS_FILE, INBOX_DIR, LOCK_FILE
+from harness.paths import EVENTS_FILE, INBOX_DIR, LOCK_FILE, WORKSPACE
 
 
 def _poll_interval_seconds() -> float:
@@ -443,6 +443,24 @@ def run_daemon(
     except Exception as exc:
         print(
             f"daemon: startup setup_git_signing failed (ignored): "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+    # The commit identity per code host, once, before any round: checkouts on
+    # the GitLab instance commit as the GitLab user, whoever runs `git commit`
+    # (the agent does, from its shell, in follow-up rounds). Best-effort, like
+    # signing above: a failure leaves the sandbox's one identity in place.
+    try:
+        applied = apply_repo_commit_identities(WORKSPACE)
+        if applied:
+            print(
+                "daemon: GitLab commit identity set on "
+                + ", ".join(repo.name for repo in applied)
+            )
+    except Exception as exc:
+        print(
+            f"daemon: startup apply_repo_commit_identities failed (ignored): "
             f"{type(exc).__name__}: {exc}",
             file=sys.stderr,
         )

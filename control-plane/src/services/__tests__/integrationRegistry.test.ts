@@ -136,14 +136,108 @@ describe("IntegrationRegistry", () => {
     expect(await (await (hooks[0] as (typeof hooks)[0]).webhook({} as never)).text()).toBe("a");
   });
 
-  it("prMentionLogin is the login of an enabled integration that takes @-mentions", () => {
-    const mentions = definition("b", {
-      create: () => ({ ...integration(), prMentionLogin: "bot" }),
+  describe("onPrOpenedOnHost", () => {
+    const task = { id: "task-1", source: "src" } as never;
+    const pr = { url: "https://b.example/pr/1", repo: "r", branch: "x" };
+    // A code host's integration: hosts URLs under its own name's domain.
+    const host = (name: string, onPrOpened: Integration["onPrOpened"]) =>
+      definition(name, {
+        createsTasks: false,
+        create: () => ({
+          ...integration(),
+          hostsPr: (url) => url.startsWith(`https://${name}.example/`),
+          onPrOpened,
+        }),
+      });
+
+    it("hands a new PR to the integration that hosts its URL, as a first time, with the task's person to ask for", async () => {
+      const seen: unknown[] = [];
+      const source = definition("src", {
+        create: () => ({
+          ...integration(),
+          assignee: async () => ({ id: "usr-1", displayName: "ada" }),
+        }),
+      });
+      const a = host("a", async () => {
+        seen.push("a");
+      });
+      const b = host("b", async (ctx, _task, opened) => {
+        seen.push(["b", opened.url, ctx.firstTime, await ctx.person()]);
+      });
+      const r = registry([source, a, b], { src: "on", a: "on", b: "on" });
+      await r.onPrOpenedOnHost(task, null, pr);
+      expect(seen).toEqual([
+        ["b", "https://b.example/pr/1", true, { id: "usr-1", displayName: "ada" }],
+      ]);
     });
-    expect(registry([definition("a"), mentions], { a: "on", b: "on" }).prMentionLogin()).toBe(
-      "bot",
-    );
-    expect(registry([definition("a"), mentions], { a: "on" }).prMentionLogin()).toBeUndefined();
+
+    it("tracks what the hook hands to ctx.background instead of waiting for it; shutdown drains it", async () => {
+      let done = false;
+      const b = host("b", async (ctx) => {
+        ctx.background(
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              done = true;
+              resolve();
+            }, 20),
+          ),
+        );
+      });
+      const background = new BackgroundWork();
+      const defs = [definition("src"), b];
+      const r = new IntegrationRegistry(
+        defs,
+        parseIntegrationConfigs(defs, { src: "on", b: "on" }),
+        {
+          taskRepo,
+          inboxRepo: {} as InboxRepository,
+          sandboxManager: {} as never,
+          background,
+          holds: new ReplyHolds(),
+        },
+      );
+      await r.onPrOpenedOnHost(task, null, pr);
+      expect(done).toBe(false);
+      await background.drain(new Promise((resolve) => setTimeout(resolve, 500)));
+      expect(done).toBe(true);
+    });
+
+    it("does nothing for a URL no enabled integration hosts: another site, or its host's integration is off", async () => {
+      const called = mock(async () => {});
+      const defs = () => [definition("src"), host("b", called)];
+      await registry(defs(), { src: "on", b: "on" }).onPrOpenedOnHost(task, null, {
+        ...pr,
+        url: "https://elsewhere.example/pr/1",
+      });
+      await registry(defs(), { src: "on" }).onPrOpenedOnHost(task, null, pr);
+      expect(called).not.toHaveBeenCalled();
+    });
+
+    it("never throws: a failure, even a RetryableError, is logged and nothing is held", async () => {
+      const error = spyOn(logger, "error").mockImplementation(() => logger);
+      try {
+        for (const failure of [new Error("host down"), new RetryableError("rate limited")]) {
+          const b = host("b", async () => {
+            throw failure;
+          });
+          await registry([definition("src"), b], { src: "on", b: "on" }).onPrOpenedOnHost(
+            task,
+            null,
+            pr,
+          );
+          expect(error).toHaveBeenLastCalledWith(
+            "onPrOpened hook failed",
+            expect.objectContaining({
+              taskId: "task-1",
+              integration: "b",
+              message: failure.message,
+            }),
+          );
+        }
+      } finally {
+        error.mockRestore();
+      }
+    });
   });
 
   it("status adds held sends; disabled ones answer disabledStatus(); unknown names have none", async () => {
@@ -186,9 +280,9 @@ describe("parseIntegrationConfigs", () => {
 });
 
 describe("the integrations this build has", () => {
-  it("are linear, github, api and jira; all but github create tasks", () => {
+  it("are linear, github, gitlab, api and jira; linear, api and jira create tasks", () => {
     const r = registry([...definitions]);
-    expect(definitions.map((d) => d.name)).toEqual(["linear", "github", "api", "jira"]);
+    expect(definitions.map((d) => d.name)).toEqual(["linear", "github", "gitlab", "api", "jira"]);
     expect(r.taskSources).toEqual(["linear", "api", "jira"]);
   });
 
@@ -197,6 +291,11 @@ describe("the integrations this build has", () => {
     expect(await r.status("linear")).toEqual({ configured: false, holds: none });
     expect(await r.status("github")).toEqual({
       token: expect.objectContaining({ source: "env" }),
+      webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
+      holds: none,
+    });
+    expect(await r.status("gitlab")).toEqual({
+      token: expect.any(Object),
       webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
       holds: none,
     });
@@ -274,7 +373,7 @@ const row = (id: string, kind = "assignment", source = "linear") =>
   }) as unknown as Round;
 const target: ReplyTarget = { id: "sess-1", spec: { kind: "linear_session" } };
 const reply = { type: "reply", body: "hi" } as const;
-const pr = { url: "u", repo: "r", branch: "b", github: null };
+const pr = { url: "u", repo: "r", branch: "b", host: null };
 const noop: Integration = integration();
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const HOOKS = ["onTaskStarted", "onPrOpened", "onRoundFinished", "assignee"] as const;

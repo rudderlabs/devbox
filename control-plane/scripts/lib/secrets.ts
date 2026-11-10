@@ -19,6 +19,9 @@ export type SecretName =
   | "SLACK_BOT_TOKEN"
   | "GITHUB_WEBHOOK_SECRET"
   | "GITHUB_APP_PRIVATE_KEY"
+  | "GITLAB_TOKEN"
+  | "GITLAB_WEBHOOK_SIGNING_TOKEN"
+  | "GITLAB_WEBHOOK_SECRET"
   | "JIRA_API_TOKEN"
   | "JIRA_WEBHOOK_SECRET";
 
@@ -29,6 +32,9 @@ const COMPOSE_SECRET_NAMES: readonly SecretName[] = [
   "LINEAR_WEBHOOK_SECRET",
   "GITHUB_APP_PRIVATE_KEY",
   "GITHUB_WEBHOOK_SECRET",
+  "GITLAB_TOKEN",
+  "GITLAB_WEBHOOK_SIGNING_TOKEN",
+  "GITLAB_WEBHOOK_SECRET",
   "JIRA_API_TOKEN",
   "JIRA_WEBHOOK_SECRET",
 ];
@@ -68,6 +74,9 @@ const LABELS: Record<SecretName, string> = {
   SLACK_BOT_TOKEN: "Slack bot token",
   GITHUB_WEBHOOK_SECRET: "GitHub webhook secret",
   GITHUB_APP_PRIVATE_KEY: "GitHub App private key",
+  GITLAB_TOKEN: "GitLab token",
+  GITLAB_WEBHOOK_SIGNING_TOKEN: "GitLab webhook signing token",
+  GITLAB_WEBHOOK_SECRET: "GitLab webhook secret token",
   JIRA_API_TOKEN: "Jira API token",
   JIRA_WEBHOOK_SECRET: "Jira webhook secret",
 };

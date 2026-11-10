@@ -26,10 +26,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from harness.codehost import CodeHost, client_for_repo
 from harness.env_flags import bool_env
 from harness.events import iter_events
 from harness.git import (
-    GitHubClient,
     commit_one_repo,
     parse_owner_repo_from_git_remote,
 )
@@ -163,10 +163,13 @@ def _commit_and_open_pr(
     entry: Mapping[str, Any],
     task_key: str,
     inbox_id: str,
-    client: GitHubClient,
+    client: CodeHost | None = None,
 ) -> dict[str, Any]:
     """Branch-create + commit + push + create PR for one implementation.json
     repo entry — the per-repo happy-path body of run_commit_stage.
+
+    `client` defaults to the adapter for the repo's own remote (GitHub, or the
+    configured GitLab instance): the choice is per repo, never global.
 
     Re-checks the required string fields via `_require_str`, derives the
     `devbox/<ticket>-<slug>` branch from `pr_title`, threads `base` (computed
@@ -193,6 +196,8 @@ def _commit_and_open_pr(
         raise FileNotFoundError(f"Repository path not found: {repo_path}")
 
     owner, repo_name = parse_owner_repo_from_git_remote(repo_path)
+    if client is None:
+        client = client_for_repo(repo_path)
     publish = commit_one_repo(
         repo_path,
         client=client,
@@ -200,7 +205,7 @@ def _commit_and_open_pr(
         commit_message=commit_message,
     )
     # Dry-run publish: exercise the full local flow (commit, PR-body assembly)
-    # but skip the GitHub create/update network write. The assembled
+    # but skip the code host's create/update network write. The assembled
     # body is written under .harness/artifacts/ for inspection. The git push is
     # skipped separately in commit_one_repo (same env flag).
     if _dry_run_publish():

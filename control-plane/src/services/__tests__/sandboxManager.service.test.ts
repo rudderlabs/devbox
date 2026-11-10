@@ -318,6 +318,62 @@ describe("SandboxManager", () => {
       expect(envOf().HARNESS_TRUSTED_USERS).toBe("frodo,samwise");
       expect("HARNESS_TRUSTED_ORGS" in envOf()).toBe(false);
     });
+
+    it("forwards the GitLab instance only from its own setting, never from forwardedEnv", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: { GITLAB_BASE_URL: "https://evil.example.com" },
+      }).createSandboxWithPvc(taskParams);
+      expect("GITLAB_BASE_URL" in envOf()).toBe(false);
+      sandboxCreate.mockClear();
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: { GITLAB_BASE_URL: "https://evil.example.com" },
+        gitlabBaseUrl: "https://gitlab.example.com",
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf().GITLAB_BASE_URL).toBe("https://gitlab.example.com");
+    });
+
+    it("forwards each GitLab trust list exactly when configured", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        gitlabTrustedGroups: "platform,platform/backend",
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf().HARNESS_GITLAB_TRUSTED_GROUPS).toBe("platform,platform/backend");
+      expect("HARNESS_GITLAB_TRUSTED_USERS" in envOf()).toBe(false);
+    });
+
+    it("forwards the GitLab trusted users on their own too", async () => {
+      await new SandboxManager({ ...baseOpts, gitlabTrustedUsers: "alice" }).createSandboxWithPvc(
+        taskParams,
+      );
+      expect(envOf().HARNESS_GITLAB_TRUSTED_USERS).toBe("alice");
+      expect("HARNESS_GITLAB_TRUSTED_GROUPS" in envOf()).toBe(false);
+    });
+
+    it("takes GitLab trust only from the control plane's own settings, never from forwarded env", async () => {
+      const forwardedEnv = {
+        HARNESS_GITLAB_TRUSTED_GROUPS: "evil",
+        HARNESS_GITLAB_TRUSTED_USERS: "gollum",
+      };
+      // Not configured: the forwarded values are stripped.
+      await new SandboxManager({ ...baseOpts, forwardedEnv }).createSandboxWithPvc(taskParams);
+      expect("HARNESS_GITLAB_TRUSTED_GROUPS" in envOf()).toBe(false);
+      expect("HARNESS_GITLAB_TRUSTED_USERS" in envOf()).toBe(false);
+    });
+
+    it("a configured GitLab trust list overrides a forwarded one; the other is still stripped", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: {
+          HARNESS_GITLAB_TRUSTED_GROUPS: "evil",
+          HARNESS_GITLAB_TRUSTED_USERS: "gollum",
+        },
+        gitlabTrustedGroups: "platform",
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf().HARNESS_GITLAB_TRUSTED_GROUPS).toBe("platform");
+      expect("HARNESS_GITLAB_TRUSTED_USERS" in envOf()).toBe(false);
+    });
   });
 
   describe("createSandboxWithPvc — runtime and identity env", () => {
@@ -358,6 +414,29 @@ describe("SandboxManager", () => {
         GIT_COMMITTER_NAME: "Ada",
         GIT_COMMITTER_EMAIL: "ada@example.com",
       });
+    });
+
+    it("passes the GitLab commit identity for the harness to apply per repo, never from forwarded env", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        gitIdentity: { name: "Ada", email: "ada@example.com" },
+        gitlabGitIdentity: { name: "devbox", email: "2-devbox@users.noreply.git.example.com" },
+        forwardedEnv: { HARNESS_GITLAB_GIT_NAME: "mallory", HARNESS_GITLAB_GIT_EMAIL: "m@x" },
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf()).toMatchObject({
+        GIT_AUTHOR_NAME: "Ada",
+        HARNESS_GITLAB_GIT_NAME: "devbox",
+        HARNESS_GITLAB_GIT_EMAIL: "2-devbox@users.noreply.git.example.com",
+      });
+    });
+
+    it("drops a forwarded GitLab commit identity when none is configured", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: { HARNESS_GITLAB_GIT_NAME: "mallory", HARNESS_GITLAB_GIT_EMAIL: "m@x" },
+      }).createSandboxWithPvc(taskParams);
+      expect("HARNESS_GITLAB_GIT_NAME" in envOf()).toBe(false);
+      expect("HARNESS_GITLAB_GIT_EMAIL" in envOf()).toBe(false);
     });
   });
 
@@ -579,8 +658,11 @@ describe("SandboxManager", () => {
   });
 
   describe("readEvents", () => {
-    const mgrWith = (raw: string | null) => {
-      const mgr = new SandboxManager(baseOpts);
+    const mgrWith = (
+      raw: string | null,
+      extra: Partial<ConstructorParameters<typeof SandboxManager>[0]> = {},
+    ) => {
+      const mgr = new SandboxManager({ ...baseOpts, ...extra });
       (mgr as unknown as { readHarnessFile: () => Promise<string | null> }).readHarnessFile = () =>
         Promise.resolve(raw);
       return mgr;
@@ -756,6 +838,34 @@ describe("SandboxManager", () => {
       ].join("\n");
       const events = await mgrWith(raw).readEvents("sbx", 0);
       expect(events.map((e) => e.seq)).toEqual([3]);
+    });
+
+    it("accepts a pr_opened on the configured GitLab instance, and only then", async () => {
+      const raw = [
+        JSON.stringify({
+          seq: 1,
+          ts: "t",
+          type: "pr_opened",
+          inbox_id: "i",
+          repo: "r",
+          pr_url: "https://gitlab.example.com/platform/backend/r/-/merge_requests/7",
+          branch: "b",
+          commit_sha: "sha",
+        }),
+        JSON.stringify({
+          seq: 2,
+          ts: "t",
+          type: "pr_opened",
+          inbox_id: "i",
+          repo: "r",
+          pr_url: "https://gitlab.other.example.com/o/r/-/merge_requests/1", // another host
+          branch: "b",
+          commit_sha: "sha",
+        }),
+      ].join("\n");
+      expect((await mgrWith(raw).readEvents("sbx", 0)).map((e) => e.seq)).toEqual([]);
+      const withGitlab = mgrWith(raw, { gitlabBaseUrl: "https://gitlab.example.com" });
+      expect((await withGitlab.readEvents("sbx", 0)).map((e) => e.seq)).toEqual([1]);
     });
 
     it("drops a pr_opened whose pr_url is not a github.com https URL", async () => {

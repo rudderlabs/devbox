@@ -47,7 +47,7 @@ export class SlackNotifierService {
     const prUrls = parsePrUrls(t.prUrls);
     // Nudge shown alongside PR links when the ticket's human assignee hasn't
     // connected GitHub in Linear — the PR couldn't be assigned to them (the
-    // code host's assignee mirror skipped with no_github_mapping) and
+    // GitHub integration's assignee mirror skipped with no_github_mapping) and
     // self-service is the only fix. Re-checked lazily here so a user who
     // connected mid-run isn't nagged. Skipped for no_action, whose message
     // renders no PR section for the nudge to ride on.

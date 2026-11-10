@@ -260,6 +260,10 @@ enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 | `integrations.githubApp.ciResults` | Default `true`: failed CI runs on the agent's pull requests reach the agent. |
 | `secrets.githubApp.existingSecret` | Your own Secret for the App's private key (key `private-key`), instead of `devbox-github-app` ([secrets.md](secrets.md#the-github-app-key-and-the-minter)). |
 | `github.trustedOrgs`, `github.trustedUsers` | Lists of GitHub orgs and logins whose pull request discussion the agent reads ([trust settings](../configuration.md#trust-settings)). One is required with the GitHub App enabled; they apply without it too. |
+| `integrations.gitlab.enabled` | Turns on GitLab webhooks at `/webhook/gitlab`: `@<botUsername>` notes and failed pipelines on the agent's merge requests reach the agent. Needs `gitlab.baseUrl`. See [docs/gitlab.md](../gitlab.md). |
+| `integrations.gitlab.botUsername`, `integrations.gitlab.botUserId` | The username and numeric id of the GitLab token's user. Required when enabled. |
+| `integrations.gitlab.ciResults` | Default `true`: failed pipelines on the agent's merge requests reach the agent. |
+| `gitlab.trustedGroups`, `gitlab.trustedUsers` | GitLab groups (`group` or `group/subgroup`) and usernames who may drive devbox and whose merge request notes the agent reads. One is required with `integrations.gitlab` enabled. |
 | `integrations.jira.enabled` | Turns Jira on: webhooks at `/webhook/jira`. See [docs/jira.md](../jira.md). |
 | `integrations.jira.siteUrl`, `integrations.jira.cloudId` | The site's `https` origin and its cloud ID. Required when enabled. |
 | `integrations.jira.botEmail`, `integrations.jira.botAccountId`, `integrations.jira.botName` | The service account's email, account ID and display name. Required when enabled. |
@@ -303,8 +307,10 @@ the control plane. For the GitHub App it also refuses:
 - `tokenScope: repos` with no `repos`:
   `tokenScope: repos needs at least one entry in repos (or use tokenScope: installation)`.
 
-Each message starts with `integrations.githubApp.enabled is true: `. For
-Jira it refuses an enabled block without `siteUrl`, `cloudId`, `botEmail`,
+Each message starts with `integrations.githubApp.enabled is true: `. GitLab's
+start with `integrations.gitlab.enabled is true: ` and name the missing
+`gitlab.baseUrl`, bot setting or trust list.
+For Jira it refuses an enabled block without `siteUrl`, `cloudId`, `botEmail`,
 `botAccountId` or `botName`.
 
 - **The secrets** go in the Secret `devbox-integrations`, or your own with

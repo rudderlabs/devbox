@@ -116,12 +116,11 @@ export class JiraIntegration implements Integration {
   // RetryableError holds the event. The URL comes from the sandbox and Jira
   // shows it as a link, so only an https github.com pull request is linked.
   async onPrOpened(ctx: HookCtx, task: Task, pr: PrRef): Promise<void> {
-    const gh = pr.github;
-    if (!gh || !pr.url.startsWith("https://")) {
+    const title = githubPrTitle(pr.url);
+    if (!title) {
       ctx.log.warn("jira PR link skipped: not a GitHub pull request URL", { taskId: task.id });
       return;
     }
-    const title = `${gh.owner}/${gh.repo}#${gh.prNumber}`;
     try {
       await this.client.upsertRemoteLink(
         task.externalId,
@@ -227,6 +226,14 @@ function failureText(m: Extract<Outbound, { type: "failure" }>, bot: string): st
         ? m.summary
         : `⚠️ Something went wrong while working on this. Comment with @${bot} to retry.`;
   }
+}
+
+// `owner/repo#N` for an https github.com pull request URL, or any page of one;
+// undefined for anything else (another host, a lookalike, credentials, http).
+const GITHUB_PR = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/pull\/(\d+)(?:[/?#]|$)/;
+function githubPrTitle(url: string): string | undefined {
+  const m = GITHUB_PR.exec(url);
+  return m ? `${m[1]}/${m[2]}#${m[3]}` : undefined;
 }
 
 // Jira's 400 for a comment over its length limit.
