@@ -209,6 +209,11 @@ describe("iron-proxy config with a GitLab instance", () => {
     const { rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB);
     expect(names(rendered)).toEqual(["devbox-github", "my-gitlab-token"]);
     expect(names((await chartConfig("https://llm.example.com/v1")).rendered)).toEqual(["devbox-github"]);
+    // The Secret still named but the instance cleared: GitLab is off, so no access.
+    const cleared = await chartConfig("https://llm.example.com/v1", [], "openai", [
+      "secrets.gitlab.existingSecret=my-gitlab-token",
+    ]);
+    expect(names(cleared.rendered)).toEqual(["devbox-github"]);
   });
 
   it("tells the control plane and the snapshot builder about the instance", async () => {

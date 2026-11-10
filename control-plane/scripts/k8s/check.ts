@@ -206,7 +206,7 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
       } else {
         await serviceItem("GitHub App token", async () => {
           if (minting.tokenScope === "repos" && githubRepos(cfg.repos).length === 0) {
-            throw new Error(
+            throw new GithubAppSetupError(
               "tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation); not minting an installation-wide token",
             );
           }
