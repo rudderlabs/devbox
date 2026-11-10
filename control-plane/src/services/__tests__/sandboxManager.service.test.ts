@@ -333,6 +333,47 @@ describe("SandboxManager", () => {
       }).createSandboxWithPvc(taskParams);
       expect(envOf().GITLAB_BASE_URL).toBe("https://gitlab.example.com");
     });
+
+    it("forwards each GitLab trust list exactly when configured", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        gitlabTrustedGroups: "platform,platform/backend",
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf().HARNESS_GITLAB_TRUSTED_GROUPS).toBe("platform,platform/backend");
+      expect("HARNESS_GITLAB_TRUSTED_USERS" in envOf()).toBe(false);
+    });
+
+    it("forwards the GitLab trusted users on their own too", async () => {
+      await new SandboxManager({ ...baseOpts, gitlabTrustedUsers: "alice" }).createSandboxWithPvc(
+        taskParams,
+      );
+      expect(envOf().HARNESS_GITLAB_TRUSTED_USERS).toBe("alice");
+      expect("HARNESS_GITLAB_TRUSTED_GROUPS" in envOf()).toBe(false);
+    });
+
+    it("takes GitLab trust only from the control plane's own settings, never from forwarded env", async () => {
+      const forwardedEnv = {
+        HARNESS_GITLAB_TRUSTED_GROUPS: "evil",
+        HARNESS_GITLAB_TRUSTED_USERS: "gollum",
+      };
+      // Not configured: the forwarded values are stripped.
+      await new SandboxManager({ ...baseOpts, forwardedEnv }).createSandboxWithPvc(taskParams);
+      expect("HARNESS_GITLAB_TRUSTED_GROUPS" in envOf()).toBe(false);
+      expect("HARNESS_GITLAB_TRUSTED_USERS" in envOf()).toBe(false);
+    });
+
+    it("a configured GitLab trust list overrides a forwarded one; the other is still stripped", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: {
+          HARNESS_GITLAB_TRUSTED_GROUPS: "evil",
+          HARNESS_GITLAB_TRUSTED_USERS: "gollum",
+        },
+        gitlabTrustedGroups: "platform",
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf().HARNESS_GITLAB_TRUSTED_GROUPS).toBe("platform");
+      expect("HARNESS_GITLAB_TRUSTED_USERS" in envOf()).toBe(false);
+    });
   });
 
   describe("createSandboxWithPvc — runtime and identity env", () => {
