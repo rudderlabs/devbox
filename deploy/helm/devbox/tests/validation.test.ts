@@ -298,6 +298,19 @@ describe("chart validation", () => {
     },
   );
 
+  it("accepts a trusted group whose path segments start with an underscore, as repo URLs may", async () => {
+    const r = await helmTemplate([
+      ...BASE,
+      ...[
+        "gitlab.baseUrl=https://gitlab.example.com",
+        "secrets.gitlab.existingSecret=s",
+        "gitlab.trustedGroups={_platform/_backend}",
+      ].flatMap((s) => ["--set", s]),
+    ]);
+    expect(r.stderr).not.toContain("is not a group path");
+    expect(r.code).toBe(0);
+  });
+
   it("vendors the pinned OpenSandbox chart", () => {
     const tgz = readFileSync(join(CHART, "charts", "opensandbox-0.2.2.tgz"));
     expect(createHash("sha256").update(tgz).digest("hex")).toBe(
