@@ -98,30 +98,45 @@ and `gitlab` rounds (`harness/src/harness/followup.py`).
   disabled integration, bounds each `deliver` and hook call with a timeout and
   an abort signal, and logs a failure. `onTaskStarted` runs before every
   fresh-provision attempt, so it must be safe to repeat.
-- **The code host.** GitHub is the only code host, and the control plane
-  handles new pull requests itself
-  (`control-plane/src/services/codeHost.service.ts`). It posts a comment on
-  each one explaining @-mentions, but only while an enabled integration sets
-  `prMentionLogin` (the GitHub integration sets its bot login), and it assigns
-  the pull request to the person the task's integration returns from
-  `assignee()`, through that person's `githubAccount`. An integration whose
-  platform links GitHub accounts returns the link as it is, an account id or a
-  login, or `null` when the person hasn't linked one; one that can't link
-  accounts leaves it out. An all-digit `githubAccount` is taken as an account
-  id and anything else as a login. Only github.com pull request URLs get the
-  comment or an assignee. The comment is posted, and the assignee started,
-  before the control plane records the pull request on the task, so a restart
-  before the record repeats them, and the comment can appear twice. The
-  assignee is best-effort: it finishes in the background, and a crash while it
-  is still running is not retried.
+- **Pull requests the agent opens.** The harness opens them, on GitHub or on
+  GitLab, where a pull request is a merge request. The control plane has no
+  code host layer of its own: what happens on a new pull request is the
+  business of the integration whose host it is on. An integration says which
+  URLs are its host's with `hostsPr`, and the control plane then calls its
+  `onPrOpened` for each new one, with `firstTime` true
+  (`IntegrationRegistry.onPrOpenedOnHost`). The GitHub integration posts a
+  comment that names its bot and explains @-mentions, and assigns the pull
+  request; the GitLab integration posts its note. A URL no enabled integration
+  hosts gets nothing, which is every URL while that host's integration is off:
+  on GitHub, without the App's webhooks, a pull request gets no comment and
+  no assignee.
+
+  The assignee is the task's person. An integration can't call another one,
+  so the hook's `ctx.person()` asks the task's own integration for it (its
+  `assignee()`), and GitHub assigns through that person's `githubAccount`. An
+  integration whose platform links GitHub accounts returns the link as it is,
+  an account id or a login, or `null` when the person hasn't linked one; one
+  that can't link accounts leaves it out. An all-digit `githubAccount` is
+  taken as an account id and anything else as a login. Nothing links a person
+  to a GitLab account yet, so a merge request gets no assignee.
+
+  This is the same `onPrOpened` the task's own integration gets after the
+  pull request is recorded (Linear links it on the issue). There a failure
+  can hold the event; for the host's integration it is only logged. The host's
+  call is awaited before the control plane records the pull request on the
+  task, so a restart before the record repeats it, and the comment can appear
+  twice. Work the hook doesn't want the control plane to wait for goes to
+  `ctx.background`: GitHub assigns the pull request that way, so the assignee
+  is best-effort, and a crash while it is still running is not retried. A new
+  host is an integration with `hostsPr` and `onPrOpened`.
 - **Reply targets.** Each round carries reply targets that say where the
   harness's answers go, each with a `spec` in the integration's own shape. The
   control plane stores the spec and hands it back to the `deliver` of the
   round's integration, which checks it and refuses anything else.
 - **The boundary.** A file in the folder imports only its own folder, the
   shared files next to it (`types.ts`, `outbound.ts`, `http.ts`, `env.ts`), its
-  API clients (kept in its own folder, or in `control-plane/src/clients/` under
-  its name when core uses them too, as with GitHub's), the
+  API clients (kept in its own folder: `client.ts` and `token.ts` for GitHub
+  and GitLab, `api.ts` for Linear), the
   experimental-flag parser, the database row types and packages: never another
   integration or the rest of the control plane.
   `control-plane/src/integrations/__tests__/boundary.test.ts` checks this.

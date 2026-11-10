@@ -13,7 +13,13 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import { botMismatch, checkGitlab, type GitlabIdentity, identityKnown } from "../gitlab/check";
+import {
+  botMismatch,
+  checkGitlab,
+  type GitlabIdentity,
+  gitlabCommitIdentity,
+  identityKnown,
+} from "../gitlab/check";
 import {
   appIdentity,
   GithubAppSetupError,
@@ -38,7 +44,7 @@ import {
 } from "../lib/secrets";
 import { checkLinear, type LinearIdentity } from "../linear/check";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput, readCliProfile } from "../up/cliLogin";
-import { type DevboxConfig, githubRepos, gitlabRepos } from "../up/config";
+import { type DevboxConfig, githubRepos, gitlabRepos, needsGithub } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, type Identity } from "../up/preflight";
 import { pickClusterIP } from "./clusterIP";
 import { freePort, profileFor } from "./connect";
@@ -305,7 +311,11 @@ export async function install(
   // With devbox-minted tokens and the user's own key Secret, the key is not
   // read here: the seed job mints the first token, and k8s:check checks it.
   const userAppKey = app?.tokens === "devbox" ? existingSecret(values0, "githubApp") : undefined;
-  let githubR = own.github && !app ? await resolveSecret("GITHUB_TOKEN", secretDeps) : undefined;
+  // No GitHub repo and no App: no GitHub token is asked for or checked; the
+  // token Secret the chart mounts is then created empty below.
+  const usesGithub = needsGithub(cfg.repos, app);
+  let githubR =
+    own.github && !app && usesGithub ? await resolveSecret("GITHUB_TOKEN", secretDeps) : undefined;
   let appKey: PrivateKey | undefined;
   if (app?.tokens === "devbox" && !userAppKey) {
     appKey = await resolvePrivateKey(secretDeps);
@@ -378,6 +388,7 @@ export async function install(
   // TLS-dependent checks are k8s:check's, as for a token in the user's Secret.
   const userCa = userValue(deps.target, ["ironProxy", "caBundle"]);
   const caOnlyInCluster = typeof userCa === "string" && userCa !== "" && gitlabCa === undefined;
+  let gitlabGit: Identity | undefined;
   if (gitlabR && cfg.gitlab && caOnlyInCluster) {
     await offerSave(gitlabR, secretDeps);
     log(
@@ -411,6 +422,11 @@ export async function install(
         ? `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: devbox acts as ${gitlabIdentity.username} (id ${gitlabIdentity.id})`
         : `GitLab ${gitlabIdentity.version || ""} at ${instance.baseUrl}: the token may not read /api/v4/user (no User: Read); its identity is unknown`,
     );
+    // Commits on GitLab repos carry the GitLab user's identity. Every commit
+    // does only when the deployment has no GitHub side at all: GitHub repos
+    // whose token names no user (your own Secret) keep the default author.
+    gitlabGit = gitlabCommitIdentity(instance, gitlabIdentity);
+    if (!usesGithub) identity ??= gitlabGit;
     const mismatch = gitlab && identityKnown(gitlabIdentity) && botMismatch(gitlab, gitlabIdentity);
     if (mismatch)
       throw new KubeError(
@@ -488,10 +504,13 @@ export async function install(
 
   log("[4/7] Namespaces and Secrets");
   await k.kubectlOk(["apply", "-f", "-"], { stdin: namespacesManifest() });
-  if (userAppKey) {
-    // The minter may only update its token Secret, so it must exist. Created
-    // empty when missing; an existing one is left as it is (create never
-    // replaces), so no token is ever read or overwritten here.
+  const noGithub = own.github && !app && !usesGithub;
+  if (userAppKey || noGithub) {
+    // The minter may only update its token Secret, so it must exist; and
+    // without GitHub the chart still mounts it (iron-proxy, the control plane,
+    // the snapshot builder all take an empty token). Created empty when
+    // missing. For the minter an existing one is left as it is (create never
+    // replaces), so its token is never read or overwritten here.
     const r = await k.kubectl(["create", "-f", "-"], {
       stdin: secretManifest({ name: GITHUB_SECRET, data: { token: "" } }),
     });
@@ -500,7 +519,20 @@ export async function install(
         `kubectl create secret ${GITHUB_SECRET} failed: ${r.stderr.trim() || `exit ${r.code}`}`,
       );
     }
-    log("The token Secret is filled by the devbox-github-token-seed job");
+    // The Secret is the installer's own here (own.github). Without GitHub, one
+    // left from before, when the deployment had GitHub repos, still holds
+    // that token: empty it, or sandboxes keep reading with it through the
+    // proxy's read-only GitHub rules. The minter's Secret is never touched.
+    if (noGithub && r.code !== 0) {
+      await k.kubectlOk(["apply", "-f", "-"], {
+        stdin: secretManifest({ name: GITHUB_SECRET, data: { token: "" } }),
+      });
+    }
+    log(
+      noGithub
+        ? `No GitHub repo and no GitHub App: the token Secret ${GITHUB_SECRET} stays empty`
+        : "The token Secret is filled by the devbox-github-token-seed job",
+    );
   }
   const secrets = userSecrets(values0, {
     github,
@@ -588,7 +620,14 @@ export async function install(
   const values = chartValues(
     cfg,
     deps.target.values,
-    { clusterIP, publicBaseUrl: url, identity, integrations, ...gitlabSecrets },
+    {
+      clusterIP,
+      publicBaseUrl: url,
+      identity,
+      integrations,
+      ...gitlabSecrets,
+      ...(gitlabGit ? { gitlabGit } : {}),
+    },
     overlay,
   );
   const before = await templateHash(k);

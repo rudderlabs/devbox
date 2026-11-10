@@ -1,25 +1,15 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 
-// Pin a complete-enough config before importing the real impl. Other test files
-// mock.module("../../config") with partial shapes (e.g. { databaseUrl } in the
-// repository tests), and on Linux those mocks leak across files in readdir order
-// (oven-sh/bun#12823). If a partial mock leaks in before this file runs,
-// config.codeHost is undefined and githubFetch throws at call time — order-
-// dependent CI-only failures. Registering our own mock here makes this file
-// immune to whatever ran before it. See control-plane/README.md (Conventions).
-mock.module("../../config", () => ({
-  config: { codeHost: { tokenSettings: { token: "test-token" } } },
-}));
-
-// Import a FRESH instance of ./githubApi, NOT the ../github barrel or the
-// cached ./githubApi. Service/controller tests mock.module the ../github barrel;
+// Import a FRESH instance of ../clientApi, NOT the ../client barrel or the
+// cached ../clientApi. Service/controller tests mock.module the ../client barrel;
 // bun's module mocks are process-global and leak across files on Linux (and
 // afterAll re-registration does NOT undo a cross-file leak — verified failing in
 // CI). If an earlier file loaded the real barrel, mocking it later writes through
-// its `export *` into the cached ./githubApi too. The query string gives this
+// its `export *` into the cached ../clientApi too. The query string gives this
 // file its own module instance. See control-plane/README.md (Conventions).
 const {
   addPrAssignees,
+  configureGithubClient,
   fetchOrgMembers,
   getReviewComments,
   getUserById,
@@ -27,9 +17,11 @@ const {
   parsePrUrl,
   postIssueComment,
   requestReviewers,
-} = (await import("../githubApi.ts" + "?github-impl-test")) as typeof import("../githubApi");
-const { HttpError, retryable } = await import("../../integrations/http");
-const { RetryableError } = await import("../../integrations/outbound");
+} = (await import("../clientApi.ts" + "?github-impl-test")) as typeof import("../clientApi");
+const { HttpError, retryable } = await import("../../http");
+// The client's token, whatever the environment holds.
+configureGithubClient({ tokenSettings: { token: "test-token" } });
+const { RetryableError } = await import("../../outbound");
 
 // Build a fetch stub that returns each page in `pages` as a 200 JSON response,
 // recording the requested URLs. githubFetch does resp.text() → JSON.parse, so

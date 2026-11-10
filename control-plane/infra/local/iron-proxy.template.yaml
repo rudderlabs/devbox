@@ -3,18 +3,21 @@
 # (gitignored) from devbox.config.json, adding:
 #   - dns.upstream_resolver from `bun run up --dns-resolver` (default 1.1.1.1:53);
 #   - full access to each configured repo on github.com, api.github.com and
-#     raw.githubusercontent.com;
+#     raw.githubusercontent.com, or, for a repo under gitlab.baseUrl, to the
+#     project and its REST API on the instance's host;
 #   - GET/HEAD api.github.com /orgs/<org>/members per trusted org and /users/*
-#     (the harness's trust lookups), and *.blob.core.windows.net
-#     /actions-results/* (CI log downloads);
+#     (the harness's trust lookups), the same on the GitLab instance for
+#     gitlab.trustedGroups (/api/v4/groups/<g>/members/all, /api/v4/users),
+#     and *.blob.core.windows.net /actions-results/* (CI log downloads);
 #   - POST to the one LLM endpoint the harness calls: `<baseUrl>/responses`
 #     for openai, `<baseUrl>/v1/messages` for anthropic;
-#   - the hosts each secret is swapped on.
+#   - the hosts each secret is swapped on, and with a GitLab instance the
+#     GITLAB_TOKEN secret (placeholder proxy-gitlab-dummy-token) on its host.
 #
 # Routing: docker-compose.yml gives this container a network alias for each
 # host below, so Docker's embedded DNS sends sandbox traffic for them here.
 # Sandboxes only ever hold dummy tokens; iron-proxy swaps in the real ones
-# from its environment (GITHUB_TOKEN, LLM_API_KEY).
+# from its environment (GITHUB_TOKEN, GITLAB_TOKEN, LLM_API_KEY).
 #
 # Path patterns: a trailing "/*" matches the path itself and everything under
 # it. A "*" anywhere else matches within one path segment only. A pattern

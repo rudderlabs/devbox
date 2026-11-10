@@ -1,13 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
+import type { Logger, TaskService } from "../types";
 import {
   addIssueCommentReaction,
   addReviewCommentReaction,
   fetchOrgMembers,
   getReviewComments,
   getUserIdByLogin,
-} from "../../clients/github";
-import type { Logger, TaskService } from "../types";
+} from "./client";
 import type { GithubConfig } from "./config";
 import { type CommentSpec, enqueueCiResult, enqueueComment, enqueueReview } from "./rounds";
 

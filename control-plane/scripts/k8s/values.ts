@@ -18,6 +18,8 @@ export type InstallerValues = {
   // user brings one) and the CA bundle (none without gitlab.caFile).
   gitlabSecret?: string;
   gitlabCaSecret?: string;
+  // The commit identity for GitLab repos (the token's GitLab user).
+  gitlabGit?: Identity;
 };
 
 const isPlainObject = (v: unknown): v is Values =>
@@ -106,7 +108,16 @@ export function chartValues(
   const ours: Values = {
     repos: cfg.repos.map(({ url, branch }) => ({ url, branch })),
     llm: llmValues(cfg.llm),
-    ...(cfg.gitlab ? { gitlab: { baseUrl: cfg.gitlab.baseUrl } } : {}),
+    ...(cfg.gitlab
+      ? {
+          gitlab: {
+            baseUrl: cfg.gitlab.baseUrl,
+            ...(extra.gitlabGit
+              ? { git: { name: extra.gitlabGit.gitName, email: extra.gitlabGit.gitEmail } }
+              : {}),
+          },
+        }
+      : {}),
     ...(extra.gitlabSecret ? { secrets: { gitlab: { existingSecret: extra.gitlabSecret } } } : {}),
     ...(extra.clusterIP || extra.gitlabCaSecret
       ? {

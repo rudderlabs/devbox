@@ -816,6 +816,33 @@ describe("k8sCheck with a GitLab instance", () => {
     ).toBe(true);
   });
 
+  it("GitLab repos only: the GitHub token Secret may be empty and the GitHub check is skipped", async () => {
+    const only: DevboxConfig = {
+      ...config(),
+      repos: [
+        {
+          url: `${BASE}/platform/api.git`,
+          branch: "main",
+          host: "gitlab",
+          owner: "platform",
+          name: "api",
+        },
+      ],
+      gitlab: { baseUrl: BASE },
+    };
+    const r = await run(
+      [
+        found("devbox-github", { token: "" }),
+        LLM_OK,
+        found("devbox-gitlab", { token: GITLAB_TOKEN }),
+      ],
+      { cfg: only, fetch: gitlabFetch() },
+    );
+    expect(r.logs).toContain("  ok    Secret devbox-github");
+    expect(r.logs).toContain("  skip  GitHub token: no GitHub repo and no GitHub App: not used");
+    expect(r.logs.some((l) => l.includes("FAIL") && l.includes("devbox-github"))).toBe(false);
+  });
+
   it("the user's own GitLab Secret is read by its name", async () => {
     const r = await run([GITHUB_OK, LLM_OK, found("my-gitlab", { token: GITLAB_TOKEN })], {
       cfg: gitlabConfig(),

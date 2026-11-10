@@ -6,7 +6,6 @@ import type { InboxRepository, InboxRow } from "../repositories/inbox.repository
 import type { TaskRepository } from "../repositories/task.repository";
 import type { AgentEmit, HarnessEvent } from "../types/harnessEvent";
 import type { BackgroundWork } from "./backgroundWork";
-import type { CodeHost } from "./codeHost.service";
 import type { IntegrationRegistry } from "./integrationRegistry";
 import type { ReplyHolds } from "./replyHolds";
 import type { SandboxManager } from "./sandboxManager.service";
@@ -47,8 +46,7 @@ export class EventDispatcher {
     private inboxRepo: InboxRepository,
     private sandboxManager: SandboxManager,
     private slackNotifier: Pick<SlackNotifierService, "notifyTerminal">,
-    private registry: Pick<IntegrationRegistry, "for">,
-    private codeHost: Pick<CodeHost, "prRef" | "prOpened">,
+    private registry: Pick<IntegrationRegistry, "for" | "onPrOpenedOnHost">,
     private holds: ReplyHolds,
     private background: Pick<BackgroundWork, "track">,
   ) {}
@@ -114,22 +112,23 @@ export class EventDispatcher {
         return this.deliver(event, inboxRow, task);
 
       case "pr_opened": {
-        const pr = this.codeHost.prRef(event);
+        const pr = { url: event.pr_url, repo: event.repo, branch: event.branch };
         // A PR not yet on the task (the URL test appendPrUrl's firstTime uses)
-        // gets the code host's work: the onboarding comment and the assignee
-        // mirror. The comment is posted, and the mirror started, before
-        // appendPrUrl records the PR, so a crash before the record replays the
-        // event and repeats both. The mirror runs in BackgroundWork and isn't
-        // awaited (that would stall the tick), so it is best-effort: a crash
-        // while it is still running, after the record, is not retried. Once
-        // recorded, a replay skips both, so a held onPrOpened, retried every
-        // tick, doesn't post again. An owner that lost its lease finds out
-        // only at appendPrUrl, after posting, and the new owner posts again.
-        // A repeated help comment is acceptable.
+        // goes to the integration of its code host first: GitHub's posts the
+        // onboarding comment and assigns the PR, GitLab's posts its note. The
+        // comment is posted (awaited, under the hook's timeout), and the
+        // assignee started, before appendPrUrl records the PR, so a crash
+        // before the record replays the event and repeats both. The assignee
+        // runs in BackgroundWork and isn't awaited (that would stall the
+        // tick), so it is best-effort: a crash while it is still running,
+        // after the record, is not retried. Once recorded, a replay skips
+        // both, so a held onPrOpened, retried every tick, doesn't post again. An owner that lost its lease finds
+        // out only at appendPrUrl, after posting, and the new owner posts
+        // again. A repeated help comment is acceptable.
         const isNew = !(
           Array.isArray(task.prUrls) && task.prUrls.some((p) => p?.url === event.pr_url)
         );
-        if (isNew) await this.codeHost.prOpened(task, pr);
+        if (isNew) await this.registry.onPrOpenedOnHost(task, runId, pr);
         // appendPrUrl is owner-guarded; a 0-row return means the lease was
         // taken over (stale-lease takeover). Self-evict BEFORE onPrOpened and
         // before the cursor advance — a sibling pod now owns this task.

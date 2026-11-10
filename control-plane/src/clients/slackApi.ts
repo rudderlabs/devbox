@@ -1,5 +1,5 @@
 // Slack Web API wrapper (chat.postMessage). Plain function export, mirrors
-// clients/githubApi.ts. This is the IMPLEMENTATION module; production code and
+// integrations/github/clientApi.ts. This is the IMPLEMENTATION module; production code and
 // service tests import it through the ../clients/slack barrel. slackApi.test.ts
 // imports it directly because this specifier is never mock.module'd — see
 // slack.ts and control-plane/README.md (Conventions) for why that matters.
@@ -16,7 +16,7 @@ const API_BASE = process.env.SLACK_API_BASE_URL ?? "https://slack.com/api";
 
 function slackToken(): string {
   // Some test suites module-mock config with partial shapes; tolerate a missing
-  // slack group here the same way githubApi tolerates a missing github group.
+  // slack group here as the GitHub client once tolerated a missing github group.
   return (config as { slack?: { botToken?: string } }).slack?.botToken ?? "";
 }
 

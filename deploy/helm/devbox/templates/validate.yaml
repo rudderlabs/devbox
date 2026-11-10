@@ -16,6 +16,10 @@ selectors all assume the release namespace devbox. */ -}}
 {{- if not .Values.ironProxy.clusterIP }}
 {{- fail "ironProxy.clusterIP is required: a free address in the Service range (bun run k8s:install picks one; see docs/kubernetes/README.md)" }}
 {{- end }}
+{{- $gitlabGit := (.Values.gitlab.git | default dict) }}
+{{- if ne (empty $gitlabGit.name) (empty $gitlabGit.email) }}
+{{- fail "gitlab.git: name and email go together (the commit identity for GitLab repos)" }}
+{{- end }}
 {{- if not .Values.repos }}
 {{- /* An empty list would make the minter ask for the whole installation. */ -}}
 {{- if and (include "devbox.githubMinter" .) (ne (.Values.integrations.githubApp.tokenScope | default "") "installation") }}

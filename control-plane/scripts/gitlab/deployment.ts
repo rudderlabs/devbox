@@ -1,10 +1,10 @@
-// The deployment `gitlab:*` acts on: the k8s deployment a target file
-// describes. GitLab repos are Kubernetes only (the Compose stack refuses
-// them), so --target is required. Each knows the instance and the repos under
-// it (devbox.config.json), where `integrations.gitlab` and the trust lists
-// live (the target file), the commands that apply and check it, the user's
-// own Secrets, and how to call its API through its CLI profile. Nothing here
-// applies anything.
+// The deployment `gitlab:*` acts on: Compose without --target, the k8s
+// deployment a target file describes with it. Each knows the instance and the
+// repos under it (devbox.config.json), where `integrations.gitlab` and the
+// trust lists live (devbox.config.json's `gitlab` block on Compose, the target
+// file's `values.gitlab` on k8s), the commands that apply and check it, the
+// user's own Secrets, and how to call its API through its CLI profile.
+// Nothing here applies anything.
 import { join, resolve } from "node:path";
 import { installCommand } from "../k8s/kind";
 import { NAMESPACE } from "../k8s/run";
@@ -13,15 +13,18 @@ import { loadTarget } from "../k8s/target";
 import { enabledGithubApp, enabledLinear, type GitlabIntegration } from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
-import { k8sApi } from "../linear/deployment";
+import { composeApi, k8sApi } from "../linear/deployment";
 import { type GitlabConfig, gitlabRepos, loadConfig, type RepoConfig } from "../up/config";
 
 export type TrustLists = { trustedGroups: string[]; trustedUsers: string[] };
 
 export type GitlabDeployment = {
   deployment: Deployment;
-  // The target file, holding integrations.gitlab and values.gitlab.
+  // The file holding integrations.gitlab and the trust lists: devbox.config.json
+  // on Compose, the target file on k8s.
   configPath: string;
+  // The config key the trust lists live under: "gitlab" or "values.gitlab".
+  trustKey: "gitlab" | "values.gitlab";
   // The instance (devbox.config.json); undefined when none is configured.
   instance: GitlabConfig | undefined;
   // The repos under it.
@@ -59,12 +62,38 @@ export function loadDeployment(opts: {
   // devbox.config.json; another file in tests.
   configPath?: string;
 }): GitlabDeployment {
+  const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
   if (opts.target === undefined) {
-    throw new GitlabDeploymentError(
-      "GitLab repos are supported on Kubernetes only: pass --target <file> (the Compose stack takes GitHub repos)",
-    );
+    const cfg = loadConfig(configPath);
+    const app = enabledGithubApp(cfg.integrations);
+    return {
+      deployment: { kind: "compose" },
+      configPath,
+      trustKey: "gitlab",
+      instance: cfg.gitlab,
+      repos: gitlabRepos(cfg.repos),
+      gitlab: cfg.integrations.gitlab,
+      trust: {
+        trustedGroups: cfg.gitlab?.trustedGroups ?? [],
+        trustedUsers: cfg.gitlab?.trustedUsers ?? [],
+      },
+      linear: enabledLinear(cfg.integrations) !== undefined,
+      ...(app
+        ? {
+            githubApp: {
+              tokens: app.tokens,
+              slug: app.slug,
+              ...(app.org !== undefined ? { org: app.org } : {}),
+            },
+          }
+        : {}),
+      ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
+      applyCommand: "bun run up",
+      statusCommand: "bun run gitlab:status",
+      api: composeApi,
+    };
   }
-  const cfg = loadConfig(opts.configPath ?? DEFAULT_CONFIG_PATH, { integrations: false });
+  const cfg = loadConfig(configPath, { integrations: false });
   const path = resolve(opts.target);
   const target = loadTarget(path);
   const trust = (target.values.gitlab ?? {}) as Record<string, unknown>;
@@ -77,6 +106,7 @@ export function loadDeployment(opts: {
   return {
     deployment: { kind: "k8s", context: target.context, namespace: NAMESPACE },
     configPath: path,
+    trustKey: "values.gitlab",
     instance: cfg.gitlab,
     repos: gitlabRepos(cfg.repos),
     gitlab: integrations.gitlab,

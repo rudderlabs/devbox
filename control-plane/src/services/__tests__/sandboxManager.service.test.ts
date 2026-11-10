@@ -415,6 +415,29 @@ describe("SandboxManager", () => {
         GIT_COMMITTER_EMAIL: "ada@example.com",
       });
     });
+
+    it("passes the GitLab commit identity for the harness to apply per repo, never from forwarded env", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        gitIdentity: { name: "Ada", email: "ada@example.com" },
+        gitlabGitIdentity: { name: "devbox", email: "2-devbox@users.noreply.git.example.com" },
+        forwardedEnv: { HARNESS_GITLAB_GIT_NAME: "mallory", HARNESS_GITLAB_GIT_EMAIL: "m@x" },
+      }).createSandboxWithPvc(taskParams);
+      expect(envOf()).toMatchObject({
+        GIT_AUTHOR_NAME: "Ada",
+        HARNESS_GITLAB_GIT_NAME: "devbox",
+        HARNESS_GITLAB_GIT_EMAIL: "2-devbox@users.noreply.git.example.com",
+      });
+    });
+
+    it("drops a forwarded GitLab commit identity when none is configured", async () => {
+      await new SandboxManager({
+        ...baseOpts,
+        forwardedEnv: { HARNESS_GITLAB_GIT_NAME: "mallory", HARNESS_GITLAB_GIT_EMAIL: "m@x" },
+      }).createSandboxWithPvc(taskParams);
+      expect("HARNESS_GITLAB_GIT_NAME" in envOf()).toBe(false);
+      expect("HARNESS_GITLAB_GIT_EMAIL" in envOf()).toBe(false);
+    });
   });
 
   describe("experimental flag env propagation", () => {

@@ -132,6 +132,46 @@ describe("iron-proxy config with a GitLab instance", () => {
     { url: "https://git.example.com/gitlab/platform/backend/api.git", branch: "develop" },
   ])}`;
 
+  it("matches the Compose renderer, GitLab rules and token swap included", async () => {
+    const compose = Bun.YAML.parse(
+      renderIronProxyConfig(
+        readFileSync(TEMPLATE_PATH, "utf8"),
+        {
+          repos: [
+            ...REPOS.slice(0, 1),
+            {
+              url: "https://git.example.com/gitlab/platform/backend/api.git",
+              branch: "develop",
+              host: "gitlab",
+              owner: "platform/backend",
+              name: "api",
+            },
+          ],
+          github: { trustedOrgs: ["example-org"], trustedUsers: [] },
+          gitlab: {
+            baseUrl: "https://git.example.com/gitlab",
+            trustedGroups: ["platform", "platform/backend"],
+          },
+          llm: { provider: "openai", baseUrl: "https://llm.example.com/v1", model: "m" },
+        },
+        "1.1.1.1:53",
+        { githubTokenSource: "file" },
+      ),
+    ) as Doc;
+    const { config } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      "github.trustedOrgs={example-org}",
+      "gitlab.trustedGroups={platform,platform/backend}",
+    ]);
+    expect(config.transforms[0]).toEqual(compose.transforms[0]);
+    expect(withoutSource(config.transforms[1])).toEqual(withoutSource(compose.transforms[1]));
+    expect(config.transforms[1].config.secrets.map((s: Doc) => s.source)).toEqual([
+      { type: "file", path: "/var/run/devbox/github/token", ttl: "60s" },
+      { type: "file", path: "/var/run/devbox/gitlab/token", ttl: "60s" },
+      { type: "file", path: "/var/run/devbox/llm/api-key", ttl: "60s" },
+    ]);
+  });
+
   // iron-proxy matched "/api/v4/projects/g/sg/p/..." (decoded) against a
   // "%2F" rule and rejected it, in the first live run on EKS.
   it("allows the project's git and API paths under the instance's URL root, and nothing else there", async () => {
@@ -281,5 +321,22 @@ describe("iron-proxy config with a GitLab instance", () => {
     expect(builder).toContainEqual({ name: "GITLAB_SECRET", value: "my-gitlab-token" });
     const plain = (await chartConfig("https://llm.example.com/v1")).rendered;
     expect("GITLAB_BASE_URL" in envOf(plain["Deployment/devbox/devbox-control-plane"] as Doc)).toBe(false);
+  });
+
+  it("passes gitlab.git as the commit identity for GitLab repos, next to git, only when set", async () => {
+    const envOf = (doc: Doc) =>
+      Object.fromEntries(doc.spec.template.spec.containers[0].env.map((e: Doc) => [e.name, e.value]));
+    const { rendered } = await chartConfig("https://llm.example.com/v1", [repos], "openai", [
+      ...GITLAB,
+      "gitlab.git.name=devbox",
+      "gitlab.git.email=2-devbox@users.noreply.git.example.com",
+    ]);
+    const env = envOf(rendered["Deployment/devbox/devbox-control-plane"] as Doc);
+    expect(env.SANDBOX_GITLAB_GIT_NAME).toBe("devbox");
+    expect(env.SANDBOX_GITLAB_GIT_EMAIL).toBe("2-devbox@users.noreply.git.example.com");
+    // The deployment's own identity is untouched.
+    expect(env.SANDBOX_GIT_NAME).toBe("devbox");
+    const unset = (await chartConfig("https://llm.example.com/v1", [repos], "openai", GITLAB)).rendered;
+    expect("SANDBOX_GITLAB_GIT_NAME" in envOf(unset["Deployment/devbox/devbox-control-plane"] as Doc)).toBe(false);
   });
 });

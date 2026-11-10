@@ -1,16 +1,9 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 
-// A complete-enough config before importing the real impl (see github.test.ts
-// for why this file pins its own).
-mock.module("../../config", () => ({
-  config: {
-    gitlab: { baseUrl: "https://gitlab.example.com", tokenSettings: { token: "test-token" } },
-  },
-}));
-
-// A fresh instance of ./gitlabApi, not the ../gitlab barrel other tests mock.
+// A fresh instance of ../clientApi, not the ../client barrel other tests mock.
 const {
   awardNoteEmoji,
+  configureGitlabClient,
   fetchGroupMembers,
   findDiscussionIdForNote,
   getUserIdByUsername,
@@ -20,8 +13,13 @@ const {
   parseMrUrl,
   postDiscussionNote,
   postMrNote,
-} = (await import("../gitlabApi.ts" + "?gitlab-impl-test")) as typeof import("../gitlabApi");
-const { HttpError, retryable } = await import("../../integrations/http");
+} = (await import("../clientApi.ts" + "?gitlab-impl-test")) as typeof import("../clientApi");
+const { HttpError, retryable } = await import("../../http");
+// The instance and the token, whatever the environment holds.
+configureGitlabClient({
+  baseUrl: "https://gitlab.example.com",
+  tokenSettings: { token: "test-token" },
+});
 
 type Call = { url: string; init: RequestInit | undefined };
 
@@ -75,6 +73,31 @@ describe("mrWebUrl / parseMrUrl", () => {
     expect(parseMrUrl("https://gitlab.example.com/platform/api/-/issues/3")).toBeNull();
     expect(parseMrUrl("https://gitlab.example.com/platform/api/-/merge_requests/3", "")).toBeNull();
   });
+
+  it("matches merge request URLs whatever form the instance URL was configured in", async () => {
+    const mrUrl = "https://gitlab.example.com/gitlab/platform/api/-/merge_requests/3";
+    for (const baseUrl of [
+      "https://GitLab.Example.com/gitlab",
+      "https://gitlab.example.com:443/gitlab/",
+      "  https://gitlab.example.com/gitlab//  ",
+    ]) {
+      configureGitlabClient({ baseUrl, tokenSettings: { token: "test-token" } });
+      expect(parseMrUrl(mrUrl)).toEqual({ project: "platform/api", mrIid: 3 });
+      // And the API is called on the normalised instance.
+      const { fn, calls } = fetchReturning([{ status: 201, body: { id: 1 } }]);
+      globalThis.fetch = fn;
+      await postMrNote("platform/api", 3, "hi");
+      expect(calls[0]?.url).toBe(
+        "https://gitlab.example.com/gitlab/api/v4/projects/platform%2Fapi/merge_requests/3/notes",
+      );
+    }
+    configureGitlabClient({ baseUrl: "not a url", tokenSettings: { token: "test-token" } });
+    expect(parseMrUrl(mrUrl)).toBeNull();
+    configureGitlabClient({
+      baseUrl: "https://gitlab.example.com",
+      tokenSettings: { token: "test-token" },
+    });
+  });
 });
 
 describe("requests", () => {
@@ -89,6 +112,15 @@ describe("requests", () => {
     const headers = (calls[0]?.init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer test-token");
     expect(calls[0]?.init?.body).toBe(JSON.stringify({ body: "hello" }));
+  });
+
+  it("addresses a project by its path too, URL-encoded, as the code host does", async () => {
+    const { fn, calls } = fetchReturning([{ status: 201, body: { id: 79 } }]);
+    globalThis.fetch = fn;
+    await postMrNote("platform/backend/api", 3, "hello");
+    expect(calls[0]?.url).toBe(
+      "https://gitlab.example.com/api/v4/projects/platform%2Fbackend%2Fapi/merge_requests/3/notes",
+    );
   });
 
   it("replies inside a discussion, URL-encoding its id", async () => {

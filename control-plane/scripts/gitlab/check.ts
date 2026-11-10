@@ -9,7 +9,7 @@
 // token never appears in a message.
 import { randomBytes } from "node:crypto";
 import type { GitlabConfig, RepoConfig } from "../up/config";
-import { CredentialRejected, type Fetch, PreflightError } from "../up/preflight";
+import { CredentialRejected, type Fetch, type Identity, PreflightError } from "../up/preflight";
 
 export type GitlabIdentity = {
   // 0 and "" when the token may not read /api/v4/user and no identity was
@@ -343,4 +343,23 @@ export function botMismatch(
   if (gitlab.botUserId === identity.id && gitlab.botUsername === identity.username)
     return undefined;
   return `integrations.gitlab names the bot ${gitlab.botUsername} (id ${gitlab.botUserId}), but the GitLab token belongs to ${identity.username} (id ${identity.id}).`;
+}
+
+// The commit identity for GitLab repos (and for every repo when there is no
+// GitHub identity): the GitLab user's name and GitLab's private commit email
+// form (<id>-<username>@users.noreply.<host>), which GitLab attributes to that
+// user. None when the token may not read its own user.
+export function gitlabCommitIdentity(
+  instance: Pick<GitlabConfig, "baseUrl">,
+  identity: GitlabIdentity,
+): Identity | undefined {
+  if (!identityKnown(identity)) return undefined;
+  const host = new URL(instance.baseUrl).hostname;
+  return {
+    // The name ends up in a quoted ENV line of the local harness image
+    // (harness/Makefile): without quotes, $, backticks and backslashes, like
+    // the GitHub name in up/preflight.ts.
+    gitName: (identity.name ?? "").replace(/["'$`\\]/g, "").trim() || identity.username,
+    gitEmail: `${identity.id}-${identity.username}@users.noreply.${host}`,
+  };
 }

@@ -6,20 +6,24 @@ devbox can work on repos hosted on a GitLab instance: self-managed, or
 the webhooks on, an `@<bot>` note on that merge request and a failed pipeline
 on it reach the running task, and the agent answers in the note's thread. A
 deployment may mix GitHub and GitLab repos; each repo's host is read from its
-URL. Kubernetes only: the local Compose stack takes GitHub repos.
+URL. Both deployments take GitLab repos: the local Compose stack (`bun run
+up`) and Kubernetes (`k8s:install`).
 
 Not there yet: a batched review (GitLab sends each note on its own, so each
-mentioning note is one round), approvals as a signal, and an installer step
-(`gitlab:setup`). Tracked in
+mentioning note is one round) and approvals as a signal. Tracked in
 [rudderlabs/devbox#8](https://github.com/rudderlabs/devbox/issues/8).
 
 ## What you need
 
-- **A GitHub token as well.** GitLab is added beside GitHub, not instead of
-  it: the egress proxy and the snapshot builder read the GitHub token Secret
-  unconditionally, so a deployment with only GitLab repos still needs a GitHub
-  token (any account's, with no repos to reach) or the GitHub App. Making it
-  optional is tracked in [rudderlabs/devbox#8](https://github.com/rudderlabs/devbox/issues/8).
+- **No GitHub token, unless you also use GitHub.** With only GitLab repos and
+  no GitHub App, `bun run up` and `k8s:install` neither ask for nor check a
+  GitHub token, and commits carry the GitLab user's identity
+  (`<id>-<username>@users.noreply.<host>`). The chart still mounts the token
+  Secret, so on Kubernetes it has to exist: the installer creates
+  `devbox-github` empty; with GitOps create it yourself
+  (`kubectl -n devbox create secret generic devbox-github --from-literal=token=`).
+  Sandboxes then have no GitHub credential: anonymous reads of public repos
+  through the proxy's read-only rules are all that is left.
 - **A group or project access token** for the group that holds the repos,
   with the `api`, `read_repository` and `write_repository` scopes and the
   **Developer** role. Developer is all devbox's work needs, and devbox uses
@@ -33,6 +37,10 @@ mentioning note is one round), approvals as a signal, and an installer step
   and replace it in the Secret before then. A personal access token works for
   a trial, but then the bot is you: your own notes are ignored as the bot's,
   so mention it from another account.
+  A gitlab.com fine-grained token works too, with Code DPR, Branch R, Merge
+  Request CRU, Project R, Work Item CRU, Pipeline RU, Job R and Member R;
+  "Metadata: Read" is optional (without it the version is unknown and the
+  signing token is assumed).
 - **The instance's URL** as `gitlab.baseUrl`: `https://gitlab.example.com`,
   or with a relative URL root `https://example.com/gitlab`. The default port
   only, like `llm.baseUrl`, because the egress proxy intercepts only 80 and
@@ -50,10 +58,11 @@ mentioning note is one round), approvals as a signal, and an installer step
 > rolls nothing. `k8s:install` prints the `rollout restart` for the control
 > plane and iron-proxy; run it, then `k8s:check`.
 
-Kubernetes only: the local Compose stack takes GitHub repos. The pieces are
-the ones every integration has: the setup in `devbox.config.json`, the
-deployment's settings in the target file, the secrets in Secrets the
-installer writes.
+The pieces are the ones every integration has: the instance and the repos in
+`devbox.config.json`; the deployment's settings (`integrations.gitlab` and
+the trust lists) in `devbox.config.json` on Compose or the target file on
+Kubernetes; the secrets in the system keychain (Compose) or in Secrets the
+installer writes (Kubernetes).
 
 1. Put the instance and the repos in `devbox.config.json`:
 
@@ -71,12 +80,15 @@ installer writes.
    Nested groups are fine. Repo names (the last path segment) must be unique
    across both hosts, because each is cloned to `/workspace/<name>`. `caFile`
    is the PEM of the instance's private CA, absolute path, only when it has
-   one; the installer puts it in a Secret for the chart.
+   one; `bun run up` mounts it into iron-proxy and the control plane, the
+   installer puts it in a Secret for the chart. On Compose the trust lists
+   also live here, as `gitlab.trustedGroups` and `gitlab.trustedUsers`
+   (`gitlab:setup` writes them).
 
 2. Run the setup, with the token in `GITLAB_TOKEN` or at its prompt:
 
    ```
-   bun run gitlab:setup --target <file> [--public-url <url>]
+   bun run gitlab:setup [--target <file>] [--public-url <url>]
                         [--trusted-group <group>]... [--trusted-user <name>]...
                         [--secret-token] [--skip-webhook] [--skip-push-check] [--no-keychain]
    ```
@@ -86,13 +98,14 @@ installer writes.
    webhooks, that it can read pipelines, jobs and the trusted groups'
    members), learns the bot's identity from the token, registers a webhook
    on each project with a signing token it generates, saves the token in the
-   system keychain (or shows it once), and writes `integrations.gitlab`,
-   `values.gitlab` (the trust lists) and `publicUrl` to the target file. It
-   applies nothing and never touches the cluster.
+   system keychain (or shows it once), and writes `integrations.gitlab`, the
+   trust lists and `publicUrl` to `devbox.config.json` (Compose) or the
+   target file (Kubernetes, as `values.gitlab`). It applies nothing and never
+   touches the stack or the cluster.
 
    | Flag | Effect |
    |---|---|
-   | `--target <file>` | The Kubernetes deployment. Required. |
+   | `--target <file>` | A Kubernetes deployment's target file. Without it, the Compose stack. |
    | `--public-url <url>` | The public HTTPS URL GitLab sends webhooks to; else the saved `publicUrl`, else the Ingress ([GitHub: The public URL](github.md#the-public-url)). |
    | `--trusted-group`, `--trusted-user` | Who may drive devbox from GitLab. Default: what the target file holds, else the first repo's group. |
    | `--secret-token` | Verify webhooks with the legacy `X-Gitlab-Token` instead of the signing token. Chosen by itself below GitLab 19.1. |
@@ -113,7 +126,14 @@ installer writes.
    The rerun keeps the webhook authentication and reuses the saved webhook
    token, so the webhooks already registered keep working.
 
-3. `bun run k8s:install --target <file>` as usual. It checks the token again,
+3. Apply. On Compose, `bun run up`: it resolves `GITLAB_TOKEN` and the
+   webhook token (environment, then the keychain, then a prompt), checks the
+   token against the instance and the repos, clones the GitLab repos into the
+   repos volume, renders the proxy rules for the instance, and passes the
+   settings to the control plane. `bun run gitlab:status`, `gitlab:disable`
+   and `bun run secrets ls` work the same without `--target`.
+
+   On Kubernetes, `bun run k8s:install --target <file>` as usual. It checks the token again,
    writes `devbox-gitlab` (the token), `devbox-gitlab-ca` (the CA, with
    `caFile`) and the webhook token into `devbox-integrations`, and sets
    `secrets.gitlab.existingSecret`, `ironProxy.caBundle` and the
@@ -133,6 +153,26 @@ integrations Secret. To bring your own token Secret, name it in
 `secrets.gitlab.existingSecret` in the target file's values: the installer
 then writes none and runs no token check (`k8s:check` does).
 
+## Commit identity
+
+Commits on GitLab repos are authored as the token's GitLab user: its name and
+GitLab's private commit email, `<id>-<username>@users.noreply.<host>`, which
+GitLab attributes to that account. Commits on GitHub repos keep the GitHub
+identity ([configuration.md](configuration.md#the-github-token)), so a
+deployment with both hosts shows the right author on each.
+
+`bun run up` and `k8s:install` take the identity from the token check and pass
+it on. On Kubernetes, set it yourself when the installer cannot know it: with
+your own GitLab token Secret (`existingSecret`), with a plain Helm install, or
+with a token that may not read its own user and no bot configured. It is
+`gitlab.git.name` and `gitlab.git.email` under `values`, both or neither, and a
+value you set wins. Unset, commits on GitLab repos carry the deployment's one
+identity, like every other commit.
+
+The harness applies it at commit time, per repo, from the repo's origin. With
+harness-managed commit signing the signer's identity stays on every commit,
+because the signature is checked against the committer.
+
 ## Webhooks: notes and pipelines
 
 With `integrations.gitlab.enabled`, the control plane serves
@@ -148,6 +188,12 @@ With `integrations.gitlab.enabled`, the control plane serves
   false`. At most 20 failed pipelines reach one task, so a fix that keeps
   failing cannot loop forever; `GITLAB_CI_RESULT_MAX_PER_TASK` changes that
   ([configuration.md](configuration.md#control-plane-settings)).
+
+With the webhooks on, the agent introduces itself on each merge request it
+opens: one note that names the bot and says how to mention it. The merge
+request gets no assignee yet. On GitHub, with the App, the pull request is
+assigned to the person a Linear issue belongs to, through the GitHub account
+Linear links to them, and nothing links a person to a GitLab account.
 
 Only notes from trusted users count: members of `gitlab.trustedGroups`
 (inherited members included) and `gitlab.trustedUsers`, by immutable numeric

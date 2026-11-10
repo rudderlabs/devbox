@@ -47,7 +47,6 @@ it("creates GitHub from its settings: a webhook signed with its secret shows in 
     token: expect.objectContaining({ source: "env" }),
     webhooks: { enabled: true, lastWebhookAt: "2026-10-30T12:00:00.000Z", ciResults: true },
   });
-  expect(integration.prMentionLogin).toBe("my-bot");
 });
 
 it("reports CI results off and no webhook yet from its settings", async () => {

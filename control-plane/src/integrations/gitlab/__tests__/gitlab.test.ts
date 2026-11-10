@@ -8,7 +8,7 @@ const postMrNote = mock(() => Promise.resolve({ id: 1 }));
 const postDiscussionNote = mock(() => Promise.resolve({ id: 2 }));
 const findDiscussionIdForNote = mock(() => Promise.resolve(null as string | null));
 const awardNoteEmoji = mock(() => Promise.resolve());
-mock.module("../../../clients/gitlab", () => ({
+mock.module("../client", () => ({
   postMrNote,
   postDiscussionNote,
   findDiscussionIdForNote,
@@ -18,7 +18,10 @@ mock.module("../../../clients/gitlab", () => ({
   getUserIdByUsername: mock(() => Promise.resolve(null)),
   listOpenMergeRequestsForBranch: mock(() => Promise.resolve([])),
   mrWebUrl: (u: string, i: number) => `${u}/-/merge_requests/${i}`,
-  parseMrUrl: () => null,
+  parseMrUrl: (url: string) => {
+    const m = url.match(/^https:\/\/gitlab\.example\.com\/(.+?)\/-\/merge_requests\/(\d+)/);
+    return m ? { project: m[1], mrIid: Number(m[2]) } : null;
+  },
 }));
 
 const { GitlabIntegration, gitlab: definition } = await import("../index");
@@ -227,6 +230,68 @@ describe("GitLab status", () => {
       lastWebhookAt: "2026-11-03T00:00:00.000Z",
       ciResults: true,
     });
+  });
+});
+
+describe("GitlabIntegration.onPrOpened", () => {
+  const integration = new GitlabIntegration(
+    { botUsername: "devbox-bot" },
+    { status: () => ({}) as never },
+    { handleWebhook: async () => new Response() },
+  );
+  const person = mock(() => Promise.resolve(null));
+  const background = mock((_work: Promise<unknown>) => {});
+  const hookCtx = { ...ctx, isCurrent: async () => false, firstTime: true, person, background };
+  const task = { id: "task-1", key: "XYZ-1" } as never;
+  const opened = (url: string) => ({ url, repo: "api", branch: "b" });
+  const MR_URL = "https://gitlab.example.com/platform/backend/api/-/merge_requests/3";
+
+  beforeEach(() => {
+    postMrNote.mockReset();
+    postMrNote.mockResolvedValue({ id: 1 });
+  });
+
+  it("hosts merge requests on the configured instance and nothing else", () => {
+    expect(integration.hostsPr(MR_URL)).toBe(true);
+    expect(integration.hostsPr("https://github.com/o/r/pull/1")).toBe(false);
+    expect(integration.hostsPr("https://gitlab.com/o/r/-/merge_requests/1")).toBe(false);
+  });
+
+  it("posts the onboarding note on the merge request, naming its bot and the task, and asks for nobody", async () => {
+    await integration.onPrOpened(hookCtx, task, opened(MR_URL));
+    expect(postMrNote).toHaveBeenCalledTimes(1);
+    const [project, mrIid, body, signal] = postMrNote.mock.calls[0] as unknown as [
+      string,
+      number,
+      string,
+      AbortSignal,
+    ];
+    // The project by its path: a merge request URL carries no numeric id.
+    expect([project, mrIid]).toEqual(["platform/backend/api", 3]);
+    expect(body).toContain("I'm **devbox-bot**");
+    expect(body).toContain("merge request from task `XYZ-1`");
+    expect(body).toContain("`@devbox-bot`");
+    expect(signal).toBe(ctx.signal);
+    // No assignee on a merge request yet: nobody is looked up, nothing deferred.
+    expect(person).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+  });
+
+  it("posts nothing on a replay of a merge request the task already has", async () => {
+    await integration.onPrOpened({ ...hookCtx, firstTime: false }, task, opened(MR_URL));
+    expect(postMrNote).not.toHaveBeenCalled();
+  });
+
+  it("posts nothing for a URL that is not a merge request on the instance", async () => {
+    await integration.onPrOpened(hookCtx, task, opened("https://github.com/o/r/pull/1"));
+    expect(postMrNote).not.toHaveBeenCalled();
+  });
+
+  it("lets a failed post reach the registry, which logs it", async () => {
+    postMrNote.mockRejectedValue(new Error("gitlab down"));
+    await expect(integration.onPrOpened(hookCtx, task, opened(MR_URL))).rejects.toThrow(
+      "gitlab down",
+    );
   });
 });
 

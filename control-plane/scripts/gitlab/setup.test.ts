@@ -136,6 +136,7 @@ function harness(o: {
   const d: GitlabDeployment = {
     deployment: K8S,
     configPath,
+    trustKey: "values.gitlab",
     instance: o.instance === null ? undefined : (o.instance ?? { baseUrl: BASE }),
     repos: o.instance === null ? [] : [REPO],
     gitlab: o.gitlab,

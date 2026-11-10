@@ -253,7 +253,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Not in v1
 
-- GitHub, and GitLab on Kubernetes ([docs/gitlab.md](docs/gitlab.md)). No Bitbucket.
+- GitHub and GitLab ([docs/gitlab.md](docs/gitlab.md)). No Bitbucket.
 - Two LLM APIs: OpenAI's Responses API and Anthropic's Messages API. A
   self-hosted model needs a server that speaks the Responses API with
   reasoning, on port 80 or 443 under a DNS name.

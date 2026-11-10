@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { GITHUB_TOKEN_TTL_MS, githubTokenProvider, parseGithubTokenSettings } from "../githubToken";
+import { GITHUB_TOKEN_TTL_MS, githubTokenProvider, parseGithubTokenSettings } from "../token";
 
 describe("parseGithubTokenSettings", () => {
   it("prefers GITHUB_TOKEN_FILE", () => {

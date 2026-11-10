@@ -28,7 +28,7 @@ const github = {
   parsePrUrl: mock(),
   githubTokenState: mock(),
 };
-mock.module("../../clients/github", () => github);
+mock.module("../../integrations/github/client", () => github);
 
 const { SlackNotifierService } = await import("../slackNotifier.service");
 const { LinearIntegration } = await import("../../integrations/linear");
