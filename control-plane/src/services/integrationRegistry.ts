@@ -63,7 +63,9 @@ export type WrappedIntegration = {
   // A fresh provision, on every attempt, before the sandbox is created.
   // runId is the assignment's id and target its first reply target.
   onTaskStarted(task: Task, runId: string, target: ReplyTarget): Promise<void>;
-  // pr_opened, after appendPrUrl; the dispatcher holds a RetryableError.
+  // pr_opened, for the task's own integration, after appendPrUrl; the
+  // dispatcher holds a RetryableError. (The PR's code host's integration is
+  // reached through IntegrationRegistry.onPrOpenedOnHost.)
   onPrOpened(task: Task, runId: string | null, pr: PrRef, firstTime: boolean): Promise<void>;
   // In BackgroundWork, so it never blocks the caller.
   onRoundFinished(
@@ -90,7 +92,7 @@ export class IntegrationRegistry {
   // running.
   readonly taskSources: string[];
   // The enabled integrations by name. Core reaches them only through for(),
-  // webhooks(), status() and prMentionLogin().
+  // webhooks() and status().
   private readonly live = new Map<string, Integration>();
   private readonly definitions = new Map<string, IntegrationDefinition>();
   private readonly taskServices = new Map<string, TaskService>();
@@ -146,8 +148,15 @@ export class IntegrationRegistry {
         );
       },
       onPrOpened: async (task, runId, pr, firstTime) => {
+        // The task's person, for whichever integration asks: from the task's
+        // own integration, under the assignee hook's own timeout.
+        const person = () => this.for(task.source).assignee(task, { prUrl: pr.url });
+        // What the hook doesn't want the tick to wait for (GitHub: assigning
+        // the PR), drained at shutdown like onRoundFinished.
+        const background = (work: Promise<unknown>) =>
+          this.background.track(task.id, "assignee", work);
         await this.hook(name, "onPrOpened", task, runId, (ctx, i) =>
-          i.onPrOpened?.({ ...ctx, firstTime }, task, pr),
+          i.onPrOpened?.({ ...ctx, firstTime, person, background }, task, pr),
         );
       },
       onRoundFinished: (task, round, runId, outcome, firstTransition, archive = async () => null) =>
@@ -163,10 +172,23 @@ export class IntegrationRegistry {
     };
   }
 
-  // The login @-mentions on devbox's PRs go to, while an enabled integration
-  // takes them.
-  prMentionLogin(): string | undefined {
-    return [...this.live.values()].find((i) => i.prMentionLogin)?.prMentionLogin;
+  // A pull request new to the task, for the integration whose code host it is
+  // on: GitHub's or GitLab's, by their hostsPr. It introduces itself there
+  // (awaited here) and, on GitHub, assigns the PR (in the background, through
+  // the hook's ctx.background). Called before the PR is recorded, so a crash
+  // before the record repeats it. Nothing happens for a URL no enabled
+  // integration hosts, which is every URL while the host's integration is
+  // off. Best-effort: never throws. Even a RetryableError is only logged: a
+  // hold belongs to the task's own integration, which hears of the PR after
+  // the record.
+  async onPrOpenedOnHost(task: Task, runId: string | null, pr: PrRef): Promise<void> {
+    const host = [...this.live].find(([, i]) => i.hostsPr?.(pr.url))?.[0];
+    if (!host) return;
+    try {
+      await this.for(host).onPrOpened(task, runId, pr, true);
+    } catch (err) {
+      logErr("onPrOpened hook failed", err, { taskId: task.id, integration: host, prUrl: pr.url });
+    }
   }
 
   // The enabled integrations that take webhooks.

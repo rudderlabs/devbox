@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { GITLAB_TOKEN_TTL_MS, gitlabTokenProvider, parseGitlabTokenSettings } from "../gitlabToken";
+import { GITLAB_TOKEN_TTL_MS, gitlabTokenProvider, parseGitlabTokenSettings } from "../token";
 
 describe("parseGitlabTokenSettings", () => {
   it("prefers GITLAB_TOKEN_FILE, falls back to GITLAB_TOKEN, and needs neither", () => {

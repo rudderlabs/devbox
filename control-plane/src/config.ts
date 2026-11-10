@@ -1,8 +1,7 @@
 import { parseApiConfig } from "./apiConfig";
-import { parseGithubTokenSettings } from "./clients/githubToken";
-import { parseGitlabTokenSettings } from "./clients/gitlabToken";
 import { pickForwardedEnv } from "./forwardedEnv";
 import { optionalNumber, parseTrustList } from "./integrations/env";
+import { parseGithubTokenSettings } from "./integrations/github/token";
 import { parseSlackConfig } from "./integrationsConfig";
 import {
   parseGitlabBaseUrl,
@@ -91,15 +90,18 @@ export const config = {
   // task-completion updates) and SLACK_CHANNEL_ID (C…) are required. The token
   // matches the /token/i log-redaction pattern. Parsed by integrationsConfig.ts.
   slack: parseSlackConfig(process.env),
-  // The code host's settings (GitHub is the only one). They belong to core,
-  // not to the GitHub integration, whose own settings are parsed in
-  // integrations/github/config.ts: core posts the onboarding comment, assigns
-  // PRs and gives sandboxes their trust lists whether or not GitHub webhooks
-  // are on.
+  // GitHub's settings that belong to core, not to the GitHub integration,
+  // whose own settings are parsed in integrations/github/config.ts: core
+  // gives sandboxes their trust lists whether or not GitHub webhooks are on.
+  // The token is read here too, though only the integration calls GitHub now
+  // (replies, the onboarding comment, the assignee): with it off, the control
+  // plane makes no GitHub call.
   codeHost: {
     // The control plane's own GitHub token (it runs outside the sandbox
     // egress path, so it needs a real one): GITHUB_TOKEN_FILE (a mounted
-    // Secret, re-read on a TTL) or GITHUB_TOKEN. See clients/githubToken.ts.
+    // Secret, re-read on a TTL) or GITHUB_TOKEN. Parsed here only so a
+    // deployment with neither fails at boot; the GitHub integration's client
+    // reads the same two variables (integrations/github/token.ts).
     tokenSettings: parseGithubTokenSettings(process.env),
     // Orgs whose members, and logins of users, whose comments the agent
     // trusts. Forwarded to every sandbox for PR-discussion trust. The GitHub
@@ -107,7 +109,7 @@ export const config = {
     trustedOrgs: parseTrustList(process.env.GITHUB_TRUSTED_ORGS),
     trustedUsers: parseTrustList(process.env.GITHUB_TRUSTED_USERS),
   },
-  // The GitLab instance's settings that belong to core, like the code host's
+  // The GitLab instance's settings that belong to core, like GitHub's
   // above: sandboxes get the instance and the trust lists, and the control
   // plane has its own token, whether or not GitLab webhooks are on. The GitLab
   // integration's own settings are parsed in integrations/gitlab/config.ts.
@@ -115,10 +117,6 @@ export const config = {
     // The GitLab instance repos may live on (GITLAB_BASE_URL), forwarded to
     // sandboxes so the harness opens merge requests there. See sandboxConfig.ts.
     baseUrl: parseGitlabBaseUrl(process.env),
-    // The control plane's own GitLab token, for replies on merge requests and
-    // the trust lookups: GITLAB_TOKEN_FILE (the mounted Secret, re-read on a
-    // TTL) or GITLAB_TOKEN. See clients/gitlabToken.ts.
-    tokenSettings: parseGitlabTokenSettings(process.env),
     // Groups whose members, and usernames of users, whose notes the agent
     // trusts. Forwarded to every sandbox for merge-request discussion trust.
     // The GitLab integration reads the same variables for its webhook gate.

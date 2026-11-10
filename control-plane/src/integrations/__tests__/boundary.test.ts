@@ -92,7 +92,7 @@ describe("integration folders", () => {
       'import "/abs/integrations/types";',
       'import { Hono } from "hono";',
       'import { AgentSessionService } from "./agentSession.js";',
-      'import { getUserById } from "../../clients/github";',
+      'import { getUserById } from "../github/client";',
       'import { LinearTokenError } from "./oauth";',
     ].join("\n");
     expect(violations(file, code)).toEqual([
@@ -102,7 +102,7 @@ describe("integration folders", () => {
       "integrations/linear/index.ts imports ../../config",
       "integrations/linear/index.ts imports ../../logger",
       "integrations/linear/index.ts imports /abs/integrations/types",
-      "integrations/linear/index.ts imports ../../clients/github",
+      "integrations/linear/index.ts imports ../github/client",
       "integrations/linear/index.ts imports ../../repositories/inbox.repository",
     ]);
   });

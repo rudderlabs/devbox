@@ -17,6 +17,11 @@ local stack (`bun run up`) or a Kubernetes install (`bun run k8s:install`,
   a pull request, a review or review comment on the agent's pull request, and
   a failed CI run on its branch all reach the running task, like
   `bun run devbox send`.
+- **Each pull request the agent opens gets a comment and an assignee.** The
+  comment names the bot and says how to mention it. The assignee is the person
+  a Linear issue belongs to, through the GitHub account they connected in
+  Linear. Without the App, with a personal access token only, a pull request
+  gets neither.
 - **The sandbox can look up who is trusted** (org members and users), so
   pull request discussion from your trusted orgs and users reaches the agent
   ([Trust lists](#trust-lists)).
