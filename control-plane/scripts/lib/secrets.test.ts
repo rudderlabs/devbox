@@ -403,7 +403,7 @@ describe("source lines", () => {
 });
 
 describe("secretNamesFor", () => {
-  it("Compose gets six, k8s seven", () => {
+  it("Compose gets six, k8s ten", () => {
     expect(secretNamesFor(COMPOSE)).toEqual([
       "GITHUB_TOKEN",
       "LLM_API_KEY",
@@ -420,6 +420,9 @@ describe("secretNamesFor", () => {
       "GITHUB_APP_PRIVATE_KEY",
       "GITHUB_WEBHOOK_SECRET",
       "SLACK_BOT_TOKEN",
+      "GITLAB_TOKEN",
+      "GITLAB_WEBHOOK_SIGNING_TOKEN",
+      "GITLAB_WEBHOOK_SECRET",
     ]);
   });
 });

@@ -120,6 +120,11 @@ spec:
         - { name: GITLAB_BASE_URL, value: {{ include "devbox.gitlabBaseUrl" . | quote }} }
         - { name: GITLAB_SECRET, value: {{ include "devbox.gitlabSecret" . | quote }} }
         {{- end }}
+        {{- with .Values.ironProxy.caBundle }}
+        # The instance's private CA (a Secret in the release namespace, read
+        # through the API like the tokens), added to git's trust for the clones.
+        - { name: GITLAB_CA_SECRET, value: {{ . | quote }} }
+        {{- end }}
         - { name: SCRATCH_PVC, value: devbox-repos-scratch }
         - { name: SNAPSHOT_CLASS, value: {{ .Values.storage.volumeSnapshotClass | quote }} }
         - { name: KEEP, value: {{ .Values.snapshotBuilder.keep | quote }} }

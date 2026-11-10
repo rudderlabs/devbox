@@ -38,8 +38,9 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    # The GitLab token Secret too, when gitlab.baseUrl is set.
-    resourceNames: [{{ include "devbox.githubSecret" . }}{{ if include "devbox.gitlabBaseUrl" . }}{{ with include "devbox.gitlabSecret" . }}, {{ . }}{{ end }}{{ end }}]
+    # The GitLab token Secret too, when gitlab.baseUrl is set, and the
+    # instance's CA bundle when there is one.
+    resourceNames: [{{ include "devbox.githubSecret" . }}{{ if include "devbox.gitlabBaseUrl" . }}{{ with include "devbox.gitlabSecret" . }}, {{ . }}{{ end }}{{ end }}{{ with .Values.ironProxy.caBundle }}, {{ . }}{{ end }}]
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

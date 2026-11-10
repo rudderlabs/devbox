@@ -3,6 +3,11 @@
 repos:
   - { url: https://github.com/acme/widgets.git, branch: main }
   - { url: https://git.example.com/gitlab/platform/backend/api.git, branch: develop }
-gitlab: { baseUrl: https://git.example.com/gitlab }
+gitlab:
+  baseUrl: https://git.example.com/gitlab
+  trustedGroups: [platform, platform/backend]
+  trustedUsers: [carol]
+integrations:
+  gitlab: { enabled: true, botUsername: devbox-bot, botUserId: 4242 }
 secrets: { gitlab: { existingSecret: my-gitlab-token } }
 ironProxy: { caBundle: corp-ca-bundle }

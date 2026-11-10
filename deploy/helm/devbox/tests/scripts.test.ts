@@ -237,12 +237,32 @@ describe("snapshot-builder.sh", () => {
   it("fetches repos already in the scratch volume", async () => {
     setup();
     mkdirSync(obj("repos", "widgets", ".git"), { recursive: true });
-    await runScript("snapshot-builder.sh", env());
+    await runScript("snapshot-builder.sh", {
+      ...env(),
+      FAKE_REMOTE_URL: "https://github.com/acme/widgets.git",
+    });
     const git = readFileSync(obj("git.log"), "utf8").trim().split("\n").map((l) => l.split("|")[0]);
-    expect(git.slice(0, 3)).toEqual([
+    expect(git.slice(0, 4)).toEqual([
+      `-C ${obj("repos")}/widgets config --get remote.origin.url`,
       `-C ${obj("repos")}/widgets -c core.fsync=all fetch -q --depth 1 origin +refs/heads/main:refs/remotes/origin/main`,
       `-C ${obj("repos")}/widgets checkout -q -f -B main origin/main`,
       `-C ${obj("repos")}/widgets clean -q -ffdx`,
+    ]);
+  });
+
+  it("re-points a checkout whose remote changed before fetching it", async () => {
+    setup();
+    mkdirSync(obj("repos", "widgets", ".git"), { recursive: true });
+    const r = await runScript("snapshot-builder.sh", {
+      ...env(),
+      FAKE_REMOTE_URL: "https://gitlab.example.com/old/widgets.git",
+    });
+    expect(r.stdout).toContain("origin of widgets changed; pointing it at https://github.com/acme/widgets.git");
+    const git = readFileSync(obj("git.log"), "utf8").trim().split("\n").map((l) => l.split("|")[0]);
+    expect(git.slice(0, 3)).toEqual([
+      `-C ${obj("repos")}/widgets config --get remote.origin.url`,
+      `-C ${obj("repos")}/widgets remote set-url origin https://github.com/acme/widgets.git`,
+      `-C ${obj("repos")}/widgets -c core.fsync=all fetch -q --depth 1 origin +refs/heads/main:refs/remotes/origin/main`,
     ]);
   });
 
@@ -291,6 +311,39 @@ describe("snapshot-builder.sh", () => {
         "get secret devbox-github -n devbox -o jsonpath={.data.token}",
         "get secret my-gitlab-token -n devbox -o jsonpath={.data.token}",
       ]);
+    });
+
+    it("adds a private CA to the system bundle for git, so GitHub keeps working", async () => {
+      gitlabSetup();
+      writeFileSync(obj("system-ca.crt"), "SYSTEM-CA\n");
+      mkdirSync(obj("devbox", "secret", "corp-ca"), { recursive: true });
+      writeFileSync(obj("devbox", "secret", "corp-ca", "ca.crt"), "PRIVATE-CA\n");
+      const r = await runScript("snapshot-builder.sh", {
+        ...gitlabEnv(),
+        GITLAB_CA_SECRET: "corp-ca",
+        SYSTEM_CA_BUNDLE: obj("system-ca.crt"),
+        TMPDIR: obj(""),
+      });
+      expect(r.code).toBe(0);
+      expect(calls()[2]).toContain("get secret corp-ca -n devbox -o jsonpath={.data.ca");
+      const bundle = readFileSync(obj("ssl.log"), "utf8").trim();
+      expect(bundle).toBe(obj("devbox-ca-bundle.crt"));
+      // The script ends the bundle with a newline of its own, for a PEM without one.
+      expect(readFileSync(bundle, "utf8")).toBe("SYSTEM-CA\nPRIVATE-CA\n\n");
+    });
+
+    it("stops when the CA Secret cannot be read, without cloning unverified", async () => {
+      gitlabSetup();
+      const r = await runScript("snapshot-builder.sh", { ...gitlabEnv(), GITLAB_CA_SECRET: "corp-ca" });
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('secret "corp-ca" not found');
+      expect(existsSync(obj("git.log"))).toBe(false);
+    });
+
+    it("leaves git on the system store without a private CA", async () => {
+      gitlabSetup();
+      await runScript("snapshot-builder.sh", gitlabEnv());
+      expect(existsSync(obj("ssl.log"))).toBe(false);
     });
 
     it("puts the GitLab header in the first slot when the GitHub token is empty", async () => {

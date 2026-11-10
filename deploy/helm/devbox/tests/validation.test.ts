@@ -64,6 +64,34 @@ describe("chart validation", () => {
       ["repos[1].url=https://gitlab.example.com/acme/api.git"],
       "repos[1].url: must be https://github.com/<owner>/<repo>.git (or, with gitlab.baseUrl, a repo under it)",
     ],
+    [["integrations.gitlab.enabled=true"], "integrations.gitlab.enabled is true: gitlab.baseUrl is required"],
+    [
+      ["integrations.gitlab.enabled=true", "gitlab.baseUrl=https://gitlab.example.com", "secrets.gitlab.existingSecret=s"],
+      "integrations.gitlab.enabled is true: integrations.gitlab.botUsername is required",
+    ],
+    [
+      [
+        "integrations.gitlab.enabled=true",
+        "gitlab.baseUrl=https://gitlab.example.com",
+        "secrets.gitlab.existingSecret=s",
+        "integrations.gitlab.botUsername=bot",
+      ],
+      "integrations.gitlab.enabled is true: integrations.gitlab.botUserId is required",
+    ],
+    [
+      [
+        "integrations.gitlab.enabled=true",
+        "gitlab.baseUrl=https://gitlab.example.com",
+        "secrets.gitlab.existingSecret=s",
+        "integrations.gitlab.botUsername=bot",
+        "integrations.gitlab.botUserId=7",
+      ],
+      "integrations.gitlab.enabled is true: gitlab.trustedGroups or gitlab.trustedUsers is required",
+    ],
+    [
+      ["gitlab.baseUrl=https://gitlab.example.com", "secrets.gitlab.existingSecret=s", "gitlab.trustedGroups={../x}"],
+      'gitlab.trustedGroups: "../x" is not a group path',
+    ],
     [
       ["gitlab.baseUrl=https://gitlab.example.com", "secrets.gitlab.existingSecret=s", "repos[1].url=https://other.example.com/acme/api.git"],
       "repos[1].url: must be https://github.com/<owner>/<repo>.git or https://gitlab.example.com/<group>/<project>.git",
@@ -265,6 +293,19 @@ describe("chart validation", () => {
       );
     },
   );
+
+  it("accepts a trusted group whose path segments start with an underscore, as repo URLs may", async () => {
+    const r = await helmTemplate([
+      ...BASE,
+      ...[
+        "gitlab.baseUrl=https://gitlab.example.com",
+        "secrets.gitlab.existingSecret=s",
+        "gitlab.trustedGroups={_platform/_backend}",
+      ].flatMap((s) => ["--set", s]),
+    ]);
+    expect(r.stderr).not.toContain("is not a group path");
+    expect(r.code).toBe(0);
+  });
 
   it("vendors the pinned OpenSandbox chart", () => {
     const tgz = readFileSync(join(CHART, "charts", "opensandbox-0.2.2.tgz"));

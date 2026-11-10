@@ -521,6 +521,21 @@ describe("parseConfig with gitlab", () => {
     ...(gitlab === null ? {} : { gitlab }),
   });
 
+  it("gitlab.caFile: an absolute path, kept; anything else refused", () => {
+    const cfg = parseConfig(
+      withGitlab([{ url: `${GITLAB}/acme/api.git` }], {
+        baseUrl: GITLAB,
+        caFile: "/etc/corp-ca.pem",
+      }),
+    );
+    expect(cfg.gitlab).toEqual({ baseUrl: GITLAB, caFile: "/etc/corp-ca.pem" });
+    expect(() =>
+      parseConfig(
+        withGitlab([{ url: `${GITLAB}/acme/api.git` }], { baseUrl: GITLAB, caFile: "corp-ca.pem" }),
+      ),
+    ).toThrow("gitlab.caFile: must be an absolute path to a PEM file");
+  });
+
   it("accepts repos under gitlab.baseUrl next to GitHub ones, nested groups included", () => {
     const cfg = parseConfig(
       withGitlab([
@@ -612,7 +627,7 @@ describe("parseConfig with gitlab", () => {
     [
       "an unknown gitlab key",
       withGitlab([{ url: "https://github.com/acme/app.git" }], { baseUrl: GITLAB, token: "x" }),
-      'gitlab: unknown key "token" (allowed: baseUrl)',
+      'gitlab: unknown key "token" (allowed: baseUrl, caFile)',
     ],
   ])("refuses %s", (_name, raw, message) => {
     expect(() => parseConfig(raw)).toThrow(new ConfigError(`devbox.config.json: ${message}`));

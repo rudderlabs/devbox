@@ -186,9 +186,9 @@ describe("parseIntegrationConfigs", () => {
 });
 
 describe("the integrations this build has", () => {
-  it("are linear, github and api; linear and api create tasks", () => {
+  it("are linear, github, gitlab and api; linear and api create tasks", () => {
     const r = registry([...definitions]);
-    expect(definitions.map((d) => d.name)).toEqual(["linear", "github", "api"]);
+    expect(definitions.map((d) => d.name)).toEqual(["linear", "github", "gitlab", "api"]);
     expect(r.taskSources).toEqual(["linear", "api"]);
   });
 
@@ -197,6 +197,11 @@ describe("the integrations this build has", () => {
     expect(await r.status("linear")).toEqual({ configured: false, holds: none });
     expect(await r.status("github")).toEqual({
       token: expect.objectContaining({ source: "env" }),
+      webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
+      holds: none,
+    });
+    expect(await r.status("gitlab")).toEqual({
+      token: expect.any(Object),
       webhooks: { enabled: false, lastWebhookAt: null, ciResults: false },
       holds: none,
     });

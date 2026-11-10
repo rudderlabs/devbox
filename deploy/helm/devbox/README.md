@@ -33,7 +33,9 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | git.name | string | `"devbox"` | Commit identity for the agent's commits. `bun run k8s:install` sets the GitHub user's. |
 | github.trustedOrgs | list | `[]` | GitHub orgs whose members may drive devbox. Required with trustedUsers (either) when the GitHub App is enabled. |
 | github.trustedUsers | list | `[]` | GitHub users who may drive devbox. Required with trustedOrgs (either) when the GitHub App is enabled. |
-| gitlab.baseUrl | string | `""` | A GitLab instance repos may live on, self-managed or https://gitlab.com, for example https://gitlab.example.com (a relative URL root such as https://example.com/gitlab is fine; the default port only). Repos under it clone, push and open merge requests there with the token in secrets.gitlab.existingSecret. Empty turns GitLab off. Outbound only so far: no webhooks. |
+| gitlab.baseUrl | string | `""` | A GitLab instance repos may live on, self-managed or https://gitlab.com, for example https://gitlab.example.com (a relative URL root such as https://example.com/gitlab is fine; the default port only). Repos under it clone, push and open merge requests there with the token in secrets.gitlab.existingSecret. Empty turns GitLab off. |
+| gitlab.trustedGroups | list | `[]` | GitLab groups (`group` or `group/subgroup`) whose members may drive devbox. Required with trustedUsers (either) when integrations.gitlab is enabled. |
+| gitlab.trustedUsers | list | `[]` | GitLab usernames who may drive devbox. Required with trustedGroups (either) when integrations.gitlab is enabled. |
 | images.controlPlane | string | `"rudderlabs/devbox-control-plane"` | Control-plane image repository. Required; the default is the published image. |
 | images.controlPlanePullSecrets | list | `[]` | Pull Secrets for the control-plane image, for a private registry. Create each Secret in the release namespace and in devbox-sandboxes; harness sandbox pulls use sandbox.imagePullSecrets. |
 | images.harness | string | `"rudderlabs/devbox-harness"` | The harness image sandboxes run. Required; see docs/kubernetes/harness-image.md to extend it. |
@@ -46,7 +48,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | ingress.api.tls | list | `[]` | Standard Ingress TLS entries. Without TLS the chart prints a warning. |
 | ingress.webhooks.annotations | object | `{}` | Ingress annotations, for example the controller's timeouts. |
 | ingress.webhooks.className | string | `""` | The Ingress class. |
-| ingress.webhooks.enabled | bool | `false` | Public Ingress for /webhook/ only (GitHub, Linear). |
+| ingress.webhooks.enabled | bool | `false` | Public Ingress for /webhook/ only (GitHub, GitLab, Linear). |
 | ingress.webhooks.host | string | `""` | Required when enabled. |
 | ingress.webhooks.tls | list | `[]` | Standard Ingress TLS entries. Without TLS the chart prints a warning. |
 | integrations.githubApp.appId | int | `0` | Required when enabled: the App's numeric ID (0 means unset). |
@@ -57,6 +59,10 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | integrations.githubApp.installationId | int | `0` | Required when enabled: the App installation's numeric ID (0 means unset). |
 | integrations.githubApp.tokenScope | string | `"repos"` | `repos` narrows each token to the repos above; `installation` covers every repo the App is installed on. |
 | integrations.githubApp.tokens | string | `""` | Required when enabled: `devbox` (a minter Deployment keeps the `devbox-github` Secret fresh with the App's private key) or `external` (your tooling keeps secrets.github.existingSecret fresh). |
+| integrations.gitlab.botUserId | int | `0` | Required when enabled: that user's numeric GitLab user ID (0 means unset). |
+| integrations.gitlab.botUsername | string | `""` | Required when enabled: the username of the user the GitLab token belongs to (a group or project access token's bot user). Notes mention it; its own notes are ignored. |
+| integrations.gitlab.ciResults | bool | `true` | Posts failed pipelines on the agent's merge requests back to the agent (GITLAB_CI_RESULT_ENABLED). |
+| integrations.gitlab.enabled | bool | `false` | Turns GitLab webhooks on at /webhook/gitlab (GITLAB_WEBHOOKS_ENABLED): `@<botUsername>` notes and failed pipelines on the agent's merge requests reach the agent. Needs gitlab.baseUrl. The webhook's signing token goes in the integrations Secret as GITLAB_WEBHOOK_SIGNING_TOKEN (or the legacy secret token as GITLAB_WEBHOOK_SECRET). See docs/gitlab.md. |
 | integrations.linear.clientId | string | `""` | Required when enabled: the Linear app's client ID; set by bun run linear:setup. |
 | integrations.linear.enabled | bool | `false` | Turns Linear on (LINEAR_ENABLED). Its secrets go in the integrations Secret. |
 | integrations.slack.channelId | string | `""` | Required when enabled: the Slack channel ID. |

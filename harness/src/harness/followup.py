@@ -97,11 +97,28 @@ def _line_label(comment: Mapping[str, Any]) -> str:
     return f"{lo}-{hi}"
 
 
-def comment_brief(*, body: str, channel: str, pr: Mapping[str, Any] | None) -> str:
+def _anchor(payload: Mapping[str, Any]) -> str:
+    """``path:line`` of an inline comment, or "" for a plain one."""
+    path, line = payload.get("path"), payload.get("line")
+    if not isinstance(path, str) or not path:
+        return ""
+    return f"{path}:{line}" if isinstance(line, int) else path
+
+
+def comment_brief(
+    *,
+    body: str,
+    channel: str,
+    pr: Mapping[str, Any] | None,
+    anchor: str = "",
+) -> str:
+    # An inline comment names the file and line it sits on: the discussion
+    # history excludes the triggering comment, so this is its only location.
+    heading = f"### Comment on `{defang(anchor)}`" if anchor else "### Comment"
     return "\n".join([
         *_header("addressing comment", channel, pr),
         "",
-        "### Comment",
+        heading,
         *_body(body),
         "</harness_context>",
         "",
@@ -559,7 +576,7 @@ def run_followup_comment(entry: dict[str, Any], state: DaemonState) -> None:
     channel = entry["source"]
 
     def brief() -> str:
-        text = comment_brief(body=body, channel=channel, pr=pr)
+        text = comment_brief(body=body, channel=channel, pr=pr, anchor=_anchor(payload))
         if channel in CODE_HOST_CHANNELS and pr:
             text = with_discussion(
                 text,

@@ -1,5 +1,6 @@
 import { parseApiConfig } from "./apiConfig";
 import { parseGithubTokenSettings } from "./clients/githubToken";
+import { parseGitlabTokenSettings } from "./clients/gitlabToken";
 import { pickForwardedEnv } from "./forwardedEnv";
 import { optionalNumber, parseTrustList } from "./integrations/env";
 import { parseSlackConfig } from "./integrationsConfig";
@@ -105,11 +106,23 @@ export const config = {
     trustedOrgs: parseTrustList(process.env.GITHUB_TRUSTED_ORGS),
     trustedUsers: parseTrustList(process.env.GITHUB_TRUSTED_USERS),
   },
+  // The GitLab instance's settings that belong to core, like the code host's
+  // above: sandboxes get the instance and the trust lists, and the control
+  // plane has its own token, whether or not GitLab webhooks are on. The GitLab
+  // integration's own settings are parsed in integrations/gitlab/config.ts.
   gitlab: {
-    // The self-managed GitLab instance repos may live on (GITLAB_BASE_URL),
-    // forwarded to sandboxes so the harness opens merge requests there. The
-    // control plane itself makes no GitLab calls yet. See sandboxConfig.ts.
+    // The GitLab instance repos may live on (GITLAB_BASE_URL), forwarded to
+    // sandboxes so the harness opens merge requests there. See sandboxConfig.ts.
     baseUrl: parseGitlabBaseUrl(process.env),
+    // The control plane's own GitLab token, for replies on merge requests and
+    // the trust lookups: GITLAB_TOKEN_FILE (the mounted Secret, re-read on a
+    // TTL) or GITLAB_TOKEN. See clients/gitlabToken.ts.
+    tokenSettings: parseGitlabTokenSettings(process.env),
+    // Groups whose members, and usernames of users, whose notes the agent
+    // trusts. Forwarded to every sandbox for merge-request discussion trust.
+    // The GitLab integration reads the same variables for its webhook gate.
+    trustedGroups: parseTrustList(process.env.GITLAB_TRUSTED_GROUPS),
+    trustedUsers: parseTrustList(process.env.GITLAB_TRUSTED_USERS),
   },
   opensandbox: {
     domain: process.env.OPENSANDBOX_DOMAIN ?? "localhost:8080",

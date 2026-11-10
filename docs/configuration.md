@@ -307,7 +307,7 @@ kube context, so a command never acts on a cluster you did not name.
 | `context` | yes | The kube context of the cluster. |
 | `profile` | no, default `k8s-<context>` | The CLI profile the installer writes. Lower-case letters, digits and `-`; the default is the context made lower-case with other characters replaced by `-`. |
 | `values` | no | Helm values for the chart, passed as they are. `storage.storageClass` and `storage.volumeSnapshotClass` are required by the chart. Sandbox sizing goes under `values.sandbox`; the Compose-only `devbox.config.json` block is ignored. `repos` and `llm` are refused: the installer copies the full `llm` block, including effort and stage overrides, from `devbox.config.json`. `integrations` is refused: it goes at the top level. |
-| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`) and `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
+| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`), `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`) and `gitlab` (`enabled`, `botUsername`, `botUserId`, `ciResults`, `webhookAuth`; written by `bun run gitlab:setup`, [docs/gitlab.md](gitlab.md)), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
 
 Any other key is an error: chart values go under `values`. The installer adds
 `repos`, `llm`, `integrations`, `ironProxy.clusterIP`,
@@ -683,6 +683,7 @@ way.
 | `GITHUB_BOT_LOGIN`, `GITHUB_BOT_USER_ID` | | The App's slug and its bot's numeric user ID. Events from the bot itself, and on pull requests it did not open, are dropped. |
 | `GITHUB_CI_RESULT_ENABLED` | | `true` sends a failed CI run on a task's pull request to the task. The setting `integrations.githubApp.ciResults` sets it. |
 | `GITHUB_CI_RESULT_MAX_PER_TASK` | `20` | The most CI failures sent to one task; `0` or negative means no cap. Environment only: on Compose, set it in the shell you run `bun run up` from; on Kubernetes, with `extraEnv`. |
+| `GITLAB_CI_RESULT_MAX_PER_TASK` | `20` | The same cap for failed GitLab pipelines, counted on its own. Environment only, with `extraEnv`. |
 | `SANDBOX_GIT_NAME`, `SANDBOX_GIT_EMAIL` | | The commit identity of the agent in every sandbox. Set both or neither. Unset, the harness image's own identity applies. The chart sets them from `git.name` and `git.email`. |
 | `SHUTDOWN_DRAIN_MS` | `10000` | How long shutdown waits, in milliseconds, for in-flight provisions and integration hooks once it has finished the task it was reconciling. On Kubernetes, set it with `extraEnv` and raise `controlPlane.terminationGracePeriodSeconds` by as much. |
 
@@ -797,13 +798,19 @@ trust. There are no defaults, and with nothing configured it reads none.
 | `GITHUB_TRUSTED_ORGS` | control plane | GitHub orgs whose members are trusted. Comma- or space-separated. |
 | `GITHUB_TRUSTED_USERS` | control plane | GitHub logins that are trusted. Comma- or space-separated. |
 | `HARNESS_TRUSTED_BOT_IDS` | sandbox | Numeric GitHub user IDs of bots, for example a review bot, whose comments are also trusted. Comma- or space-separated. |
+| `GITLAB_TRUSTED_GROUPS` | control plane | GitLab groups (`group` or `group/subgroup`) whose members, inherited ones included, are trusted on merge requests. Comma- or space-separated. `bun run gitlab:setup` fills the lists (`values.gitlab` in the target file). |
+| `GITLAB_TRUSTED_USERS` | control plane | GitLab usernames trusted on merge requests. Comma- or space-separated. |
+| `HARNESS_GITLAB_TRUSTED_BOT_IDS` | sandbox | Numeric GitLab user IDs of bots whose merge request notes are also trusted. |
 
 - On Compose, `up` sets `GITHUB_TRUSTED_ORGS` and `GITHUB_TRUSTED_USERS` from
   the top-level `github` block of `devbox.config.json` (`trustedOrgs`,
   `trustedUsers`). `bun run github:setup` fills it when empty, with the account
   that owns the App's installation.
 - The control plane forwards `GITHUB_TRUSTED_ORGS` and `GITHUB_TRUSTED_USERS` to
-  the sandbox as `HARNESS_TRUSTED_ORGS` and `HARNESS_TRUSTED_USERS`.
+  the sandbox as `HARNESS_TRUSTED_ORGS` and `HARNESS_TRUSTED_USERS`, and the
+  GitLab lists as `HARNESS_GITLAB_TRUSTED_GROUPS` and
+  `HARNESS_GITLAB_TRUSTED_USERS`. A merge request is gated by the GitLab lists
+  only, a pull request by the GitHub lists only.
 - `HARNESS_TRUSTED_BOT_IDS` has no control-plane counterpart. On Kubernetes,
   set it with the chart's `extraEnv`; it is on the forwarding list. It adds to the trusted orgs and users. On its own, it
   trusts no one. There is no supported Compose configuration path.
@@ -813,7 +820,10 @@ trust. There are no defaults, and with nothing configured it reads none.
   ([customizing.md](kubernetes/customizing.md#integrations)).
 
 With the GitHub App, the trust lists also decide whose `@mentions` and
-reviews reach the agent ([docs/github.md](github.md#trust-lists)).
+reviews reach the agent ([docs/github.md](github.md#trust-lists)); with GitLab
+webhooks, the GitLab lists decide whose notes do
+([docs/gitlab.md](gitlab.md#webhooks-notes-and-pipelines)). On Kubernetes set
+them with `gitlab.trustedGroups` and `gitlab.trustedUsers`.
 
 In the quickstart, none of these is set. Follow-ups come from
 `bun run devbox send`, and the agent reads no pull request discussion.
