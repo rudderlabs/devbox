@@ -114,7 +114,27 @@ describe("GithubIntegration.onPrOpened", () => {
       expect(body).toContain("I'm **acme-bot**");
       expect(body).toContain("this PR from task `XYZ-1`");
       expect(body).toContain("`@acme-bot`");
-      expect(sent).toBe(signal);
+      expect(sent).toBeInstanceOf(AbortSignal);
+    });
+
+    it("a hung post is cut at the send timeout; the assignee still starts", async () => {
+      const hasty = new GithubIntegration(
+        { botLogin: "acme-bot" },
+        { status: () => ({}) as never },
+        { handleWebhook: async () => new Response() },
+        20,
+      );
+      // Never settles, whatever its abort signal.
+      postIssueComment.mockImplementation(() => new Promise(() => {}));
+      lookup.mockResolvedValue(person("octocat"));
+      addPrAssignees.mockResolvedValue({ assigned: ["octocat"] });
+      await hasty.onPrOpened(ctx(), task, opened());
+      await Promise.all(deferred);
+      expect(error).toHaveBeenCalledWith(
+        "onboarding comment post failed",
+        expect.objectContaining({ taskId: "task-1", message: "timed out after 20 ms" }),
+      );
+      expect(addPrAssignees).toHaveBeenCalledWith("o", "r", 1, ["octocat"]);
     });
 
     it("a failed post is logged and doesn't cost the PR its assignee", async () => {

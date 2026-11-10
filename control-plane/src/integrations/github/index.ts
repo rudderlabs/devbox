@@ -9,7 +9,7 @@ import {
   requestReviewers,
 } from "../../clients/github";
 import type { Task } from "../../db/schema";
-import { retryable } from "../http";
+import { retryable, SEND_TIMEOUT_MS, withTimeout } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
 import type {
   HookCtx,
@@ -60,6 +60,8 @@ export class GithubIntegration implements Integration {
     cfg: Pick<GithubConfig, "botLogin">,
     private statusService: Pick<GithubStatusService, "status">,
     private controller: Pick<GitHubWebhookController, "handleWebhook">,
+    // Bounds the onboarding comment.
+    private readonly sendTimeoutMs = SEND_TIMEOUT_MS,
   ) {
     this.botLogin = cfg.botLogin;
   }
@@ -114,12 +116,18 @@ export class GithubIntegration implements Integration {
     if (!ctx.firstTime) return;
     const gh = parsePrUrl(pr.url);
     if (!gh) return;
-    await postIssueComment(
-      gh.owner,
-      gh.repo,
-      gh.prNumber,
-      onboardingCommentBody(this.botLogin, task.key),
-      ctx.signal,
+    // Under its own timeout, not only the hook's: a post that never settles,
+    // whatever its abort signal, would leave this hook suspended, and the
+    // assignee below would never start. The PR is recorded either way, and a
+    // replay skips this hook.
+    await withTimeout(this.sendTimeoutMs, (signal) =>
+      postIssueComment(
+        gh.owner,
+        gh.repo,
+        gh.prNumber,
+        onboardingCommentBody(this.botLogin, task.key),
+        signal,
+      ),
     ).catch((err: unknown) => {
       const e = err instanceof Error ? err : new Error(String(err));
       ctx.log.error("onboarding comment post failed", {
