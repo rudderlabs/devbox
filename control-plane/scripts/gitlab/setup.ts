@@ -39,7 +39,9 @@ export type SetupOptions = {
   // own Secret and cannot be asked.
   botUsername?: string;
   botUserId?: number;
-  skipWebhook: boolean; // --skip-webhook
+  // --register-webhooks: let setup create the webhooks with the deployment's
+  // token, which then needs Maintainer. Without it they are created by hand.
+  registerWebhooks: boolean;
   skipPushCheck: boolean; // --skip-push-check
 };
 
@@ -266,10 +268,17 @@ export async function setup(
   })`;
   // With the same webhook authentication: the hooks already registered keep
   // the credential they were given, so the rerun must not pick the other mode.
-  const again = `bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""} --skip-webhook${auth === "secret" ? " --secret-token" : ""}`;
-  if (opts.skipWebhook) {
-    log("Webhooks: not registered (--skip-webhook). Create one on each project by hand:");
+  const again = `bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""}${auth === "secret" ? " --secret-token" : ""}`;
+  if (!opts.registerWebhooks) {
+    // The default: devbox's token never needs more than Developer. Someone
+    // with Maintainer creates the webhook once, in GitLab.
+    log(
+      "Webhooks: create one on each project by hand (Settings → Webhooks; it takes the Maintainer role in GitLab, which devbox's token does not need):",
+    );
     log(byHand);
+    log(
+      "  Or pass --register-webhooks to have setup create them with this token, which then needs Maintainer.",
+    );
   } else if (token === undefined) {
     registered = false;
   } else {

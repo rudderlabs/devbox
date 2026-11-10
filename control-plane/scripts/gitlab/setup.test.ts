@@ -172,7 +172,8 @@ const opts = (o: Partial<SetupOptions> = {}): SetupOptions => ({
   trustedGroups: [],
   trustedUsers: [],
   secretToken: false,
-  skipWebhook: false,
+  // Most cases here are about registration; the default (by hand) has its own.
+  registerWebhooks: true,
   skipPushCheck: false,
   ...o,
 });
@@ -203,7 +204,7 @@ describe("gitlab:setup", () => {
       `GitLab 19.5.3 at ${BASE}: devbox acts as devbox (id 2, a bot user)`,
       `Webhook on platform/backend/api: ${HOOK_URL} (note and pipeline events)`,
       "Warning: this token can manage webhooks, so it holds the Maintainer role or more. devbox uses the same token for all its work, which needs only Developer: a Maintainer token could also change project settings, protected branches and members.",
-      `  To keep it to Developer: replace it with a Developer-role token, then run bun run gitlab:setup --target ${h.configPath} --skip-webhook with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working.`,
+      `  To keep it to Developer: replace it with a Developer-role token, then run bun run gitlab:setup --target ${h.configPath} with the new token before you apply. That records the new token's bot and keeps the webhook token, so the webhooks registered now keep working.`,
       `Wrote integrations.gitlab and values.gitlab to ${h.configPath}`,
       `Next: bun run k8s:install --target ${h.configPath}`,
       "With GitOps, set these chart values instead: integrations.gitlab {enabled: true, botUsername: devbox, botUserId: 2}, gitlab.trustedGroups, and GITLAB_WEBHOOK_SIGNING_TOKEN in the integrations Secret",
@@ -348,13 +349,16 @@ describe("gitlab:setup", () => {
     expect(readJson(h.configPath)).toMatchObject({ integrations: { gitlab: GITLAB } });
   });
 
-  it("--skip-webhook registers nothing", async () => {
+  it("by default registers nothing and prints the manual steps: the token needs only Developer", async () => {
     const h = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
-    await setup(h.d, opts({ skipWebhook: true }), h.deps);
+    await setup(h.d, opts({ registerWebhooks: false }), h.deps);
     expect(h.requests.some((r) => r.url.includes("/hooks"))).toBe(false);
     expect(h.log).toContain(
-      "Webhooks: not registered (--skip-webhook). Create one on each project by hand:",
+      "Webhooks: create one on each project by hand (Settings → Webhooks; it takes the Maintainer role in GitLab, which devbox's token does not need):",
     );
+    expect(h.log.some((l) => l.includes("Or pass --register-webhooks"))).toBe(true);
+    // The block and the webhook token are still written: only the hook is left to do.
+    expect(readJson(h.configPath)).toMatchObject({ integrations: { gitlab: GITLAB } });
     expect(h.log).toContain(
       `  URL ${HOOK_URL}, triggers Comments and Pipeline events, signing token: the value of GITLAB_WEBHOOK_SIGNING_TOKEN (new: saved or shown below)`,
     );
@@ -368,7 +372,7 @@ describe("gitlab:setup", () => {
     expect(warned(h.log)).toBe(true);
     // Replacing the token can change the bot: the advice is to run setup again, without re-registering.
     expect(
-      h.log.some((l) => l.includes(`gitlab:setup --target ${h.configPath} --skip-webhook`)),
+      h.log.some((l) => l.includes(`gitlab:setup --target ${h.configPath} with the new token`)),
     ).toBe(true);
   });
 
@@ -376,9 +380,7 @@ describe("gitlab:setup", () => {
     const h = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
     await setup(h.d, opts({ secretToken: true }), h.deps);
     expect(
-      h.log.some((l) =>
-        l.includes(`gitlab:setup --target ${h.configPath} --skip-webhook --secret-token with`),
-      ),
+      h.log.some((l) => l.includes(`gitlab:setup --target ${h.configPath} --secret-token with`)),
     ).toBe(true);
     // And not for the signing token, the default.
     const signing = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
