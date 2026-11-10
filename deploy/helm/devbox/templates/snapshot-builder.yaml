@@ -38,7 +38,8 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    resourceNames: [{{ include "devbox.githubSecret" . }}]
+    # The GitLab token Secret too, when gitlab.baseUrl is set.
+    resourceNames: [{{ include "devbox.githubSecret" . }}{{ if include "devbox.gitlabBaseUrl" . }}{{ with include "devbox.gitlabSecret" . }}, {{ . }}{{ end }}{{ end }}]
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

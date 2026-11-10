@@ -90,6 +90,9 @@ spec:
             - { name: MAX_CONCURRENT_SANDBOXES, value: {{ .Values.sandbox.maxConcurrent | quote }} }
             - { name: SANDBOX_GIT_NAME, value: {{ .Values.git.name | quote }} }
             - { name: SANDBOX_GIT_EMAIL, value: {{ .Values.git.email | quote }} }
+            {{- with include "devbox.gitlabBaseUrl" . }}
+            - { name: GITLAB_BASE_URL, value: {{ . | quote }} }
+            {{- end }}
             - { name: GITHUB_TOKEN_FILE, value: /var/run/devbox/github/token }
             - { name: HARNESS_LLM_PROVIDER, value: {{ .Values.llm.provider | quote }} }
             - { name: HARNESS_LLM_BASE_URL, value: {{ .Values.llm.baseUrl | quote }} }

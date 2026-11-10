@@ -51,3 +51,30 @@ export function parseSandboxGitIdentity(
   }
   return { name, email };
 }
+
+// The one self-managed GitLab instance sandboxes may push to and open merge
+// requests on (GITLAB_BASE_URL; the chart sets it from gitlab.baseUrl).
+// Normalised to scheme://host[/prefix] with no trailing slash, so the harness,
+// the proxy allowlist and the snapshot builder all compare the same string.
+// Undefined when GitLab is not configured. Like llm.baseUrl, it must use the
+// default port: iron-proxy intercepts only 80 and 443.
+export function parseGitlabBaseUrl(env: Record<string, string | undefined>): string | undefined {
+  const raw = env.GITLAB_BASE_URL?.trim();
+  if (!raw) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`GITLAB_BASE_URL must be an http(s) URL (got "${raw}")`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(`GITLAB_BASE_URL must be an http(s) URL (got "${raw}")`);
+  }
+  if (url.port) {
+    throw new Error(`GITLAB_BASE_URL must use the default port (80 or 443), got ${url.port}`);
+  }
+  if (url.search || url.hash || url.username || url.password) {
+    throw new Error("GITLAB_BASE_URL must not have a query, fragment or credentials");
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+}

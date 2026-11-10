@@ -76,3 +76,23 @@ class TestCiRerunMiddleware(unittest.TestCase):
             message.content,
             "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
         )
+
+
+class TestCiRerunMiddlewareGitLab(unittest.TestCase):
+    def test_a_pipeline_is_retried_through_the_gitlab_adapter(self) -> None:
+        github = mock.Mock()
+        gitlab = mock.Mock()
+        run = WorkflowRunRef("platform", "api", 7001, kind="gitlab")
+        with mock.patch(
+            "harness.deepagents.middleware.ci_rerun.client_for_kind",
+            return_value=gitlab,
+        ) as kinds:
+            mw = CiRerunMiddleware(github=github, run=run)
+        kinds.assert_called_once_with("gitlab")
+        result = mw.tools[0].invoke({})
+        gitlab.rerun_failed_jobs.assert_called_once_with("platform", "api", 7001)
+        github.rerun_failed_jobs.assert_not_called()
+        self.assertEqual(result, "re-queued failed jobs for run platform/api#7001")
+
+    def test_the_default_kind_is_github(self) -> None:
+        self.assertEqual(WorkflowRunRef("a", "b", 1).kind, "github")

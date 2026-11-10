@@ -38,6 +38,7 @@ const USER = { login: "example-user", type: "User" };
 const REPO: RepoConfig = {
   url: "https://github.com/example-org/example-repo.git",
   branch: "main",
+  host: "github",
   owner: "example-org",
   name: "example-repo",
 };

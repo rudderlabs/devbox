@@ -35,7 +35,6 @@ from harness.events import (
 )
 from harness.git import (
     CommitPublishError,
-    GitHubClient,
     git_dirty_paths,
     is_knowledge_path,
     setup_git_signing,
@@ -370,7 +369,6 @@ def run_commit_stage(
     repos_out: list[dict[str, Any]] = []
     any_opened = False
     any_failed = False
-    client = GitHubClient()
 
     for entry in impl.get("repos") or []:
         if not isinstance(entry, dict):
@@ -382,7 +380,8 @@ def run_commit_stage(
         name = _require_str(entry, "name", "repo")
 
         try:
-            summary = _commit_and_open_pr(entry, task_key, inbox_id, client)
+            # The code-host client is chosen per repo from its remote.
+            summary = _commit_and_open_pr(entry, task_key, inbox_id)
             repos_out.append({
                 "name": name,
                 "pr_url": summary["pr_url"],

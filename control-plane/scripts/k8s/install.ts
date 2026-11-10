@@ -31,7 +31,7 @@ import {
 } from "../lib/secrets";
 import { checkLinear, type LinearIdentity } from "../linear/check";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput, readCliProfile } from "../up/cliLogin";
-import type { DevboxConfig } from "../up/config";
+import { type DevboxConfig, githubRepos } from "../up/config";
 import { checkGithub, checkLlm, type Fetch, type Identity } from "../up/preflight";
 import { pickClusterIP } from "./clusterIP";
 import { freePort, profileFor } from "./connect";
@@ -164,7 +164,11 @@ const repoKeys = (repos: unknown): string[] =>
 
 // The chart refuses these when it renders, in the same words; refused here,
 // they stop before anything is checked or written.
-function refuseGithubApp(app: EnabledGithubApp | undefined, values: Values): void {
+function refuseGithubApp(
+  app: EnabledGithubApp | undefined,
+  values: Values,
+  githubRepoCount: number,
+): void {
   if (!app) return;
   const fail = (why: string): never => {
     throw new GithubAppSetupError(`integrations.githubApp.enabled is true: ${why}`);
@@ -175,6 +179,12 @@ function refuseGithubApp(app: EnabledGithubApp | undefined, values: Values): voi
     const repos = values.repos;
     if (app.tokenScope !== "installation" && !(Array.isArray(repos) && repos.length > 0)) {
       fail("tokenScope: repos needs at least one entry in repos (or use tokenScope: installation)");
+    }
+    // Only GitLab repos: the same, before the whole-installation token is minted.
+    if (app.tokenScope !== "installation" && githubRepoCount === 0) {
+      fail(
+        "tokenScope: repos needs at least one GitHub repo in repos (or use tokenScope: installation)",
+      );
     }
     // The minter writes only a Secret devbox owns, never the user's.
     if (userToken) {
@@ -217,7 +227,11 @@ export async function install(
   const integrations = deps.target.integrations;
   const linear = enabledLinear(integrations ?? {});
   const app = enabledGithubApp(integrations ?? {});
-  refuseGithubApp(app, chartValues(cfg, deps.target.values, {}, overlay));
+  refuseGithubApp(
+    app,
+    chartValues(cfg, deps.target.values, {}, overlay),
+    githubRepos(cfg.repos).length,
+  );
   // Commits link to the App's bot; git values the user set still win.
   const appCommitIdentity = app ? appIdentity(app.slug, app.botUserId) : undefined;
 
@@ -307,13 +321,13 @@ export async function install(
   let identity: Identity | undefined = appCommitIdentity;
   let minted: { token: string; expiresAt: string } | undefined;
   if (app && appKey) {
-    minted = await mintAppToken(app, appKey.pem, cfg.repos, {
+    minted = await mintAppToken(app, appKey.pem, githubRepos(cfg.repos), {
       fetch: deps.fetch,
       checkCoverage: true,
       target: deps.targetPath,
     });
     log(`GitHub App ${app.slug}: minted a token for installation ${app.installationId}`);
-    await checkGithub(minted.token, cfg.repos, deps.fetch, {
+    await checkGithub(minted.token, githubRepos(cfg.repos), deps.fetch, {
       requirePush: !opts.skipPushCheck,
       tokenName: "the GitHub App's token",
     });
@@ -324,7 +338,7 @@ export async function install(
   }
   if (githubR) {
     ({ resolved: githubR, result: identity } = await checkWithRetry(githubR, secretDeps, (token) =>
-      checkGithub(token, cfg.repos, deps.fetch, { requirePush: !opts.skipPushCheck }),
+      checkGithub(token, githubRepos(cfg.repos), deps.fetch, { requirePush: !opts.skipPushCheck }),
     ));
     await offerSave(githubR, secretDeps);
   }

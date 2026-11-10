@@ -1,4 +1,8 @@
-"""``update_pull_request`` tool middleware: change a task PR's title or body."""
+"""``update_pull_request`` tool middleware: change a task PR's title or body.
+
+Each pull request is addressed on its own host: a github.com URL through the
+``github`` client, a merge request URL under the configured GitLab instance
+through the GitLab adapter (``harness.codehost``). A task may mix both."""
 
 from __future__ import annotations
 
@@ -10,12 +14,17 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from pydantic import BaseModel, Field, create_model, model_validator
 
+from harness.codehost import (
+    CodeHost,
+    CodeHostApiError,
+    client_for_kind,
+    parse_change_request_url,
+)
 from harness.deepagents.middleware.arguments import (
     StrippedNonBlankStr,
     format_validation_error,
 )
 from harness.deepagents.middleware.system_prompt import SystemPromptMiddleware
-from harness.git import GitHubApiError, GitHubClient, parse_pr_url
 
 
 @dataclass(frozen=True)
@@ -40,20 +49,22 @@ class PullRequestMiddleware(SystemPromptMiddleware):
     def __init__(
         self,
         *,
-        github: GitHubClient,
+        github: CodeHost,
         prs: Sequence[PullRequestRef],
         system_prompt: str | None = None,
     ) -> None:
         if not prs:
             raise ValueError("PullRequestMiddleware requires at least one pull request")
-        coords: dict[str, tuple[str, str, int]] = {}
+        coords: dict[str, tuple[CodeHost, str, str, int]] = {}
         for ref in prs:
-            parsed = parse_pr_url(ref.url)
+            parsed = parse_change_request_url(ref.url)
             if parsed is None:
                 raise ValueError(f"not a pull request URL: {ref.url!r}")
             if ref.repo_name in coords:
                 raise ValueError(f"duplicate pull request repo: {ref.repo_name!r}")
-            coords[ref.repo_name] = parsed
+            kind, owner, repo, number = parsed
+            client = github if kind == "github" else client_for_kind(kind)
+            coords[ref.repo_name] = (client, owner, repo, number)
         self.github = github
         self.prs = tuple(prs)
         self._coords = coords
@@ -111,7 +122,7 @@ class PullRequestMiddleware(SystemPromptMiddleware):
         title: str | None = kwargs.get("title")
         body: str | None = kwargs.get("body")
         repo_name = kwargs.get("pr") or self.prs[0].repo_name
-        owner, repo, number = self._coords[repo_name]
+        client, owner, repo, number = self._coords[repo_name]
 
         requested: dict[str, str] = {}
         if title is not None:
@@ -119,7 +130,7 @@ class PullRequestMiddleware(SystemPromptMiddleware):
         if body is not None:
             requested["body"] = body
         try:
-            current = self.github.get_pull_request(owner, repo, number)
+            current = client.get_pull_request(owner, repo, number)
             current_title = str(current.get("title") or "")
             current_body = str(current.get("body") or "")
             changed: dict[str, str] = {}
@@ -129,14 +140,14 @@ class PullRequestMiddleware(SystemPromptMiddleware):
                 changed["body"] = body
             if not changed:
                 return f"unchanged: {_status(requested)}"
-            self.github.update_pull_request(
+            client.update_pull_request(
                 owner,
                 repo,
                 number,
                 title=changed.get("title"),
                 body=changed.get("body"),
             )
-        except GitHubApiError as exc:
+        except CodeHostApiError as exc:
             raise ToolException(str(exc)) from exc
         except (OSError, ValueError, http.client.HTTPException) as exc:
             raise ToolException(f"{exc.__class__.__name__}: {exc}") from exc

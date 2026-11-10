@@ -3,7 +3,11 @@ import { parseGithubTokenSettings } from "./clients/githubToken";
 import { pickForwardedEnv } from "./forwardedEnv";
 import { optionalNumber, parseTrustList } from "./integrations/env";
 import { parseSlackConfig } from "./integrationsConfig";
-import { parseSandboxGitIdentity, parseSandboxRuntimeConfig } from "./sandboxConfig";
+import {
+  parseGitlabBaseUrl,
+  parseSandboxGitIdentity,
+  parseSandboxRuntimeConfig,
+} from "./sandboxConfig";
 
 const taskPollIntervalMs = Number(process.env.TASK_POLL_INTERVAL_MS ?? 5000);
 
@@ -100,6 +104,12 @@ export const config = {
     // integration reads the same variables for its own webhook trust gate.
     trustedOrgs: parseTrustList(process.env.GITHUB_TRUSTED_ORGS),
     trustedUsers: parseTrustList(process.env.GITHUB_TRUSTED_USERS),
+  },
+  gitlab: {
+    // The self-managed GitLab instance repos may live on (GITLAB_BASE_URL),
+    // forwarded to sandboxes so the harness opens merge requests there. The
+    // control plane itself makes no GitLab calls yet. See sandboxConfig.ts.
+    baseUrl: parseGitlabBaseUrl(process.env),
   },
   opensandbox: {
     domain: process.env.OPENSANDBOX_DOMAIN ?? "localhost:8080",

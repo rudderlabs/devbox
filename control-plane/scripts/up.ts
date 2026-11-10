@@ -63,7 +63,14 @@ import {
 import { checkLinear, type LinearIdentity } from "./linear/check";
 import { bunVersionError } from "./up/bunVersion";
 import { cliConfigPath, ensureCliLogin, parseApiTokenOutput } from "./up/cliLogin";
-import { type ComposeDevboxConfig, type DevboxConfig, LLM_STAGES, loadConfig } from "./up/config";
+import {
+  type ComposeDevboxConfig,
+  type DevboxConfig,
+  githubRepos,
+  gitlabRepos,
+  LLM_STAGES,
+  loadConfig,
+} from "./up/config";
 import {
   DEFAULT_DNS_RESOLVER,
   DNS_RESOLVER,
@@ -349,6 +356,12 @@ async function prerequisites(): Promise<ComposeDevboxConfig> {
   const tooOld = bunVersionError(Bun.version);
   if (tooOld) throw new UpError(tooOld);
   const cfg = loadConfig(CONFIG_PATH);
+  // The Compose stack routes and authenticates only GitHub traffic.
+  if (gitlabRepos(cfg.repos).length > 0) {
+    throw new UpError(
+      "devbox.config.json: repos on GitLab (gitlab.baseUrl) are supported on Kubernetes only (bun run k8s:install); the local stack takes GitHub repos",
+    );
+  }
   let docker: Awaited<ReturnType<typeof capture>>;
   try {
     docker = await capture(["docker", "info", "--format", "{{.ServerVersion}}"], {
@@ -447,14 +460,14 @@ export async function appToken(
     deps.log(`GitHub App ${app.slug}: token from ${app.tokenFile}`);
   } else {
     if (!key) throw new UpError("the GitHub App's private key was not resolved");
-    ({ token } = await mintAppToken(app, key.pem, cfg.repos, {
+    ({ token } = await mintAppToken(app, key.pem, githubRepos(cfg.repos), {
       fetch,
       checkCoverage: !skipChecks,
     }));
     tokenName = "the GitHub App's token";
     deps.log(`GitHub App ${app.slug}: minted a token for installation ${app.installationId}`);
   }
-  if (!skipChecks) await checkGithub(token, cfg.repos, fetch, { tokenName });
+  if (!skipChecks) await checkGithub(token, githubRepos(cfg.repos), fetch, { tokenName });
   return token;
 }
 
@@ -537,7 +550,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     let githubR = gh.token;
     if (!skipChecks) {
       ({ resolved: githubR, result: identity } = await checkWithRetry(githubR, secretDeps, (t) =>
-        checkGithub(t, cfg.repos, fetch),
+        checkGithub(t, githubRepos(cfg.repos), fetch),
       ));
     }
     await offerSave(githubR, secretDeps);

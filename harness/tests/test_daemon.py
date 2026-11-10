@@ -1690,7 +1690,6 @@ class TestRunCommitStageNoOpClassification(unittest.TestCase):
     def test_no_working_tree_change_is_not_a_failure(self) -> None:
         impl = {"repos": [{"name": "repo-a"}]}
         with (
-            patch.object(assignment_module, "GitHubClient"),
             patch.object(
                 assignment_module,
                 "_commit_and_open_pr",
@@ -1719,7 +1718,6 @@ class TestRunCommitStageNoOpClassification(unittest.TestCase):
     def test_real_publish_failure_stays_failed(self) -> None:
         impl = {"repos": [{"name": "repo-a"}]}
         with (
-            patch.object(assignment_module, "GitHubClient"),
             patch.object(
                 assignment_module,
                 "_commit_and_open_pr",
@@ -1737,7 +1735,6 @@ class TestRunCommitStageNoOpClassification(unittest.TestCase):
     def test_legacy_ready_to_commit_false_still_publishes(self) -> None:
         impl = {"repos": [{"name": "repo-a", "ready_to_commit": False}]}
         with (
-            patch.object(assignment_module, "GitHubClient"),
             patch.object(
                 assignment_module,
                 "_commit_and_open_pr",

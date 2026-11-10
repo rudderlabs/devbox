@@ -31,19 +31,34 @@ export type LlmConfig = {
   stages?: Partial<Record<LlmStage, LlmStageConfig>>;
 };
 
+export type CodeHost = "github" | "gitlab";
 export type RepoConfig = {
   url: string;
   branch: string;
-  // From the URL: https://github.com/<owner>/<name>.git
+  // github for https://github.com/<owner>/<name>.git; gitlab for a repo under
+  // gitlab.baseUrl, <base>/<owner>/<name>.git, where owner is the namespace
+  // path (a group, or group/subgroup).
+  host: CodeHost;
   owner: string;
   name: string;
 };
+
+// The configured GitLab instance, or undefined: {baseUrl} with no trailing slash.
+export type GitlabConfig = { baseUrl: string };
+
+// The repos on GitHub: what the GitHub token checks and the App's token cover.
+export const githubRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
+  repos.filter((r) => r.host === "github");
+export const gitlabRepos = (repos: readonly RepoConfig[]): RepoConfig[] =>
+  repos.filter((r) => r.host === "gitlab");
 
 export type SandboxConfig = { maxConcurrent: number; cpu: string; memory: string };
 
 type BaseDevboxConfig = {
   repos: RepoConfig[];
   llm: LlmConfig;
+  // Set when any repo may live on a GitLab instance (Kubernetes only).
+  gitlab?: GitlabConfig;
   // The deployment's public URL for webhooks, validated.
   publicUrl?: string;
   // Who may drive the agent from GitHub (Compose; on k8s these are chart
@@ -65,6 +80,8 @@ export type ConfigOptions = { integrations?: boolean };
 
 const FILE = "devbox.config.json";
 const REPO_URL = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([^/]+)\.git$/;
+// Under gitlab.baseUrl: <group>[/<subgroup>...]/<project>.git.
+const GITLAB_REPO_PATH = /^([A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)\/([^/]+)\.git$/;
 const REPO_NAME = /^[A-Za-z0-9._-]+$/;
 const BRANCH = /^[A-Za-z0-9._/-]+$/;
 // The LLM host becomes a Docker network alias: a DNS name, no IP literals.
@@ -90,13 +107,35 @@ const fail = (message: string): never => {
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-function parseRepo(raw: unknown, i: number): RepoConfig {
+// The GitLab part of a repo URL, "<owner>/<name>.git" under the instance, or
+// undefined when the URL is not under it.
+function gitlabRepoPath(url: string, gitlab: GitlabConfig | undefined): string | undefined {
+  if (!gitlab) return undefined;
+  const prefix = `${gitlab.baseUrl}/`;
+  return url.startsWith(prefix) ? url.slice(prefix.length) : undefined;
+}
+
+function parseRepo(raw: unknown, i: number, gitlab: GitlabConfig | undefined): RepoConfig {
   const field = `repos[${i}]`;
   if (!isObject(raw)) return fail(`${field}: must be an object with a url`);
   const url = raw.url;
-  const m = typeof url === "string" ? REPO_URL.exec(url) : null;
+  let host: CodeHost = "github";
+  let m = typeof url === "string" ? REPO_URL.exec(url) : null;
+  const underGitlab = typeof url === "string" ? gitlabRepoPath(url, gitlab) : undefined;
+  if (!m && underGitlab !== undefined) {
+    host = "gitlab";
+    m = GITLAB_REPO_PATH.exec(underGitlab);
+    if (!m) {
+      return fail(
+        `${field}.url: a GitLab repo is ${gitlab?.baseUrl}/<group>[/<subgroup>]/<project>.git, got ${url}`,
+      );
+    }
+  }
   if (!m?.[1] || !m[2]) {
-    return fail(`${field}.url: must be https://github.com/<owner>/<repo>.git, got ${String(url)}`);
+    const alt = gitlab ? ` or ${gitlab.baseUrl}/<group>/<project>.git` : "";
+    return fail(
+      `${field}.url: must be https://github.com/<owner>/<repo>.git${alt}, got ${String(url)}`,
+    );
   }
   const [, owner, name] = m;
   if (!REPO_NAME.test(name) || name === "." || name === ".." || name.startsWith("-")) {
@@ -111,7 +150,34 @@ function parseRepo(raw: unknown, i: number): RepoConfig {
   ) {
     return fail(`${field}.branch: bad branch "${String(branch)}"`);
   }
-  return { url: m[0], branch, owner, name };
+  return { url: url as string, branch, host, owner, name };
+}
+
+// gitlab: {baseUrl}. The URL's origin and path, no trailing slash; like
+// llm.baseUrl it must use the default port, because iron-proxy intercepts
+// only 80 and 443. The chart validates the same way (templates/validate.yaml).
+function parseGitlab(raw: unknown): GitlabConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObject(raw)) return fail("gitlab: must be an object");
+  const extra = Object.keys(raw).find((k) => k !== "baseUrl");
+  if (extra !== undefined) {
+    return fail(`gitlab: unknown key ${JSON.stringify(extra)} (allowed: baseUrl)`);
+  }
+  const baseUrl = raw.baseUrl;
+  const url = typeof baseUrl === "string" && URL.canParse(baseUrl) ? new URL(baseUrl) : null;
+  if (!url || url.protocol !== "https:") {
+    return fail(`gitlab.baseUrl: must be an https URL, got ${String(baseUrl)}`);
+  }
+  if (!HOSTNAME.test(url.hostname)) {
+    return fail(`gitlab.baseUrl: the host must be a DNS name, got ${url.hostname}`);
+  }
+  if (url.port) {
+    return fail(`gitlab.baseUrl: must use the default port (443), got ${url.port}`);
+  }
+  if (url.search || url.hash || url.username || url.password) {
+    return fail("gitlab.baseUrl: must not have a query, fragment or credentials");
+  }
+  return { baseUrl: `${url.origin}${url.pathname.replace(/\/+$/, "")}` };
 }
 
 function parseReasoningEffort(raw: unknown, provider: Provider, field: string): ReasoningEffort {
@@ -282,7 +348,8 @@ export function parseConfig(raw: unknown, opts: ConfigOptions = {}): DevboxConfi
   if (!Array.isArray(raw.repos) || raw.repos.length === 0) {
     return fail("repos: must be a non-empty list");
   }
-  const repos = raw.repos.map(parseRepo);
+  const gitlab = parseGitlab(raw.gitlab);
+  const repos = raw.repos.map((r: unknown, i: number) => parseRepo(r, i, gitlab));
   // Every repo is cloned to /workspace/<name>, so names must be unique.
   repos.forEach((r, i) => {
     if (repos.findIndex((o) => o.name === r.name) !== i) {
@@ -310,6 +377,7 @@ export function parseConfig(raw: unknown, opts: ConfigOptions = {}): DevboxConfi
   const base: BaseDevboxConfig = {
     repos,
     llm: parseLlm(raw.llm),
+    ...(gitlab ? { gitlab } : {}),
     github,
     integrations,
   };
