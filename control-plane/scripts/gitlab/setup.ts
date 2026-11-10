@@ -264,7 +264,9 @@ export async function setup(
         ? "in the system keychain"
         : "new: saved or shown below"
   })`;
-  const again = `bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""} --skip-webhook`;
+  // With the same webhook authentication: the hooks already registered keep
+  // the credential they were given, so the rerun must not pick the other mode.
+  const again = `bun run gitlab:setup${d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : ""} --skip-webhook${auth === "secret" ? " --secret-token" : ""}`;
   if (opts.skipWebhook) {
     log("Webhooks: not registered (--skip-webhook). Create one on each project by hand:");
     log(byHand);

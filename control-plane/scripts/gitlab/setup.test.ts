@@ -371,6 +371,20 @@ describe("gitlab:setup", () => {
     ).toBe(true);
   });
 
+  it("the rerun advice keeps --secret-token when the webhooks use the legacy secret", async () => {
+    const h = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
+    await setup(h.d, opts({ secretToken: true }), h.deps);
+    expect(
+      h.log.some((l) =>
+        l.includes(`gitlab:setup --target ${h.configPath} --skip-webhook --secret-token with`),
+      ),
+    ).toBe(true);
+    // And not for the signing token, the default.
+    const signing = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
+    await setup(signing.d, opts(), signing.deps);
+    expect(signing.log.some((l) => l.includes("--secret-token"))).toBe(false);
+  });
+
   it("does not warn when the token may not manage webhooks, or was never read", async () => {
     const developer = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" }, hooksStatus: 403 });
     await setup(developer.d, opts(), developer.deps);
