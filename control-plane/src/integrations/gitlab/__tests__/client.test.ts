@@ -73,6 +73,31 @@ describe("mrWebUrl / parseMrUrl", () => {
     expect(parseMrUrl("https://gitlab.example.com/platform/api/-/issues/3")).toBeNull();
     expect(parseMrUrl("https://gitlab.example.com/platform/api/-/merge_requests/3", "")).toBeNull();
   });
+
+  it("matches merge request URLs whatever form the instance URL was configured in", async () => {
+    const mrUrl = "https://gitlab.example.com/gitlab/platform/api/-/merge_requests/3";
+    for (const baseUrl of [
+      "https://GitLab.Example.com/gitlab",
+      "https://gitlab.example.com:443/gitlab/",
+      "  https://gitlab.example.com/gitlab//  ",
+    ]) {
+      configureGitlabClient({ baseUrl, tokenSettings: { token: "test-token" } });
+      expect(parseMrUrl(mrUrl)).toEqual({ project: "platform/api", mrIid: 3 });
+      // And the API is called on the normalised instance.
+      const { fn, calls } = fetchReturning([{ status: 201, body: { id: 1 } }]);
+      globalThis.fetch = fn;
+      await postMrNote("platform/api", 3, "hi");
+      expect(calls[0]?.url).toBe(
+        "https://gitlab.example.com/gitlab/api/v4/projects/platform%2Fapi/merge_requests/3/notes",
+      );
+    }
+    configureGitlabClient({ baseUrl: "not a url", tokenSettings: { token: "test-token" } });
+    expect(parseMrUrl(mrUrl)).toBeNull();
+    configureGitlabClient({
+      baseUrl: "https://gitlab.example.com",
+      tokenSettings: { token: "test-token" },
+    });
+  });
 });
 
 describe("requests", () => {

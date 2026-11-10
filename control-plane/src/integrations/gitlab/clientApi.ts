@@ -34,10 +34,15 @@ export function configureGitlabClient(next: Setup): void {
   provider = undefined;
 }
 
-// GITLAB_BASE_URL without its trailing slash; core's config has already
-// validated it at boot (sandboxConfig.ts).
+// GITLAB_BASE_URL in the form core's config gives it (sandboxConfig.ts, which
+// has already validated it at boot): the URL's origin, so a lowercase host and
+// no default port, plus the path without a trailing slash. Merge request URLs
+// are matched against this by prefix, and GitLab writes them in that form.
 function instanceBaseUrl(): string | undefined {
-  return setup.baseUrl ?? (process.env.GITLAB_BASE_URL?.trim().replace(/\/+$/, "") || undefined);
+  const raw = (setup.baseUrl ?? process.env.GITLAB_BASE_URL)?.trim();
+  if (!raw || !URL.canParse(raw)) return undefined;
+  const url = new URL(raw);
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
 function tokenProvider(): GitlabTokenProvider {
