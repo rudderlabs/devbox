@@ -21,8 +21,13 @@ mentioning note is one round), approvals as a signal, and an installer step
   token (any account's, with no repos to reach) or the GitHub App. Making it
   optional is tracked in [rudderlabs/devbox#8](https://github.com/rudderlabs/devbox/issues/8).
 - **A group or project access token** for the group that holds the repos,
-  with the `api`, `read_repository` and `write_repository` scopes and at least
-  the Developer role. Merge requests, commits and replies are attributed to the
+  with the `api`, `read_repository` and `write_repository` scopes and the
+  **Developer** role. Developer is all devbox's work needs, and devbox uses
+  this one token for every push and API call, so don't give it more: a
+  Maintainer token could also change project settings, protected branches and
+  members. Maintainer only lets `gitlab:setup` register the webhooks for you;
+  with Developer you create them by hand, once per project (step 2 below).
+  Merge requests, commits and replies are attributed to the
   token's bot user, whose username and numeric id the webhooks need (see
   below). The token does not rotate itself: set an expiry you can live with
   and replace it in the Secret before then. A personal access token works for
@@ -95,9 +100,14 @@ installer writes.
    | `--skip-webhook` | Register no webhook; create them by hand as below. |
    | `--no-keychain` | Never read or write the system keychain. |
 
-   A token that may not manage webhooks (below Maintainer) gets the manual
-   instructions instead: URL `<public URL>/webhook/gitlab`, triggers
-   **Comments** and **Pipeline events**, the token setup printed.
+   A token that may not manage webhooks (below Maintainer, the recommended
+   setup) gets the manual instructions instead, as does `--skip-webhook`: on
+   each project, Settings → Webhooks, URL `<public URL>/webhook/gitlab`,
+   triggers **Comments** and **Pipeline events**, the token setup printed. A
+   Maintainer does this once in the GitLab UI; devbox's token never needs the
+   role. When the token does register the webhooks itself, setup warns that
+   it holds more than devbox needs: replace it with a Developer-role token
+   before you apply, and the webhooks keep working.
 
 3. `bun run k8s:install --target <file>` as usual. It checks the token again,
    writes `devbox-gitlab` (the token), `devbox-gitlab-ca` (the CA, with

@@ -176,6 +176,10 @@ const opts = (o: Partial<SetupOptions> = {}): SetupOptions => ({
   ...o,
 });
 
+// Whether setup warned that the deployment's token can manage webhooks.
+const warned = (log: string[]) =>
+  log.some((l) => l.startsWith("Warning: this token can manage webhooks"));
+
 describe("newWebhookToken", () => {
   it("whsec_ + base64 for the signing token, hex for the secret token", () => {
     expect(newWebhookToken("signing", () => RANDOM)).toBe(SIGNING);
@@ -197,6 +201,8 @@ describe("gitlab:setup", () => {
       `GITLAB_TOKEN: from the system keychain (${SCOPE})`,
       `GitLab 19.5.3 at ${BASE}: devbox acts as devbox (id 2, a bot user)`,
       `Webhook on platform/backend/api: ${HOOK_URL} (note and pipeline events)`,
+      "Warning: this token can manage webhooks, so it holds the Maintainer role or more. devbox uses the same token for all its work, which needs only Developer: a Maintainer token could also change project settings, protected branches and members.",
+      "  To keep it to Developer: replace it with a Developer-role token before you apply. The webhooks registered now keep working; later runs of gitlab:setup then print the manual steps instead (or pass --skip-webhook).",
       `Wrote integrations.gitlab and values.gitlab to ${h.configPath}`,
       `Next: bun run k8s:install --target ${h.configPath}`,
       "With GitOps, set these chart values instead: integrations.gitlab {enabled: true, botUsername: devbox, botUserId: 2}, gitlab.trustedGroups, and GITLAB_WEBHOOK_SIGNING_TOKEN in the integrations Secret",
@@ -345,7 +351,30 @@ describe("gitlab:setup", () => {
     const h = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
     await setup(h.d, opts({ skipWebhook: true }), h.deps);
     expect(h.requests.some((r) => r.url.includes("/hooks"))).toBe(false);
-    expect(h.log).toContain("Webhooks: not registered (--skip-webhook)");
+    expect(h.log).toContain(
+      "Webhooks: not registered (--skip-webhook). Create one on each project by hand:",
+    );
+    expect(h.log).toContain(
+      `  URL ${HOOK_URL}, triggers Comments and Pipeline events, signing token as below`,
+    );
+    expect(warned(h.log)).toBe(false);
+  });
+
+  it("warns when the token registered the webhooks itself: it holds more than devbox needs", async () => {
+    const h = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" } });
+    await setup(h.d, opts(), h.deps);
+    expect(h.requests.some((r) => r.url.includes("/hooks") && r.method === "POST")).toBe(true);
+    expect(warned(h.log)).toBe(true);
+    expect(h.log.some((l) => l.includes("replace it with a Developer-role token"))).toBe(true);
+  });
+
+  it("does not warn when the token may not manage webhooks, or was never read", async () => {
+    const developer = harness({ saved: { [`${SCOPE}/GITLAB_TOKEN`]: "t" }, hooksStatus: 403 });
+    await setup(developer.d, opts(), developer.deps);
+    expect(warned(developer.log)).toBe(false);
+    const byo = harness({ byoGitlabSecret: "my-gitlab" });
+    await setup(byo.d, opts({ botUsername: "devbox", botUserId: 2 }), byo.deps);
+    expect(warned(byo.log)).toBe(false);
   });
 
   it("the trust flags win and are checked; a private CA is read for the checks", async () => {
