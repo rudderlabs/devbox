@@ -50,9 +50,16 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | ingress.api.tls | list | `[]` | Standard Ingress TLS entries. Without TLS the chart prints a warning. |
 | ingress.webhooks.annotations | object | `{}` | Ingress annotations, for example the controller's timeouts. |
 | ingress.webhooks.className | string | `""` | The Ingress class. |
-| ingress.webhooks.enabled | bool | `false` | Public Ingress for /webhook/ only (GitHub, GitLab, Linear, Jira). |
+| ingress.webhooks.enabled | bool | `false` | Public Ingress for /webhook/ only (GitHub, GitLab, Linear, Jira, ClickUp). |
 | ingress.webhooks.host | string | `""` | Required when enabled. |
 | ingress.webhooks.tls | list | `[]` | Standard Ingress TLS entries. Without TLS the chart prints a warning. |
+| integrations.clickup.botName | string | `""` | Required when enabled: the bot's ClickUp username, which people @-mention. |
+| integrations.clickup.botUserId | int | `0` | Required when enabled: the bot's numeric ClickUp user ID (0 means unset; bun run clickup:setup reads it from ClickUp). |
+| integrations.clickup.enabled | bool | `false` | Turns ClickUp on (CLICKUP_ENABLED). CLICKUP_API_TOKEN and CLICKUP_WEBHOOK_SECRET go in the integrations Secret. Set by bun run clickup:setup through bun run k8s:install. Off, none of the block renders. |
+| integrations.clickup.statuses.done | string | `""` | The status devbox moves a task to when it finishes. Empty: no move. |
+| integrations.clickup.statuses.failed | string | `""` | The status devbox moves a task to when the task fails. Empty: no move. |
+| integrations.clickup.statuses.started | string | `""` | The status devbox moves a task to when it starts work. Empty: no move. |
+| integrations.clickup.teamId | string | `""` | Required when enabled: the ClickUp workspace ID, a quoted string of digits. |
 | integrations.githubApp.appId | int | `0` | Required when enabled: the App's numeric ID (0 means unset). |
 | integrations.githubApp.botLogin | string | `""` | Required when enabled: the App's slug, which users @-mention (bun run k8s:install copies it). |
 | integrations.githubApp.botUserId | int | `0` | Required when enabled: the App bot's numeric GitHub user ID (0 means unset). |

@@ -134,3 +134,17 @@ describe("Jira stays in the control plane", () => {
     expect(holders).toEqual(["Deployment/devbox/devbox-control-plane"]);
   });
 });
+
+describe("ClickUp stays in the control plane", () => {
+  it("no CLICKUP_* and no integrations Secret reach sandboxes or any other workload", async () => {
+    const r = await renderWith(["base.yaml", "clickup.yaml"]);
+    const tpl = JSON.stringify(template(r));
+    expect(tpl).not.toContain("CLICKUP_");
+    expect(tpl).not.toContain("devbox-integrations");
+    // Only the control plane's Deployment names a ClickUp setting or the Secret holding its token.
+    const holders = Object.entries(r)
+      .filter(([, doc]) => /CLICKUP_|devbox-integrations/.test(JSON.stringify(doc)))
+      .map(([key]) => key);
+    expect(holders).toEqual(["Deployment/devbox/devbox-control-plane"]);
+  });
+});

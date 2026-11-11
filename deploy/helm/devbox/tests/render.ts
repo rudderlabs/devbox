@@ -24,6 +24,7 @@ export const CASES: Record<string, string[]> = {
   linear: ["base.yaml", "linear.yaml"],
   slack: ["base.yaml", "slack.yaml"],
   jira: ["base.yaml", "jira.yaml"],
+  clickup: ["base.yaml", "clickup.yaml"],
   "github-app": ["base.yaml", "github-app.yaml"],
   "github-app-external": ["base.yaml", "github-app-external.yaml"],
   "llm-stages": ["base.yaml", "llm-stages.yaml"],

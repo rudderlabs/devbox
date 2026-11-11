@@ -328,6 +328,25 @@
             },
             "allowRestrictedIssues": { "type": "boolean" }
           }
+        },
+        "clickup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "teamId": { "type": "string", "pattern": "^[0-9]*$" },
+            "botUserId": { "type": "integer", "minimum": 0 },
+            "botName": { "type": "string" },
+            "statuses": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "started": { "type": "string" },
+                "done": { "type": "string" },
+                "failed": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },

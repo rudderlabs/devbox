@@ -179,6 +179,24 @@ integrations:
       failed: ""
     # -- Act on issues restricted by a security level too (JIRA_ALLOW_RESTRICTED_ISSUES).
     allowRestrictedIssues: false
+  clickup:
+    # -- Turns ClickUp on (CLICKUP_ENABLED). CLICKUP_API_TOKEN and CLICKUP_WEBHOOK_SECRET go in the
+    # integrations Secret. Set by bun run clickup:setup through bun run k8s:install. Off, none of the
+    # block renders.
+    enabled: false
+    # -- Required when enabled: the ClickUp workspace ID, a quoted string of digits.
+    teamId: ""
+    # -- Required when enabled: the bot's numeric ClickUp user ID (0 means unset; bun run clickup:setup reads it from ClickUp).
+    botUserId: 0
+    # -- Required when enabled: the bot's ClickUp username, which people @-mention.
+    botName: ""
+    statuses:
+      # -- The status devbox moves a task to when it starts work. Empty: no move.
+      started: ""
+      # -- The status devbox moves a task to when it finishes. Empty: no move.
+      done: ""
+      # -- The status devbox moves a task to when the task fails. Empty: no move.
+      failed: ""
 
 github:
   # -- GitHub orgs whose members may drive devbox. Required with trustedUsers (either) when the GitHub App is enabled.
@@ -240,7 +258,7 @@ snapshotBuilder:
 
 ingress:
   webhooks:
-    # -- Public Ingress for /webhook/ only (GitHub, GitLab, Linear, Jira).
+    # -- Public Ingress for /webhook/ only (GitHub, GitLab, Linear, Jira, ClickUp).
     enabled: false
     # -- The Ingress class.
     className: ""
