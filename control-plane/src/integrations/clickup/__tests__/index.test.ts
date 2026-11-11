@@ -285,9 +285,8 @@ const refused = (status: number) => async () => {
 describe("ClickUpIntegration onTaskStarted", () => {
   it("moves the bot's task to the started status in the list's spelling", async () => {
     const { clickup, calls } = setup({ client: taskAt("to do") });
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
+    await clickup.onTaskStarted(hookCtx(calls), CU_TASK);
     expect(calls).toEqual([
-      `addComment ${TASK_ID}`,
       `listStatuses ${LIST_ID}`,
       "isCurrent",
       `setStatus ${TASK_ID} In Progress`,
@@ -300,15 +299,15 @@ describe("ClickUpIntegration onTaskStarted", () => {
     ["the task is already started", taskAt("IN PROGRESS"), "already_there"],
   ])("leaves the task alone when %s", async (_, client, reason) => {
     const { clickup, calls } = setup({ client });
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
-    expect(calls).toEqual([`addComment ${TASK_ID}`]);
+    await clickup.onTaskStarted(hookCtx(calls), CU_TASK);
+    expect(calls).toEqual([]);
     expect(skipped()).toEqual([reason]);
   });
 
-  it("only says it started without a started status", async () => {
+  it("does nothing without a started status", async () => {
     const { clickup, calls } = setup({ cfg: { statuses: { done: "done" } } });
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
-    expect(calls).toEqual([`addComment ${TASK_ID}`]);
+    await clickup.onTaskStarted(hookCtx(calls), CU_TASK);
+    expect(calls).toEqual([]);
   });
 
   it("skips, with a warning, when the task's list has no such status", async () => {
@@ -316,8 +315,8 @@ describe("ClickUpIntegration onTaskStarted", () => {
       cfg: { statuses: { started: "doing" } },
       client: taskAt("to do"),
     });
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
-    expect(calls).toEqual([`addComment ${TASK_ID}`, `listStatuses ${LIST_ID}`]);
+    await clickup.onTaskStarted(hookCtx(calls), CU_TASK);
+    expect(calls).toEqual([`listStatuses ${LIST_ID}`]);
     expect(logged(warn)).toEqual([
       [
         "clickup status move skipped: the task's list has no such status",
@@ -328,14 +327,14 @@ describe("ClickUpIntegration onTaskStarted", () => {
 
   it("skips when the task was restarted meanwhile", async () => {
     const { clickup, calls } = setup({ client: taskAt("to do") });
-    await clickup.onTaskStarted(hookCtx(calls, { current: false }), CU_TASK, target);
-    expect(calls).toEqual([`addComment ${TASK_ID}`, `listStatuses ${LIST_ID}`, "isCurrent"]);
+    await clickup.onTaskStarted(hookCtx(calls, { current: false }), CU_TASK);
+    expect(calls).toEqual([`listStatuses ${LIST_ID}`, "isCurrent"]);
     expect(skipped()).toEqual(["restarted"]);
   });
 
   it("logs a 400 refusal and carries on", async () => {
     const { clickup, calls } = setup({ client: { ...taskAt("to do"), setStatus: refused(400) } });
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
+    await clickup.onTaskStarted(hookCtx(calls), CU_TASK);
     expect(logged(warn)).toEqual([
       [
         "clickup status move refused",
@@ -346,51 +345,7 @@ describe("ClickUpIntegration onTaskStarted", () => {
 
   it("leaves any other failure to the hook runner", async () => {
     const { clickup, calls } = setup({ client: { ...taskAt("to do"), setStatus: refused(500) } });
-    await expect(clickup.onTaskStarted(hookCtx(calls), CU_TASK, target)).rejects.toThrow(
-      "HTTP 500",
-    );
-  });
-
-  it("says it started, once per delegation, even when the task doesn't move", async () => {
-    const { clickup, calls, posted } = setup({ client: taskAt("IN PROGRESS") });
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
-    // A deferred provision runs the hook again for the same delegation.
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
-    // A restart is a new delegation.
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, { ...target, id: "9000000000000000002" });
-    expect(calls).toEqual([`addComment ${TASK_ID}`, `addComment ${TASK_ID}`]);
-    expect(JSON.stringify(posted[0]?.parts)).toContain(
-      "Working on this. I'll reply here when I'm done.",
-    );
-  });
-
-  it("logs a failed start comment, still moves the task and tries again next time", async () => {
-    let fail = true;
-    const { clickup, calls } = setup({
-      client: {
-        ...taskAt("to do"),
-        addComment: async (taskId: string) => {
-          calls.push(`addComment ${taskId}`);
-          if (fail)
-            throw new HttpError(`ClickUp POST /task/${TASK_ID}/comment failed: HTTP 500`, 500);
-          return { id: "1" };
-        },
-      },
-    });
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
-    expect(calls).toEqual([
-      `addComment ${TASK_ID}`,
-      `listStatuses ${LIST_ID}`,
-      "isCurrent",
-      `setStatus ${TASK_ID} In Progress`,
-    ]);
-    expect(logged(warn)).toContainEqual([
-      "clickup start comment failed",
-      { taskId: "task-1", error: "http_500" },
-    ]);
-    fail = false;
-    await clickup.onTaskStarted(hookCtx(calls), CU_TASK, target);
-    expect(calls.filter((c) => c.startsWith("addComment"))).toHaveLength(2);
+    await expect(clickup.onTaskStarted(hookCtx(calls), CU_TASK)).rejects.toThrow("HTTP 500");
   });
 });
 

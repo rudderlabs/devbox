@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { Task } from "../../db/schema";
-import { errorClass, HttpError, retryable } from "../http";
+import { HttpError, retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
 import type {
   Core,
@@ -17,14 +17,6 @@ import { type JiraClient, jiraClient } from "./client";
 import { type JiraConfig, parseJiraConfig } from "./config";
 import { type JiraIntegrationStatus, JiraStatusService } from "./status";
 import { isJiraSpec, JiraWebhookController } from "./webhook";
-
-// Posted on the issue when work starts, so people see devbox picked it up even
-// when the status doesn't change (an issue already in progress, a restart).
-const START_COMMENT = "Working on this. I'll reply here when I'm done.";
-// onTaskStarted runs on every provision attempt, and a deferred provision
-// repeats it, so the comment goes out once per delegation on this pod. The
-// newest are kept; a pod restart mid-provision may post it again.
-const GREETED_MAX = 1_000;
 
 // How Jira refuses a transition it won't make: a required field or a
 // condition (400), a concurrent change (409), or an invalid request (422).
@@ -73,9 +65,6 @@ export function createJira(
 // issue, which everyone who can see the issue reads: a failure's raw detail
 // never goes there, and Jira shows no live progress.
 export class JiraIntegration implements Integration {
-  // Delegations whose start comment this pod has posted, oldest first.
-  private readonly greeted = new Set<string>();
-
   constructor(
     private readonly cfg: JiraConfig,
     private readonly client: Client,
@@ -114,31 +103,12 @@ export class JiraIntegration implements Integration {
     }
   }
 
-  // A fresh provision: says so on the issue, once per delegation, then moves
-  // the issue to the started status, if one is configured and the issue is
-  // still the bot's. Safe to repeat: an issue already there is left alone.
-  async onTaskStarted(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void> {
-    await this.sayStarted(ctx, task, target);
+  // A fresh provision: moves the issue to the started status, if one is
+  // configured and the issue is still the bot's. Safe to repeat: an issue
+  // already there is left alone.
+  async onTaskStarted(ctx: HookCtx, task: Task): Promise<void> {
     const started = this.cfg.statuses.started;
     if (started) await this.moveIssue(ctx, task, started);
-  }
-
-  // The start comment. A failure is logged and never holds the start: the
-  // reply still comes when the run ends, and the next attempt tries again.
-  private async sayStarted(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void> {
-    const spec = target.spec;
-    if (!isJiraSpec(spec) || this.greeted.has(target.id)) return;
-    try {
-      await this.post(ctx, spec.issueId, START_COMMENT);
-    } catch (err) {
-      ctx.log.warn("jira start comment failed", { taskId: task.id, error: errorClass(err) });
-      return;
-    }
-    this.greeted.add(target.id);
-    if (this.greeted.size > GREETED_MAX) {
-      const oldest = this.greeted.values().next().value;
-      if (oldest !== undefined) this.greeted.delete(oldest);
-    }
   }
 
   // Links the pull request on the issue. Jira updates the link with the same

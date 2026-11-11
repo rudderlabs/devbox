@@ -14,7 +14,15 @@ import {
   TASK_ID,
   verifySignature,
 } from "./events";
-import { commentToMarkdown } from "./quill";
+import { commentToMarkdown, markdownToComments } from "./quill";
+
+// Said on the task when devbox takes an assignment, so people see it was
+// picked up: until the reply, minutes later, nothing else may show (the status
+// can already be the started one, or none is configured).
+const START_COMMENT = "Working on this. I'll reply here when I'm done.";
+// The start comment is sent beside the answer, not awaited, under its own
+// timeout.
+const START_COMMENT_TIMEOUT_MS = 10_000;
 
 // ClickUp gives a delivery 7 s. The reads on the request are kept short; the
 // task and the member list are read side by side.
@@ -113,7 +121,7 @@ export class ClickUpWebhookController {
   constructor(
     private readonly tasks: Pick<TaskService, "assign" | "findTask" | "enqueueRound">,
     private readonly cfg: ClickUpConfig,
-    private readonly client: Pick<ClickUpClient, "task">,
+    private readonly client: Pick<ClickUpClient, "task" | "addComment">,
     private readonly members: Pick<MemberRoles, "warm" | "role">,
     private readonly log: Logger,
     private readonly onSignedWebhook: () => void,
@@ -233,7 +241,22 @@ export class ClickUpWebhookController {
       result: result.result,
       userId: a.actor.id,
     });
+    if (result.result !== "duplicate") this.sayStarted(taskId, meta);
     return c.json({ status: "ok" }, 200);
+  }
+
+  // The start comment, once per assignment: a redelivery is a duplicate and
+  // says nothing, a re-assignment (a restart) says it again. Not awaited, so
+  // the answer stays inside ClickUp's 7 s; a failure is logged, and the reply
+  // still comes when the run ends.
+  private sayStarted(taskId: string, meta: Record<string, unknown>): void {
+    const [parts] = markdownToComments(START_COMMENT);
+    if (!parts) return;
+    withTimeout(START_COMMENT_TIMEOUT_MS, (signal) =>
+      this.client.addComment(taskId, parts, signal),
+    ).catch((err) => {
+      this.log.warn("clickup start comment failed", { ...meta, error: errorClass(err) });
+    });
   }
 
   // A follow-up on the devbox task. Only a comment that mentions the bot and

@@ -305,13 +305,8 @@ describe("JiraIntegration onTaskStarted", () => {
       cfg: { statuses: { started: "IN PROGRESS" } },
       client: issueAt("To Do"),
     });
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    expect(jiraCalls).toEqual([
-      "addComment 10042",
-      "transitions 10042",
-      "isCurrent",
-      "transition 10042 11",
-    ]);
+    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK);
+    expect(jiraCalls).toEqual(["transitions 10042", "isCurrent", "transition 10042 11"]);
   });
 
   it.each([
@@ -320,16 +315,16 @@ describe("JiraIntegration onTaskStarted", () => {
     ["the issue is already started", issueAt("in progress"), "already_there"],
   ])("leaves the issue alone when %s", async (_, client, reason) => {
     const { jira, jiraCalls } = setup({ client });
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    expect(jiraCalls).toEqual(["addComment 10042"]);
+    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK);
+    expect(jiraCalls).toEqual([]);
     expect(skipped()).toEqual([reason]);
   });
 
-  it("only says it started without a started status", async () => {
+  it("does nothing without a started status", async () => {
     // The default fake records getIssue calls too.
     const { jira, jiraCalls } = setup({ cfg: { statuses: { done: "Done" } } });
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    expect(jiraCalls).toEqual(["addComment 10042"]);
+    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK);
+    expect(jiraCalls).toEqual([]);
   });
 
   it("skips, with a warning, when the workflow has no move to the started status", async () => {
@@ -337,8 +332,8 @@ describe("JiraIntegration onTaskStarted", () => {
       cfg: { statuses: { started: "Doing" } },
       client: issueAt("To Do"),
     });
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    expect(jiraCalls).toEqual(["addComment 10042", "transitions 10042"]);
+    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK);
+    expect(jiraCalls).toEqual(["transitions 10042"]);
     expect(logged(warn)).toEqual([
       [
         "jira transition skipped: the workflow has no move to this status",
@@ -349,8 +344,8 @@ describe("JiraIntegration onTaskStarted", () => {
 
   it("skips when the task was restarted meanwhile", async () => {
     const { jira, jiraCalls } = setup({ client: issueAt("To Do") });
-    await jira.onTaskStarted(hookCtx(jiraCalls, { current: false }), ISSUE_TASK, target);
-    expect(jiraCalls).toEqual(["addComment 10042", "transitions 10042", "isCurrent"]);
+    await jira.onTaskStarted(hookCtx(jiraCalls, { current: false }), ISSUE_TASK);
+    expect(jiraCalls).toEqual(["transitions 10042", "isCurrent"]);
     expect(skipped()).toEqual(["restarted"]);
   });
 
@@ -358,7 +353,7 @@ describe("JiraIntegration onTaskStarted", () => {
     const { jira, jiraCalls } = setup({
       client: { ...issueAt("To Do"), transition: refused(status) },
     });
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
+    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK);
     expect(logged(warn)).toEqual([
       [
         "jira transition refused",
@@ -371,50 +366,7 @@ describe("JiraIntegration onTaskStarted", () => {
     const { jira, jiraCalls } = setup({
       client: { ...issueAt("To Do"), transition: refused(500) },
     });
-    await expect(jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target)).rejects.toThrow(
-      "HTTP 500",
-    );
-  });
-
-  it("says it started, once per delegation, even when the issue doesn't move", async () => {
-    const { jira, jiraCalls, posted } = setup({ client: issueAt("in progress") });
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    // A deferred provision runs the hook again for the same delegation.
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    // A restart is a new delegation.
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, { ...target, id: "10078" });
-    expect(jiraCalls).toEqual(["addComment 10042", "addComment 10042"]);
-    expect(JSON.stringify(posted[0]?.doc)).toContain(
-      "Working on this. I'll reply here when I'm done.",
-    );
-  });
-
-  it("logs a failed start comment, still moves the issue and tries again next time", async () => {
-    let fail = true;
-    const { jira, jiraCalls } = setup({
-      client: {
-        ...issueAt("To Do"),
-        addComment: async (issueId: string) => {
-          jiraCalls.push(`addComment ${issueId}`);
-          if (fail) throw new HttpError("Jira POST /issue/10042/comment failed: HTTP 500", 500);
-          return { id: "20001" };
-        },
-      },
-    });
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    expect(jiraCalls).toEqual([
-      "addComment 10042",
-      "transitions 10042",
-      "isCurrent",
-      "transition 10042 11",
-    ]);
-    expect(logged(warn)).toContainEqual([
-      "jira start comment failed",
-      { taskId: "task-1", error: "http_500" },
-    ]);
-    fail = false;
-    await jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK, target);
-    expect(jiraCalls.filter((c) => c.startsWith("addComment"))).toHaveLength(2);
+    await expect(jira.onTaskStarted(hookCtx(jiraCalls), ISSUE_TASK)).rejects.toThrow("HTTP 500");
   });
 });
 

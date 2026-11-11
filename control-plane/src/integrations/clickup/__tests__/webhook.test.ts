@@ -113,7 +113,7 @@ describe("ClickUp webhook: assignment", () => {
     const res = await signed(assignmentEvent());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: "ok" });
-    expect(calls).toEqual([`task ${TASK_ID}`, `members ${TEAM}`]);
+    expect(calls).toEqual([`task ${TASK_ID}`, `members ${TEAM}`, `addComment ${TASK_ID}`]);
     const [call] = taskCalls;
     const p = call?.args[0] as Parameters<TaskService["assign"]>[0];
     expect(p).toMatchObject({
@@ -161,6 +161,36 @@ describe("ClickUp webhook: assignment", () => {
     expect(logged(info)).toContainEqual([
       "clickup assignment",
       { clickupTaskId: TASK_ID, taskId: "task-1", result, userId: HUMAN },
+    ]);
+  });
+
+  it.each([
+    ["created", 1],
+    ["restarted", 1],
+    ["duplicate", 0],
+  ] as const)("comments that it started on a %s assignment %d time(s)", async (result, times) => {
+    const { signed, posted } = setup({ result });
+    await signed(assignmentEvent());
+    expect(
+      posted.map((p) =>
+        JSON.stringify(p.parts).includes("Working on this. I'll reply here when I'm done."),
+      ),
+    ).toEqual(Array(times).fill(true));
+  });
+
+  it("answers 200 and logs it when the start comment fails", async () => {
+    const { signed } = setup({
+      client: {
+        addComment: async () => {
+          throw new HttpError(`ClickUp POST /task/${TASK_ID}/comment failed: HTTP 500`, 500);
+        },
+      },
+    });
+    expect((await signed(assignmentEvent())).status).toBe(200);
+    await Bun.sleep(0);
+    expect(logged(warn)).toContainEqual([
+      "clickup start comment failed",
+      { clickupTaskId: TASK_ID, error: "http_500" },
     ]);
   });
 

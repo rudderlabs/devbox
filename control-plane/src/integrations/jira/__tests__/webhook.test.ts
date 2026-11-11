@@ -121,13 +121,43 @@ describe("Jira webhook: assignment", () => {
       spec: { kind: "jira_issue", issueId: "10042" },
     });
     expect(isJiraSpec(target.spec)).toBe(true);
-    // Nothing was looked up or posted.
-    expect(jiraCalls).toEqual([]);
+    // Nothing was looked up; the start comment went out.
+    expect(jiraCalls).toEqual(["addComment 10042"]);
   });
 
   it.each(["restarted", "duplicate"] as const)("answers 200 to a %s assignment", async (result) => {
     const { signed } = setup({ result });
     expect((await signed(assignmentEvent())).status).toBe(200);
+  });
+
+  it.each([
+    ["created", 1],
+    ["restarted", 1],
+    ["duplicate", 0],
+  ] as const)("comments that it started on a %s assignment %d time(s)", async (result, times) => {
+    const { signed, posted } = setup({ result });
+    await signed(assignmentEvent());
+    expect(
+      posted.map((p) =>
+        JSON.stringify(p.doc).includes("Working on this. I'll reply here when I'm done."),
+      ),
+    ).toEqual(Array(times).fill(true));
+  });
+
+  it("answers 200 and logs it when the start comment fails", async () => {
+    const { signed } = setup({
+      client: {
+        addComment: async () => {
+          throw new HttpError("Jira POST /issue/10042/comment failed: HTTP 500", 500);
+        },
+      },
+    });
+    expect((await signed(assignmentEvent())).status).toBe(200);
+    await Bun.sleep(0);
+    expect(logged(warn)).toContainEqual([
+      "jira start comment failed",
+      { issueId: "10042", error: "http_500" },
+    ]);
   });
 
   it.each([
