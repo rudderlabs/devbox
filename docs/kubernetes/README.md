@@ -27,6 +27,7 @@ Other pages:
 - [GitHub](../github.md): connecting devbox to GitHub as an App.
 - [Linear](../linear.md): connecting devbox to Linear.
 - [Jira](../jira.md): connecting devbox to Jira.
+- [ClickUp](../clickup.md): connecting devbox to ClickUp.
 - [The public URL](../public-url.md): the URL every integration's webhooks
   reach, and how the Ingress gives it.
 - [harness-image.md](harness-image.md): adding tools to the sandbox image.
@@ -110,8 +111,8 @@ acts on a cluster you did not name. The file has five keys:
 | `context` | Required. The kube context to install into. The installer names it in every `kubectl` and `helm` call. |
 | `profile` | The CLI profile to write. Default: `k8s-<context>`, made lower-case with other characters replaced by `-` (an EKS ARN context becomes `k8s-<cluster name>`). |
 | `values` | Chart values, passed to Helm as they are. See the [values reference](../../deploy/helm/devbox/README.md). `storage.storageClass` and `storage.volumeSnapshotClass` are required. Set concurrency and per-sandbox limits under `values.sandbox`; Kubernetes ignores the Compose-only `sandbox` block in `devbox.config.json`. `repos`, `llm` and `integrations` are refused: the installer copies repos and the full LLM model/effort/stage configuration from `devbox.config.json`, and integrations from the target's `integrations` key. |
-| `integrations` | Linear, Slack, Jira and the GitHub App: each one's `enabled` switch and settings ([customizing.md](customizing.md#integrations)). `bun run linear:setup` writes the Linear part ([Linear](../linear.md)), `bun run github:setup` the GitHub App's ([GitHub](../github.md)), `bun run jira:setup` Jira's ([Jira](../jira.md)). |
-| `publicUrl` | The public HTTPS URL webhooks reach, shared by Linear, GitHub, GitLab and Jira. Read only by the CLI. |
+| `integrations` | Linear, Slack, Jira, ClickUp and the GitHub App: each one's `enabled` switch and settings ([customizing.md](customizing.md#integrations)). `bun run linear:setup` writes the Linear part ([Linear](../linear.md)), `bun run github:setup` the GitHub App's ([GitHub](../github.md)), `bun run jira:setup` Jira's ([Jira](../jira.md)), `bun run clickup:setup` ClickUp's ([ClickUp](../clickup.md)). |
+| `publicUrl` | The public HTTPS URL webhooks reach, shared by Linear, GitHub, GitLab, Jira and ClickUp. Read only by the CLI. |
 
 Any other key is an error. The installer fills these chart values itself:
 `repos` and `llm` from `devbox.config.json`, `integrations` from the target
@@ -132,7 +133,7 @@ to save what you typed ([configuration.md](../configuration.md#secrets)):
 | `GITHUB_TOKEN` | The GitHub token. Falls back to `gh auth token` before the prompt. Not used with the GitHub App. |
 | `GITHUB_APP_PRIVATE_KEY_FILE` or `GITHUB_APP_PRIVATE_KEY` | The GitHub App's private key (a path, or the PEM), for devbox tokens. Never prompted for; falls back to the keychain entry `GITHUB_APP_PRIVATE_KEY`. |
 | `LLM_API_KEY` | The LLM API key. It must not be empty on Kubernetes. |
-| `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET` | Only for an integration enabled in the target file ([customizing.md](customizing.md#integrations)); `GITHUB_WEBHOOK_SECRET` for the GitHub App, `GITLAB_WEBHOOK_SIGNING_TOKEN` (or `GITLAB_WEBHOOK_SECRET`) for GitLab's webhooks ([GitLab](../gitlab.md#configure)). |
+| `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET`, `CLICKUP_API_TOKEN`, `CLICKUP_WEBHOOK_SECRET` | Only for an integration enabled in the target file ([customizing.md](customizing.md#integrations)); `GITHUB_WEBHOOK_SECRET` for the GitHub App, `GITLAB_WEBHOOK_SIGNING_TOKEN` (or `GITLAB_WEBHOOK_SECRET`) for GitLab's webhooks ([GitLab](../gitlab.md#configure)). |
 
 It writes them only to Kubernetes Secrets in the `devbox` namespace, never to
 a file or a Helm value. Without a terminal, a missing secret stops the install.
@@ -154,7 +155,8 @@ It prints seven steps:
 2. **Secrets.** Looks up the values for the Secrets it creates. Checks that
    the token can see, push to and open pull requests in each repo, sends the
    LLM endpoint a one-message request and, with Linear enabled, checks the
-   Linear client secret. With Jira enabled, it checks the API token. Every
+   Linear client secret. With Jira or ClickUp enabled, it checks its API
+   token. Every
    request is listed in
    [what preflight checks](../configuration.md#what-preflight-checks). In a
    terminal, a rejected value that was saved or typed is asked for again
@@ -180,8 +182,9 @@ It prints seven steps:
    `$XDG_CONFIG_HOME/devbox/config.json`), as the current profile.
 
 With Linear enabled, it ends with
-`Check Linear with: bun run linear:status --target <file>`, and with Jira
-enabled, with `Check Jira with: bun run jira:status --target <file>`.
+`Check Linear with: bun run linear:status --target <file>`, with Jira
+enabled, with `Check Jira with: bun run jira:status --target <file>`, and with
+ClickUp enabled, with `Check ClickUp with: bun run clickup:status --target <file>`.
 
 Flags:
 
@@ -192,6 +195,7 @@ Flags:
 | `--skip-llm-check` | Skips the request to the LLM endpoint. |
 | `--skip-linear-check` | Skips the Linear client-secret check. |
 | `--skip-jira-check` | Skips the Jira API-token check. |
+| `--skip-clickup-check` | Skips the ClickUp API-token check. |
 | `--skip-netpol-check` | Skips the NetworkPolicy check. Sandbox egress is not locked down if the CNI does not enforce NetworkPolicy. |
 | `--netpol-check` | Runs the NetworkPolicy check on a re-run too. By default it runs only on the first install. |
 | `--timeout <duration>` | Helm's `--timeout`. Default `15m`. Raise it if the first snapshot of big repos takes longer. |
@@ -256,7 +260,8 @@ kubectl -n devbox create secret generic devbox-integrations \
   --from-literal=LINEAR_WEBHOOK_SECRET="$LINEAR_WEBHOOK_SECRET"
 ```
 
-Jira's are `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET`.
+Jira's are `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET`, and ClickUp's
+`CLICKUP_API_TOKEN` and `CLICKUP_WEBHOOK_SECRET`.
 
 The chart creates its own Secrets (the OpenSandbox API key, the Postgres
 password, the iron-proxy CA) in a pre-install hook.
@@ -304,6 +309,7 @@ git: { name: Your Name, email: 12345+you@users.noreply.github.com }
 # integrations:
 #   linear: { enabled: true, clientId: <client-id> }
 #   jira: { enabled: true, … }   # the block bun run jira:setup writes (docs/jira.md#gitops)
+#   clickup: { enabled: true, … }   # the block bun run clickup:setup writes (docs/clickup.md#gitops)
 # github: { trustedOrgs: [your-org] }
 ```
 
@@ -395,9 +401,10 @@ after you change a Secret of your own. For every Secret the chart will use
   pull request checks; with the GitHub App's devbox tokens, a token minted
   from the key in `devbox-github-app` or your own key Secret, and that the
   installation covers every repo), the LLM key against `llm`, with Linear enabled,
-  the Linear client secret with `integrations.linear.clientId`, and, with Jira
+  the Linear client secret with `integrations.linear.clientId`, with Jira
   enabled, that the Jira API token works and belongs to
-  `integrations.jira.botAccountId`
+  `integrations.jira.botAccountId`, and, with ClickUp enabled, that the
+  ClickUp API token works and belongs to `integrations.clickup.botUserId`
   ([what preflight checks](../configuration.md#what-preflight-checks));
 - each enabled integration's keys in the integrations Secret.
 
@@ -500,9 +507,9 @@ availability and no automated upgrades. In production, use your own database:
 `postgresql.enabled: false` and `database.existingSecret`
 ([customizing.md](customizing.md#external-database)).
 
-## Webhooks, GitHub, Linear and Jira
+## Webhooks, GitHub, Linear, Jira and ClickUp
 
-Linear, Slack, Jira and the GitHub App each have an `enabled` switch and settings
+Linear, Slack, Jira, ClickUp and the GitHub App each have an `enabled` switch and settings
 in the target file's `integrations` block, or in the chart values with GitOps
 ([customizing.md](customizing.md#integrations)). Their secrets go in
 `devbox-integrations` ([secrets.md](secrets.md)).
@@ -527,6 +534,12 @@ account's token and writes its settings, a Jira admin creates the webhook it
 prints, `k8s:install` applies the settings, and
 `bun run jira:status --target devbox.k8s.json` checks them
 ([Jira](../jira.md)).
+
+For ClickUp, `bun run clickup:setup --target devbox.k8s.json` checks the
+bot's token, creates or updates its webhook through ClickUp's API and writes
+its settings, `k8s:install` applies them, and
+`bun run clickup:status --target devbox.k8s.json` checks them
+([ClickUp](../clickup.md)).
 
 Webhooks need a public route to `/webhook/`, such as the `webhooks` Ingress.
 

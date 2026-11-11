@@ -22,8 +22,9 @@ variable or the fix. Then the status command for the part that fails.
 ## Integrations
 
 - `bun run github:status [--target <file>]`,
-  `bun run linear:status [--target <file>]` and
-  `bun run jira:status [--target <file>]` show the settings, where each
+  `bun run linear:status [--target <file>]`,
+  `bun run jira:status [--target <file>]` and
+  `bun run clickup:status [--target <file>]` show the settings, where each
   secret is found, what the control plane reports, and whether the public URL
   reaches devbox.
 - "no answer": the tunnel is down, or the Ingress or DNS is not ready.
@@ -36,9 +37,18 @@ variable or the fix. Then the status command for the part that fails.
   `jira_webhook.ignored` and its `reason` (`untrusted` assigner or reporter,
   `restricted_issue`, `non_human`), or for a webhook
   signature mismatch.
+- Assigning a ClickUp task does nothing: `clickup:status` shows whether the
+  webhook is missing or suspended (`clickup:setup` reactivates it). Then read
+  the control plane's log for `clickup_webhook.ignored` and its `reason`
+  (`untrusted` assigner or creator: a guest or an automation; `wrong_team`;
+  `private_comment`; `no_task`), for `clickup_webhook.task_unresolved` or
+  `clickup_webhook.trust_unresolved` (devbox couldn't read the task or the
+  member list, and ClickUp delivers again), or for a webhook signature
+  mismatch, which after a change of bot is the old bot's webhook.
 - Tables of symptoms: [docs/github.md](../../../docs/github.md#troubleshooting),
-  [docs/linear.md](../../../docs/linear.md) and
-  [docs/jira.md](../../../docs/jira.md#troubleshooting).
+  [docs/linear.md](../../../docs/linear.md),
+  [docs/jira.md](../../../docs/jira.md#troubleshooting) and
+  [docs/clickup.md](../../../docs/clickup.md#troubleshooting).
 
 ## Tasks
 

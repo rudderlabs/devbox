@@ -217,7 +217,7 @@ deployment defaults are:
 
 ### `integrations`
 
-Optional. The local stack's integrations: Linear, Jira and the GitHub App.
+Optional. The local stack's integrations: Linear, Jira, ClickUp and the GitHub App.
 
 ```json
 "publicUrl": "https://…",
@@ -271,6 +271,22 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 | `statuses` | no | `started`, `done` and `failed`: the status names devbox moves an issue to, in any letter case. An absent one means no move ([docs/jira.md](jira.md#statuses)). |
 | `allowRestrictedIssues` | no, default `false` | `true` acts on issues with a security level too. |
 
+**`integrations.clickup`** turns on ClickUp ([docs/clickup.md](clickup.md)).
+`bun run clickup:setup` writes it.
+
+```json
+"integrations": { "clickup": {
+  "enabled": true, "teamId": "1234567890", "botUserId": 12345678, "botName": "devbox",
+  "statuses": { "started": "in progress" } } }
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `enabled` | yes | `true` turns ClickUp on, `false` turns it off and keeps the other fields. |
+| `teamId` | when `enabled` is `true` | The workspace's id, a string of digits. Tasks from any other workspace are ignored. |
+| `botUserId`, `botName` | when `enabled` is `true` | The bot's numeric user ID and username, as ClickUp reported them to `clickup:setup`. People type `@<botName>` to mention the bot. |
+| `statuses` | no | `started`, `done` and `failed`: the status names devbox moves a task to, in any letter case and looked up in the task's list. An absent one means no move ([docs/clickup.md](clickup.md#statuses)). |
+
 **`github`** is a top-level key: `trustedOrgs` and `trustedUsers`, lists of
 strings ([Trust settings](#trust-settings)). With `integrations.githubApp`
 enabled, one of them must be set.
@@ -295,6 +311,14 @@ may also edit it. Only `enabled: true` turns Jira on. With it, `up` needs
 token with Jira, and passes the
 `JIRA_*` variables ([Control-plane settings](#control-plane-settings)) to the
 control plane. Otherwise it passes them all empty.
+
+`bun run clickup:setup` writes `integrations.clickup`
+([docs/clickup.md](clickup.md)); you may also edit it. Only `enabled: true`
+turns ClickUp on. With it, `up` needs `CLICKUP_API_TOKEN` and
+`CLICKUP_WEBHOOK_SECRET` ([Secrets](#secrets)), checks the token with
+ClickUp, and passes the `CLICKUP_*` variables
+([Control-plane settings](#control-plane-settings)) to the control plane.
+Otherwise it passes them all empty.
 
 With `integrations.githubApp.enabled: true`, `up` needs the App's private key
 (unless `tokens` is `"external"`) and `GITHUB_WEBHOOK_SECRET`
@@ -334,7 +358,7 @@ kube context, so a command never acts on a cluster you did not name.
 | `context` | yes | The kube context of the cluster. |
 | `profile` | no, default `k8s-<context>` | The CLI profile the installer writes. Lower-case letters, digits and `-`; the default is the context made lower-case with other characters replaced by `-`. |
 | `values` | no | Helm values for the chart, passed as they are. `storage.storageClass` and `storage.volumeSnapshotClass` are required by the chart. Sandbox sizing goes under `values.sandbox`; the Compose-only `devbox.config.json` block is ignored. `repos` and `llm` are refused: the installer copies the full `llm` block, including effort and stage overrides, from `devbox.config.json`. `integrations` is refused: it goes at the top level. |
-| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`), `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`), `gitlab` (`enabled`, `botUsername`, `botUserId`, `ciResults`, `webhookAuth`; written by `bun run gitlab:setup`, [docs/gitlab.md](gitlab.md)) and `jira` (the fields [above](#integrations)), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
+| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`), `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`), `gitlab` (`enabled`, `botUsername`, `botUserId`, `ciResults`, `webhookAuth`; written by `bun run gitlab:setup`, [docs/gitlab.md](gitlab.md)), `jira` and `clickup` (the fields [above](#integrations)), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
 
 Any other key is an error: chart values go under `values`. The installer adds
 `repos`, `llm`, `integrations`, `ironProxy.clusterIP`,
@@ -368,6 +392,7 @@ your environment → the system keychain → gh auth token (GITHUB_TOKEN only) �
 | Slack bot token | `SLACK_BOT_TOKEN` | Kubernetes, with `integrations.slack.enabled: true` |
 | GitHub webhook secret | `GITHUB_WEBHOOK_SECRET` | with `integrations.githubApp.enabled: true` |
 | Jira API token, webhook secret | `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET` | with `integrations.jira.enabled: true` |
+| ClickUp API token, webhook secret | `CLICKUP_API_TOKEN`, `CLICKUP_WEBHOOK_SECRET` | with `integrations.clickup.enabled: true` |
 
 An integration that is off has its secrets ignored: none is looked up, even
 when the variable is set.
@@ -377,7 +402,8 @@ when the variable is set.
   Otherwise it prompts.
 - **A variable that is set wins.** For `GITHUB_TOKEN` and `LLM_API_KEY` that
   holds even when it is empty: an empty `LLM_API_KEY` means the endpoint needs
-  no key. An empty Linear, Slack, Jira or webhook secret counts as missing.
+  no key. An empty Linear, Slack, Jira, ClickUp or webhook secret counts as
+  missing.
 - **The App's private key is never prompted for.** A PEM has many lines, so
   it comes from `GITHUB_APP_PRIVATE_KEY_FILE`, then `GITHUB_APP_PRIVATE_KEY`,
   then the keychain entry `GITHUB_APP_PRIVATE_KEY`. `github:setup` saves it,
@@ -404,31 +430,36 @@ each cluster keep their own tokens:
 | A cluster | `k8s:<context>/devbox` | `k8s:<context>/devbox/<NAME>` |
 
 - Where the platform has no keychain (headless Linux without libsecret),
-  `up`, `k8s:install` and the `linear:*`, `github:*` and `jira:*` commands
-  skip it without a message.
+  `up`, `k8s:install` and the `linear:*`, `github:*`, `jira:*` and
+  `clickup:*` commands skip it without a message.
   `bun run secrets` prints `The system keychain is not available on this
   machine.` and exits 1.
 - `--no-keychain`, on `up`, `k8s:install`, `linear:setup`, `linear:status`,
   `linear:disable`, `github:setup`, `github:status`, `github:disable`,
-  `jira:setup`, `jira:status` and `jira:disable`, never reads or writes it.
+  `jira:setup`, `jira:status`, `jira:disable`, `clickup:setup`,
+  `clickup:status` and `clickup:disable`, never reads or writes it.
 - `bun run linear:setup` saves the two Linear secrets only if you choose to,
   and never takes them from your environment ([docs/linear.md](linear.md#saving-the-secrets-or-not)).
   `bun run github:setup` does the same for the App's private key and webhook
   secret ([docs/github.md](github.md#the-private-key)). `bun run jira:setup`
   offers to save the API token and the webhook secret you type, and uses
   `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET` from your environment as they are
-  ([docs/jira.md](jira.md#2-run-jirasetup)).
+  ([docs/jira.md](jira.md#2-run-jirasetup)). `bun run clickup:setup` offers
+  to save the API token you type and the webhook secret ClickUp made, uses
+  `CLICKUP_API_TOKEN` from your environment as it is, and stops when a
+  `CLICKUP_WEBHOOK_SECRET` there isn't the webhook's
+  ([docs/clickup.md](clickup.md#2-run-clickupsetup)).
 
 ### Rejected values
 
-When a check rejects a secret (GitHub, the LLM endpoint, Linear or Jira refuses
-it):
+When a check rejects a secret (GitHub, the LLM endpoint, Linear, Jira or
+ClickUp refuses it):
 
 - **A saved value** is removed: `The saved <NAME> for <scope> was rejected;
   removing it`. Then, with a terminal, it is asked for as a typed one is. A
   saved `JIRA_API_TOKEN` is kept instead (`… was rejected; keeping it`): Jira
   answers a wrong email with the same 401, and Atlassian shows a token only
-  once.
+  once. A saved `CLICKUP_API_TOKEN` is kept too: only you remove it.
 - **A typed value**, with a terminal: the check's message, then
   `Enter <NAME> again, or press Enter on an empty value to exit.`, and the
   prompt again, until a value is accepted. An empty answer stops the run,
@@ -456,13 +487,15 @@ cluster that target file names.
 
 There is no `secrets set`: run `up` or `k8s:install` in a terminal and save
 the value at the prompt, or use `linear:setup` for the Linear secrets,
-`github:setup` for the GitHub App's and `jira:setup` for Jira's.
+`github:setup` for the GitHub App's, `jira:setup` for Jira's and
+`clickup:setup` for ClickUp's.
 
 ### Destructive commands
 
 `bun run secrets clear`, `bun run linear:disable --forget`,
-`bun run github:disable --forget`, `bun run jira:disable --forget` and
-`bun run k8s:uninstall --purge` delete data, and confirm the same way:
+`bun run github:disable --forget`, `bun run jira:disable --forget`,
+`bun run clickup:disable --forget` and `bun run k8s:uninstall --purge` delete
+data, and confirm the same way:
 
 - **With a terminal**, they list what they will delete, one item per line,
   and ask a question ending `[y/N]`. Enter or Ctrl-D answers no: nothing is
@@ -515,8 +548,8 @@ you named with `existingSecret`
 
 `up` passes the secrets only in the environment of the `docker compose` process
 it starts. Compose gives `GITHUB_TOKEN` and `LLM_API_KEY` to iron-proxy, and
-`GITHUB_TOKEN` (and the Linear and Jira secrets, with those on) to the control
-plane.
+`GITHUB_TOKEN` (and the Linear, Jira and ClickUp secrets, with those on) to the
+control plane.
 With the GitHub App, `GITHUB_TOKEN` is empty: the token is a file in a volume
 the minter fills (or your `tokenFile`'s directory), and the control plane gets
 `GITHUB_WEBHOOK_SECRET`. The App's private key goes only to the minter, as a
@@ -537,8 +570,8 @@ These flows run the checks, which the code calls preflight:
 
 | Flow | When the checks run | How to skip them |
 |---|---|---|
-| `bun run up` | Step 3, before any container starts | `--skip-checks` skips all of them, LLM, Linear and Jira included; `--skip-jira-check` skips request 8 |
-| `bun run k8s:install` | Step 2, before the namespaces, Secrets and chart are installed. A re-run (an upgrade) checks again. | `--skip-push-check` skips requests 3 and 4, `--skip-llm-check` request 5, `--skip-linear-check` requests 6 and 7, `--skip-jira-check` request 8 |
+| `bun run up` | Step 3, before any container starts | `--skip-checks` skips all of them, LLM, Linear, Jira and ClickUp included; `--skip-jira-check` skips request 8, `--skip-clickup-check` request 9 |
+| `bun run k8s:install` | Step 2, before the namespaces, Secrets and chart are installed. A re-run (an upgrade) checks again. | `--skip-push-check` skips requests 3 and 4, `--skip-llm-check` request 5, `--skip-linear-check` requests 6 and 7, `--skip-jira-check` request 8, `--skip-clickup-check` request 9 |
 | `bun run k8s:kind` | It runs `k8s:install`, so the same as above | Same as above |
 | `bun run k8s:check` | When you run it, against the values in the cluster's Secrets | `--skip-push-check` skips requests 3 and 4 |
 
@@ -555,7 +588,8 @@ Requests 1 to 4 use the GitHub token; requests 2 to 4 run once per repo, in
 the order of `repos`. Request 5 uses the LLM key. Requests 6 and 7 run only
 with Linear enabled, and use the client ID and `LINEAR_CLIENT_SECRET`.
 Request 8 runs only with Jira enabled, and uses `botEmail` and
-`JIRA_API_TOKEN`.
+`JIRA_API_TOKEN`. Request 9 runs only with ClickUp enabled, and uses
+`CLICKUP_API_TOKEN`.
 
 | # | Request | What it proves | Passes on | Fails with |
 |---|---|---|---|---|
@@ -567,6 +601,7 @@ Request 8 runs only with Jira enabled, and uses `botEmail` and
 | 6 | `POST https://api.linear.app/oauth/token`, the client-credentials grant with the client ID and secret | Linear accepts the app's credentials, and the app allows client credentials | a token | `Linear rejected the client ID or LINEAR_CLIENT_SECRET (invalid_client): ...`, `the Linear app does not allow client credentials: ...`, or `can't reach api.linear.app: ...` |
 | 7 | `POST https://api.linear.app/graphql`, `{ viewer { name } organization { name urlKey } }`, with that token | The app user and the workspace devbox acts in. They are printed: `Linear: devbox acts as <name> in workspace <workspace>`. | 200 with both | `Linear check failed: ...` |
 | 8 | `GET https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/myself`, with Basic auth (`botEmail` and the token) | Jira accepts the token, and it belongs to `botAccountId`. Printed: `Jira: devbox acts as <name> on <site>`. | 200 with the bot's account ID | `Jira rejected JIRA_API_TOKEN, or the email <email> doesn't match it (401): ...`, `JIRA_API_TOKEN belongs to <name> (<id>), not the configured bot ...: run bun run jira:setup`, `Jira check failed: ...`, or `can't reach api.atlassian.com: ...` |
+| 9 | `GET https://api.clickup.com/api/v2/user`, with the token in `Authorization` | ClickUp accepts the token, and it belongs to `botUserId`. Printed: `ClickUp: devbox acts as <name> in workspace <teamId>`. | 200 with the bot's user ID | `ClickUp rejected CLICKUP_API_TOKEN (401): ...`, `CLICKUP_API_TOKEN belongs to <name> (user <id>), not the configured bot ...: run bun run clickup:setup`, `ClickUp GET /user returned <status>`, or `can't reach api.clickup.com: ...` |
 
 **Rate limits.** If GitHub answers any of requests 1 to 4 with 429, or with a
 403 that is a rate limit (`x-ratelimit-remaining: 0`, or a message about a rate
@@ -734,6 +769,11 @@ way.
 | `JIRA_STATUS_STARTED`, `JIRA_STATUS_DONE`, `JIRA_STATUS_FAILED` | | The statuses devbox moves an issue to. Unset: no move. |
 | `JIRA_ALLOW_RESTRICTED_ISSUES` | `false` | `true` acts on issues with a security level too. |
 | `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET` | | The service account's API token, and the webhook's secret, which signs each delivery (`X-Hub-Signature`). |
+| `CLICKUP_ENABLED` | | `true` turns on ClickUp and `POST /webhook/clickup`. Unset, empty or `false` is off; anything else fails startup. With it on, every `CLICKUP_*` below is required except the statuses. Compose and the chart set these from `integrations.clickup`. |
+| `CLICKUP_TEAM_ID` | | The workspace's id, digits only. |
+| `CLICKUP_BOT_USER_ID`, `CLICKUP_BOT_NAME` | | The bot's numeric user ID (a positive integer) and its username. |
+| `CLICKUP_STATUS_STARTED`, `CLICKUP_STATUS_DONE`, `CLICKUP_STATUS_FAILED` | | The statuses devbox moves a task to. Unset: no move. |
+| `CLICKUP_API_TOKEN`, `CLICKUP_WEBHOOK_SECRET` | | The bot's personal API token, and the webhook's secret, which signs each delivery (`X-Signature`). |
 | `SHUTDOWN_DRAIN_MS` | `10000` | How long shutdown waits, in milliseconds, for in-flight provisions and integration hooks once it has finished the task it was reconciling. On Kubernetes, set it with `extraEnv` and raise `controlPlane.terminationGracePeriodSeconds` by as much. |
 
 ### Settings for the token minter
@@ -874,7 +914,9 @@ webhooks, the GitLab lists decide whose notes do
 ([docs/gitlab.md](gitlab.md#webhooks-notes-and-pipelines)). On Kubernetes set
 them with `gitlab.trustedGroups` and `gitlab.trustedUsers`. Jira has no trust
 lists: it trusts every person with access to the site, as Linear does
-([docs/jira.md](jira.md#trust)).
+([docs/jira.md](jira.md#trust)). Neither has ClickUp: it trusts the
+workspace's owners, admins and members, never guests or automations
+([docs/clickup.md](clickup.md#trust)).
 
 In the quickstart, none of these is set. Follow-ups come from
 `bun run devbox send`, and the agent reads no pull request discussion.

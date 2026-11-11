@@ -13,7 +13,7 @@ would stay in Helm's release history.
 | `devbox-llm`, or `secrets.llm.existingSecret` | `api-key` | iron-proxy | the installer, or you |
 | `devbox-gitlab`, or `secrets.gitlab.existingSecret` | `token` (a GitLab group or project access token) | iron-proxy (sandboxes' GitLab requests), the snapshot builder (clones), the control plane (replies and member lookups, with `integrations.gitlab.enabled`). Used only with `gitlab.baseUrl` ([GitLab](../gitlab.md)). | the installer from `GITLAB_TOKEN`, or you |
 | `devbox-gitlab-ca`, or `ironProxy.caBundle` | `ca.crt` (a PEM bundle) | iron-proxy, the snapshot builder and the control plane, for their own connections to a GitLab instance with a private CA | the installer from `gitlab.caFile`, or you |
-| `devbox-integrations`, or `secrets.integrations.existingSecret` | env names: `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITLAB_WEBHOOK_SIGNING_TOKEN` (or `GITLAB_WEBHOOK_SECRET`), `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET` | the control plane, as env. Used only with an integration enabled. | the installer when an integration is enabled, or you |
+| `devbox-integrations`, or `secrets.integrations.existingSecret` | env names: `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITLAB_WEBHOOK_SIGNING_TOKEN` (or `GITLAB_WEBHOOK_SECRET`), `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET`, `CLICKUP_API_TOKEN`, `CLICKUP_WEBHOOK_SECRET` | the control plane, as env. Used only with an integration enabled. | the installer when an integration is enabled, or you |
 | `database.existingSecret` (no default name) | `DATABASE_URL` | the control plane, with `postgresql.enabled: false` | you |
 | `devbox-opensandbox` | `api-key` | the OpenSandbox server and the control plane | the chart |
 | `devbox-postgres` | `password` | the bundled Postgres and the control plane | the chart, with `postgresql.enabled: true` |
@@ -40,6 +40,8 @@ would stay in Helm's release history.
   | `GITLAB_WEBHOOK_SECRET` | GitLab: the webhook's legacy secret token, for an older instance or `--secret-token` |
   | `JIRA_API_TOKEN` | Jira: the service account's API token |
   | `JIRA_WEBHOOK_SECRET` | Jira: the admin webhook's secret |
+  | `CLICKUP_API_TOKEN` | ClickUp: the bot's personal API token (`pk_…`) |
+  | `CLICKUP_WEBHOOK_SECRET` | ClickUp: the webhook's secret, which ClickUp made when `clickup:setup` created the webhook |
 
   The installer writes only the enabled integrations' keys, and deletes its
   `devbox-integrations` when none is enabled. A key of an integration that is
@@ -219,7 +221,8 @@ then run the two commands above.
 
 To turn an integration off, set its `enabled` to `false` (for Linear,
 `bun run linear:disable --target devbox.k8s.json`; for Jira,
-`bun run jira:disable --target devbox.k8s.json`) and re-run the installer.
+`bun run jira:disable --target devbox.k8s.json`; for ClickUp,
+`bun run clickup:disable --target devbox.k8s.json`) and re-run the installer.
 It rewrites `devbox-integrations` without that integration's keys, or deletes
 it when none is left.
 

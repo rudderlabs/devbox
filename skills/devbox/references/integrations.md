@@ -11,7 +11,7 @@ Without `--target` the commands act on Compose (`devbox.config.json`); with
 
 ## The public URL
 
-GitHub, GitLab, Linear and Jira deliver webhooks only to a public HTTPS URL,
+GitHub, GitLab, Linear, Jira and ClickUp deliver webhooks only to a public HTTPS URL,
 the deployment's top-level `publicUrl`, shared by all of them. The setups refuse
 `http://`, `localhost` and private addresses.
 
@@ -21,8 +21,8 @@ the deployment's top-level `publicUrl`, shared by all of them. The setups refuse
   `bun run k8s:connect --target devbox.kind.json`.
 - Kubernetes: the Ingress host (`ingress.webhooks`, else `ingress.api`).
 
-A free tunnel gets a new URL each time it restarts, and GitHub, Linear and
-Jira keep sending to the old one. Recommend a URL that doesn't change: a free
+A free tunnel gets a new URL each time it restarts, and GitHub, Linear, Jira
+and ClickUp keep sending to the old one. Recommend a URL that doesn't change: a free
 ngrok static domain (`ngrok http --url=<domain> 3000`) or a named Cloudflare
 tunnel.
 If it changed anyway, run the setup again with the new `--public-url`
@@ -124,6 +124,42 @@ bun run jira:status [--target <file>]
 
 Everything: [docs/jira.md](../../../docs/jira.md).
 
+## ClickUp
+
+Add the bot (a ClickUp account that is a member of the workspace, not a
+guest) to a task's assignees and it starts a task; comments that `@mention`
+the bot are follow-ups; replies are comments that carry the pull request's
+URL. `clickup:setup` creates or updates the webhook itself, through ClickUp's
+API with the bot's token: nobody pastes anything into ClickUp.
+
+```bash
+bun run clickup:setup [--target <file>] [--public-url <url>] [--team <id>]
+bun run up                      # or k8s:kind / k8s:install --target <file>
+bun run clickup:status [--target <file>]
+```
+
+- The token is the bot's personal API token (`pk_…`, Settings → Apps while
+  signed in as the bot). It never expires; when it is regenerated,
+  `clickup:status` shows `auth rejected`: run `clickup:setup` again with the
+  new one.
+- Secrets: `CLICKUP_API_TOKEN` and `CLICKUP_WEBHOOK_SECRET`. ClickUp makes
+  the webhook secret and setup reads it from ClickUp; the user never types
+  it. A `CLICKUP_WEBHOOK_SECRET` in the environment that isn't the webhook's
+  stops setup.
+- Trust: the workspace's owners, admins and members, never guests, the bot
+  or automations. There are no trust lists. Both whoever adds the bot and the
+  task's creator must be trusted. **Automations never start work**: they act
+  as ClickBot, with no record of who set them off. Private comments are
+  ignored. Untrusted events are ignored: nothing is posted, and the log has
+  `clickup_webhook.ignored` with its reason.
+- Restart: remove the bot from the assignees, then add it again. Statuses:
+  `started` defaults to `in progress`; names are per list.
+- One workspace per deployment, and one deployment per bot. A new bot leaves
+  the old bot's webhook behind: remove the old bot from the workspace, or
+  delete its webhook with its token.
+
+Everything: [docs/clickup.md](../../../docs/clickup.md).
+
 ## Slack
 
 Kubernetes only: `integrations.slack` in the target file and `SLACK_BOT_TOKEN`
@@ -131,9 +167,11 @@ Kubernetes only: `integrations.slack` in the target file and `SLACK_BOT_TOKEN`
 
 ## Turning one off
 
-`bun run github:disable` / `bun run linear:disable` / `bun run jira:disable`
-set `enabled: false` and keep the settings, so the setup turns it back on.
+`bun run github:disable` / `bun run linear:disable` / `bun run jira:disable` /
+`bun run clickup:disable` set `enabled: false` and keep the settings, so the setup turns it back on.
 `--forget` deletes the settings and saved secrets: ask first. Apply with `up`
-(or the k8s command). Open Linear and Jira tasks keep running with nothing
-posted to them; GitHub rounds already queued run without replies. Jira's
-webhook stays in Jira: the user disables it there.
+(or the k8s command). Open Linear, Jira and ClickUp tasks keep running with
+nothing posted to them; GitHub rounds already queued run without replies.
+Jira's webhook stays in Jira: the user disables it there. ClickUp's stays
+too, until ClickUp suspends it after repeated failures; `clickup:setup`
+reactivates it, and `clickup:disable --forget` deletes it.
