@@ -6,7 +6,7 @@
 // A GITHUB_TOKEN or LLM_API_KEY that is set, even to the empty string, wins:
 // an empty GITHUB_TOKEN means "no token" (anonymous clones; the checks before
 // startup then refuse it), an empty LLM_API_KEY an endpoint that needs no key.
-// An empty Linear, Slack, Jira or webhook secret counts as missing.
+// An empty Linear, Slack, Jira, ClickUp or webhook secret counts as missing.
 import { installCommand } from "../k8s/kind";
 import { CredentialRejected } from "../up/preflight";
 import { type Deployment, deploymentScope, entryName, type Keychain } from "./keychain";
@@ -23,7 +23,9 @@ export type SecretName =
   | "GITLAB_WEBHOOK_SIGNING_TOKEN"
   | "GITLAB_WEBHOOK_SECRET"
   | "JIRA_API_TOKEN"
-  | "JIRA_WEBHOOK_SECRET";
+  | "JIRA_WEBHOOK_SECRET"
+  | "CLICKUP_API_TOKEN"
+  | "CLICKUP_WEBHOOK_SECRET";
 
 const COMPOSE_SECRET_NAMES: readonly SecretName[] = [
   "GITHUB_TOKEN",
@@ -37,6 +39,8 @@ const COMPOSE_SECRET_NAMES: readonly SecretName[] = [
   "GITLAB_WEBHOOK_SECRET",
   "JIRA_API_TOKEN",
   "JIRA_WEBHOOK_SECRET",
+  "CLICKUP_API_TOKEN",
+  "CLICKUP_WEBHOOK_SECRET",
 ];
 
 // Slack is only wired up on Kubernetes.
@@ -79,6 +83,8 @@ const LABELS: Record<SecretName, string> = {
   GITLAB_WEBHOOK_SECRET: "GitLab webhook secret token",
   JIRA_API_TOKEN: "Jira API token",
   JIRA_WEBHOOK_SECRET: "Jira webhook secret",
+  CLICKUP_API_TOKEN: "ClickUp API token",
+  CLICKUP_WEBHOOK_SECRET: "ClickUp webhook secret",
 };
 
 const EMPTY_IS_SET: ReadonlySet<SecretName> = new Set(["GITHUB_TOKEN", "LLM_API_KEY"]);

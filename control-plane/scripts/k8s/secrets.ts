@@ -25,7 +25,9 @@ export type IntegrationSecretName =
   | "GITLAB_WEBHOOK_SIGNING_TOKEN"
   | "GITLAB_WEBHOOK_SECRET"
   | "JIRA_API_TOKEN"
-  | "JIRA_WEBHOOK_SECRET";
+  | "JIRA_WEBHOOK_SECRET"
+  | "CLICKUP_API_TOKEN"
+  | "CLICKUP_WEBHOOK_SECRET";
 
 // The name of the user's own Secret for `key`, or undefined when the installer owns it.
 export const existingSecret = (values: Values, key: string): string | undefined => {

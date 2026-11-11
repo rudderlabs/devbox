@@ -1,6 +1,7 @@
 // The `integrations` block of a deployment's config: each
 // integration's `enabled` switch and its non-secret settings. Linear, Jira,
-// the GitHub App and GitLab on both platforms; Slack on Kubernetes only.
+// ClickUp, the GitHub App and GitLab on both platforms; Slack on Kubernetes
+// only.
 // Secrets never live here, and a secret never turns an integration on: only
 // `enabled: true` does. Unknown keys are refused so a typo (or a pasted
 // secret) fails loudly.
@@ -59,12 +60,23 @@ export type JiraIntegration = {
   allowRestrictedIssues?: boolean;
 };
 export type JiraStatuses = { started?: string; done?: string; failed?: string };
+// ClickUp through a bot member account. teamId is the workspace; botUserId
+// and botName (its username, which people @-mention) are what GET /user
+// answered at setup; statuses as Jira's, matched case-insensitively per list.
+export type ClickupIntegration = {
+  enabled: boolean;
+  teamId?: string;
+  botUserId?: number;
+  botName?: string;
+  statuses?: JiraStatuses;
+};
 export type Integrations = {
   linear?: LinearIntegration;
   slack?: SlackIntegration;
   githubApp?: GithubAppIntegration;
   gitlab?: GitlabIntegration;
   jira?: JiraIntegration;
+  clickup?: ClickupIntegration;
 };
 
 export type EnabledLinear = LinearIntegration & { enabled: true; clientId: string };
@@ -121,6 +133,19 @@ export type EnabledJira = JiraIntegration & {
 export function enabledJira(i: Integrations): EnabledJira | undefined {
   const j = i.jira;
   return j?.enabled ? (j as EnabledJira) : undefined;
+}
+
+export type EnabledClickup = ClickupIntegration & {
+  enabled: true;
+  teamId: string;
+  botUserId: number;
+  botName: string;
+};
+
+// The ClickUp block when ClickUp is on; parseIntegrations guarantees its keys.
+export function enabledClickup(i: Integrations): EnabledClickup | undefined {
+  const c = i.clickup;
+  return c?.enabled ? (c as EnabledClickup) : undefined;
 }
 
 type Fail = (msg: string) => never;
@@ -335,6 +360,19 @@ export function jiraSiteOrigin(raw: string): string | undefined {
     : undefined;
 }
 
+// The statuses an issue or task is moved to, each optional.
+const statusesOf =
+  (fail: Fail) =>
+  (v: unknown, field: string): JiraStatuses => {
+    if (!isObject(v)) return fail(`${field}: must be an object`);
+    onlyKeys(v, ["started", "done", "failed"], field, fail);
+    const out: JiraStatuses = {};
+    for (const key of ["started", "done", "failed"] as const) {
+      if (v[key] !== undefined) out[key] = nonEmpty(fail)(v[key], `${field}.${key}`);
+    }
+    return out;
+  };
+
 function parseJira(raw: unknown, fail: Fail): JiraIntegration {
   const f = "integrations.jira";
   const b = block(
@@ -390,15 +428,7 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
   const botName = setting(b, f, "botName", nonEmpty(fail), fail);
   const optional = <T>(key: string, parse: (v: unknown, field: string) => T): T | undefined =>
     b.obj[key] === undefined ? undefined : parse(b.obj[key], `${f}.${key}`);
-  const statuses = optional("statuses", (v, field) => {
-    if (!isObject(v)) return fail(`${field}: must be an object`);
-    onlyKeys(v, ["started", "done", "failed"], field, fail);
-    const out: JiraStatuses = {};
-    for (const key of ["started", "done", "failed"] as const) {
-      if (v[key] !== undefined) out[key] = nonEmpty(fail)(v[key], `${field}.${key}`);
-    }
-    return out;
-  });
+  const statuses = optional("statuses", statusesOf(fail));
   const allowRestricted = optional("allowRestrictedIssues", (v, field) =>
     typeof v === "boolean" ? v : fail(`${field}: must be true or false`),
   );
@@ -411,6 +441,32 @@ function parseJira(raw: unknown, fail: Fail): JiraIntegration {
     ...(botName !== undefined ? { botName } : {}),
     ...(statuses !== undefined ? { statuses } : {}),
     ...(allowRestricted !== undefined ? { allowRestrictedIssues: allowRestricted } : {}),
+  };
+}
+
+function parseClickup(raw: unknown, fail: Fail): ClickupIntegration {
+  const f = "integrations.clickup";
+  const b = block(raw, "clickup", ["teamId", "botUserId", "botName", "statuses"], fail);
+  const teamId = setting(
+    b,
+    f,
+    "teamId",
+    (v, field) =>
+      typeof v === "string" && /^[0-9]+$/.test(v)
+        ? v
+        : fail(`${field}: must be a ClickUp workspace id, a string of digits`),
+    fail,
+  );
+  const botUserId = setting(b, f, "botUserId", positiveInt(fail), fail);
+  const botName = setting(b, f, "botName", nonEmpty(fail), fail);
+  const statuses =
+    b.obj.statuses === undefined ? undefined : statusesOf(fail)(b.obj.statuses, `${f}.statuses`);
+  return {
+    enabled: b.enabled,
+    ...(teamId !== undefined ? { teamId } : {}),
+    ...(botUserId !== undefined ? { botUserId } : {}),
+    ...(botName !== undefined ? { botName } : {}),
+    ...(statuses !== undefined ? { statuses } : {}),
   };
 }
 
@@ -432,9 +488,14 @@ export function parseIntegrations(
     const k8sOnly = K8S_ONLY.find((name) => name in raw);
     if (k8sOnly)
       return fail(`integrations.${k8sOnly}: supported on Kubernetes only (the target file)`);
-    onlyKeys(raw, ["linear", "githubApp", "gitlab", "jira"], "integrations", fail);
+    onlyKeys(raw, ["linear", "githubApp", "gitlab", "jira", "clickup"], "integrations", fail);
   } else {
-    onlyKeys(raw, ["linear", ...K8S_ONLY, "gitlab", "githubApp", "jira"], "integrations", fail);
+    onlyKeys(
+      raw,
+      ["linear", ...K8S_ONLY, "gitlab", "githubApp", "jira", "clickup"],
+      "integrations",
+      fail,
+    );
   }
   const out: Integrations = {};
   if (raw.linear !== undefined) out.linear = parseLinear(raw.linear, fail);
@@ -444,5 +505,6 @@ export function parseIntegrations(
   }
   if (raw.gitlab !== undefined) out.gitlab = parseGitlab(raw.gitlab, fail);
   if (raw.jira !== undefined) out.jira = parseJira(raw.jira, fail);
+  if (raw.clickup !== undefined) out.clickup = parseClickup(raw.clickup, fail);
   return out;
 }

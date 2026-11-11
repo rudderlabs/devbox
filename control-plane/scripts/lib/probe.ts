@@ -1,6 +1,7 @@
-// The unsigned probe of the webhook URL (Linear, GitHub, GitLab and Jira): an empty POST without a
-// signature header. devbox with the integration on answers it 401 "invalid signature" before parsing, and
-// records nothing. No secret is used.
+// The unsigned probe of the webhook URL (Linear, GitHub, GitLab, Jira and ClickUp): an empty POST
+// without a signature header. devbox with the integration on answers it "invalid signature" before
+// parsing, and records nothing: 401, or 403 for ClickUp, which suspends a webhook that gets a 401.
+// No secret is used.
 import type { Fetch } from "../up/preflight";
 
 export type ProbeResult = { ok: true } | { ok: false; message: string };
@@ -10,6 +11,7 @@ const ENABLED = {
   GitHub: "integrations.githubApp.enabled",
   GitLab: "integrations.gitlab.enabled",
   Jira: "integrations.jira.enabled",
+  ClickUp: "integrations.clickup.enabled",
 } as const;
 
 const TIMEOUT_MS = 10_000;
@@ -20,7 +22,12 @@ const truncate = (text: string): string =>
 
 export async function probeWebhook(
   publicUrl: string,
-  path: "/webhook/linear" | "/webhook/github" | "/webhook/gitlab" | "/webhook/jira",
+  path:
+    | "/webhook/linear"
+    | "/webhook/github"
+    | "/webhook/gitlab"
+    | "/webhook/jira"
+    | "/webhook/clickup",
   fetch: Fetch,
   opts: { fromApiIngress: boolean; integration: keyof typeof ENABLED },
 ): Promise<ProbeResult> {
@@ -58,7 +65,8 @@ export async function probeWebhook(
     );
   }
   const text = (await res.text().catch(() => "")).trim();
-  if (res.status === 401 && isInvalidSignature(text)) return { ok: true };
+  const refused = opts.integration === "ClickUp" ? 403 : 401;
+  if (res.status === refused && isInvalidSignature(text)) return { ok: true };
   return failed(`${res.status}: ${truncate(text)}`);
 }
 

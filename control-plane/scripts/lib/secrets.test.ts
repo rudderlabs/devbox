@@ -404,7 +404,7 @@ describe("source lines", () => {
 });
 
 describe("secretNamesFor", () => {
-  it("Compose gets eleven, k8s twelve (Slack)", () => {
+  it("Compose gets thirteen, k8s fourteen (Slack)", () => {
     const compose: SecretName[] = [
       "GITHUB_TOKEN",
       "LLM_API_KEY",
@@ -417,6 +417,8 @@ describe("secretNamesFor", () => {
       "GITLAB_WEBHOOK_SECRET",
       "JIRA_API_TOKEN",
       "JIRA_WEBHOOK_SECRET",
+      "CLICKUP_API_TOKEN",
+      "CLICKUP_WEBHOOK_SECRET",
     ];
     expect(secretNamesFor(COMPOSE)).toEqual(compose);
     expect(secretNamesFor(K8S)).toEqual([...compose, "SLACK_BOT_TOKEN"]);

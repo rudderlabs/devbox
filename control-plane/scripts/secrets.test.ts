@@ -68,6 +68,8 @@ describe("bun run secrets", () => {
         "  GITLAB_WEBHOOK_SECRET         missing",
         "  JIRA_API_TOKEN                missing",
         "  JIRA_WEBHOOK_SECRET           missing",
+        "  CLICKUP_API_TOKEN             missing",
+        "  CLICKUP_WEBHOOK_SECRET        missing",
       ].join("\n"),
     );
     expect(s.ran).toEqual([]);
@@ -90,6 +92,8 @@ describe("bun run secrets", () => {
         "  GITLAB_WEBHOOK_SECRET         missing",
         "  JIRA_API_TOKEN                missing",
         "  JIRA_WEBHOOK_SECRET           missing",
+        "  CLICKUP_API_TOKEN             missing",
+        "  CLICKUP_WEBHOOK_SECRET        missing",
       ].join("\n"),
     );
     expect(s.ran).toEqual([["gh", "auth", "token"]]);
@@ -113,6 +117,8 @@ describe("bun run secrets", () => {
           "  GITLAB_WEBHOOK_SECRET         missing",
           "  JIRA_API_TOKEN                missing",
           "  JIRA_WEBHOOK_SECRET           missing",
+          "  CLICKUP_API_TOKEN             missing",
+          "  CLICKUP_WEBHOOK_SECRET        missing",
         ].join("\n"),
       );
       expect(s.ran).toEqual([["gh", "auth", "token"]]);
@@ -136,6 +142,8 @@ describe("bun run secrets", () => {
         "  GITLAB_WEBHOOK_SECRET         missing",
         "  JIRA_API_TOKEN                missing",
         "  JIRA_WEBHOOK_SECRET           missing",
+        "  CLICKUP_API_TOKEN             missing",
+        "  CLICKUP_WEBHOOK_SECRET        missing",
         "  SLACK_BOT_TOKEN               missing",
       ].join("\n"),
     );
@@ -182,6 +190,8 @@ describe("bun run secrets", () => {
           "  GITLAB_WEBHOOK_SECRET         missing",
           "  JIRA_API_TOKEN                missing",
           "  JIRA_WEBHOOK_SECRET           missing",
+          "  CLICKUP_API_TOKEN             missing",
+          "  CLICKUP_WEBHOOK_SECRET        missing",
         ].join("\n"),
       );
     };
@@ -220,6 +230,8 @@ describe("bun run secrets", () => {
         "  GITLAB_WEBHOOK_SECRET           missing",
         "  JIRA_API_TOKEN                  missing",
         "  JIRA_WEBHOOK_SECRET             missing",
+        "  CLICKUP_API_TOKEN               missing",
+        "  CLICKUP_WEBHOOK_SECRET          missing",
         "  GITHUB_APP_PRIVATE_KEY_PENDING  keychain (GitHub App private key of the new App, not installed yet)",
       ].join("\n"),
     );
@@ -239,6 +251,8 @@ describe("bun run secrets", () => {
         "  GITLAB_WEBHOOK_SECRET           missing",
         "  JIRA_API_TOKEN                  missing",
         "  JIRA_WEBHOOK_SECRET             missing",
+        "  CLICKUP_API_TOKEN               missing",
+        "  CLICKUP_WEBHOOK_SECRET          missing",
         "  GITHUB_APP_PRIVATE_KEY_PENDING  keychain (GitHub App private key of the new App, not installed yet)",
         "  GITHUB_WEBHOOK_SECRET_PENDING   keychain (GitHub webhook secret of the new App, not installed yet)",
       ].join("\n"),
@@ -268,7 +282,7 @@ describe("bun run secrets", () => {
     const s = setup({ entries: ALL });
     expect(await secretsCommand(["rm", "NOPE"], s.deps)).toBe(2);
     expect(s.out).toEqual([
-      'unknown secret "NOPE": use one of GITHUB_TOKEN, LLM_API_KEY, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, GITLAB_TOKEN, GITLAB_WEBHOOK_SIGNING_TOKEN, GITLAB_WEBHOOK_SECRET, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY_PENDING, GITHUB_WEBHOOK_SECRET_PENDING',
+      'unknown secret "NOPE": use one of GITHUB_TOKEN, LLM_API_KEY, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, GITLAB_TOKEN, GITLAB_WEBHOOK_SIGNING_TOKEN, GITLAB_WEBHOOK_SECRET, JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET, CLICKUP_API_TOKEN, CLICKUP_WEBHOOK_SECRET, GITHUB_APP_PRIVATE_KEY_PENDING, GITHUB_WEBHOOK_SECRET_PENDING',
     ]);
     expect(Object.keys(s.keychain.entries())).toHaveLength(4);
   });
