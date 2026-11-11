@@ -1,4 +1,3 @@
-import { parseGitlabBaseUrl } from "../../sandboxConfig";
 import { missingError, parseSwitch, present } from "../env";
 
 export type JiraConfig = {
@@ -55,7 +54,7 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
   if (!JIRA_ACCOUNT_ID.test(botAccountId)) {
     throw new Error("JIRA_BOT_ACCOUNT_ID is not a Jira account id");
   }
-  const gitlabBaseUrl = parseGitlabBaseUrl(env);
+  const gitlabBaseUrl = gitlabInstance(env.GITLAB_BASE_URL);
   return {
     siteUrl: jiraSiteOrigin(siteUrl),
     cloudId,
@@ -72,6 +71,17 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
     webhookSecret,
     ...(gitlabBaseUrl !== undefined ? { gitlabBaseUrl } : {}),
   };
+}
+
+// GITLAB_BASE_URL in the form core's config gives it (core has already
+// validated it at boot): the URL's origin, so a lowercase host and no default
+// port, plus the path without a trailing slash. Merge request URLs are matched
+// against it by prefix, and GitLab writes them in that form.
+function gitlabInstance(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value || !URL.canParse(value)) return undefined;
+  const url = new URL(value);
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
 // The site as a bare https origin, so task URLs are always
