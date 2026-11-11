@@ -4,7 +4,7 @@ WORKDIR /app
 
 # kubectl required at runtime — see runtime Dockerfile rationale. docker-cli
 # serves SANDBOX_RUNTIME=docker (local compose stack, host socket mounted).
-ARG KUBECTL_VERSION=v1.37.1
+ARG KUBECTL_VERSION=v1.37.2
 RUN set -eux \
   && apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl docker-cli \

@@ -97,7 +97,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && tar -xJf "/tmp/${NODE_TAR}" -C /usr/local --strip-components=1 --no-same-owner \
         --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE' \
     && rm -f "/tmp/${NODE_TAR}" \
-    && npm install -g npm@11.21.1 \
+    && npm install -g npm@11.21.2 \
     && corepack enable \
     && corepack prepare pnpm@10 --activate \
     && npm cache clean --force
