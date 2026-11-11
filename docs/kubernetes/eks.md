@@ -187,8 +187,9 @@ well.
 
 ## Inbound: webhooks need an Ingress
 
-The chart creates no public address. GitHub, Linear and Jira webhooks, and
-`@<bot>` comment triggers, need `/webhook/` reachable from the internet -- see
+The chart creates no public address. GitHub, Linear, Jira and ClickUp
+webhooks, and `@<bot>` comment triggers, need `/webhook/` reachable from the
+internet -- see
 [customizing.md](customizing.md#ingress) and the
 [AWS Load Balancer Controller example](customizing.md#example-aws-load-balancer-controller-alb).
 

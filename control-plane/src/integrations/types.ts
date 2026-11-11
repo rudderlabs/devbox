@@ -5,8 +5,8 @@ import type { InboxRow, ReplyTarget } from "../repositories/inbox.repository";
 import type { TaskService } from "../services/task.service";
 import type { Outbound, SendCtx } from "./outbound";
 
-// What an integration module may use from core, besides ./outbound, ./http
-// and ./env. Its TaskService is bound to its own name.
+// What an integration module may use from core, besides ./outbound, ./http,
+// ./env and ./markdown. Its TaskService is bound to its own name.
 export type { InboxRow as Round, ReplyTarget } from "../repositories/inbox.repository";
 export type { TaskService } from "../services/task.service";
 export type Env = Record<string, string | undefined>;

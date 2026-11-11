@@ -67,6 +67,10 @@ const { privateKey: PEM } = generateKeyPairSync("rsa", {
 });
 
 const LINEAR_ON: Integrations = { linear: { enabled: true, clientId: "lin_client" } };
+const CLICKUP_TOKEN = "pk_bot";
+const CLICKUP_ON: Integrations = {
+  clickup: { enabled: true, teamId: "9000000000", botUserId: 100000001, botName: "devbox" },
+};
 const JIRA_TOKEN = "jira-token";
 const JIRA_ON: Integrations = {
   jira: {
@@ -152,6 +156,11 @@ function fakeFetch(
       return token === JIRA_TOKEN
         ? Response.json({ accountId: JIRA_ON.jira?.botAccountId, displayName: "devbox" })
         : new Response("Unauthorized", { status: 401 });
+    }
+    if (url === "https://api.clickup.com/api/v2/user") {
+      return auth === CLICKUP_TOKEN
+        ? Response.json({ user: { id: 100000001, username: "devbox" } })
+        : Response.json({ err: "Token invalid" }, { status: 401 });
     }
     return new Response("", { status: 404 });
   };
@@ -411,6 +420,38 @@ describe("k8sCheck", () => {
       "2 failed.",
     ]);
     expect([...ok.logs, ...rejected.logs].filter((l) => l.includes("warning"))).toEqual([]);
+  });
+
+  it("ClickUp enabled: the token checked against ClickUp, both keys required", async () => {
+    const ok = await run(
+      [
+        GITHUB_OK,
+        LLM_OK,
+        found("devbox-integrations", {
+          CLICKUP_API_TOKEN: CLICKUP_TOKEN,
+          CLICKUP_WEBHOOK_SECRET: "cw",
+        }),
+      ],
+      { integrations: CLICKUP_ON },
+    );
+    expect(ok.logs.slice(-4)).toEqual([
+      "  ok    ClickUp API token (devbox acts as devbox in workspace 9000000000)",
+      "  ok    Secret devbox-integrations: CLICKUP_API_TOKEN",
+      "  ok    Secret devbox-integrations: CLICKUP_WEBHOOK_SECRET",
+      "All checks passed.",
+    ]);
+    expect(ok.code).toBe(0);
+
+    const rejected = await run(
+      [GITHUB_OK, LLM_OK, found("devbox-integrations", { CLICKUP_API_TOKEN: "pk_old" })],
+      { integrations: CLICKUP_ON },
+    );
+    expect(rejected.logs.slice(-4)).toEqual([
+      "  FAIL  ClickUp API token: ClickUp rejected CLICKUP_API_TOKEN (401): use the bot's personal API token (pk_…), from ClickUp's Settings → Apps while signed in as the bot",
+      "  ok    Secret devbox-integrations: CLICKUP_API_TOKEN",
+      '  FAIL  Secret devbox-integrations: CLICKUP_WEBHOOK_SECRET: no key "CLICKUP_WEBHOOK_SECRET"',
+      "2 failed.",
+    ]);
   });
 
   it("slack and github app webhook keys required when enabled", async () => {

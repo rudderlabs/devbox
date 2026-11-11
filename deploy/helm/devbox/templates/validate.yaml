@@ -105,6 +105,7 @@ selectors all assume the release namespace devbox. */ -}}
 {{- $slack := .Values.integrations.slack | default dict }}
 {{- $app := .Values.integrations.githubApp | default dict }}
 {{- $jira := .Values.integrations.jira | default dict }}
+{{- $clickup := .Values.integrations.clickup | default dict }}
 {{- $github := .Values.github | default dict }}
 {{- if and $linear.enabled (not $linear.clientId) }}
 {{- fail "integrations.linear.enabled is true: integrations.linear.clientId is required" }}
@@ -116,6 +117,13 @@ selectors all assume the release namespace devbox. */ -}}
 {{- range $key := list "siteUrl" "cloudId" "botEmail" "botAccountId" "botName" }}
 {{- if not (index $jira $key) }}
 {{- fail (printf "integrations.jira.enabled is true: integrations.jira.%s is required" $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $clickup.enabled }}
+{{- range $key := list "teamId" "botUserId" "botName" }}
+{{- if not (index $clickup $key) }}
+{{- fail (printf "integrations.clickup.enabled is true: integrations.clickup.%s is required" $key) }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
+import { type ClickupSecrets, clickupPreflight } from "../clickup/check";
 import {
   botMismatch,
   checkGitlab,
@@ -30,6 +31,7 @@ import {
 import { type PrivateKey, PrivateKeyError, resolvePrivateKey } from "../lib/githubAppKey";
 import {
   type EnabledGithubApp,
+  enabledClickup,
   enabledGithubApp,
   enabledGitlab,
   enabledJira,
@@ -125,6 +127,7 @@ export type InstallOptions = {
   skipLlmCheck: boolean;
   skipLinearCheck: boolean;
   skipJiraCheck: boolean;
+  skipClickupCheck: boolean;
   netpol: "auto" | "force" | "skip"; // auto = first install only
   timeout: string; // helm --timeout
 };
@@ -245,6 +248,7 @@ export async function install(
   const integrations = deps.target.integrations;
   const linear = enabledLinear(integrations ?? {});
   const jira = enabledJira(integrations ?? {});
+  const clickup = enabledClickup(integrations ?? {});
   const app = enabledGithubApp(integrations ?? {});
   refuseGithubApp(
     app,
@@ -348,6 +352,17 @@ export async function install(
     fetch: deps.fetch,
     setup: `bun run jira:setup --target ${deps.targetPath}`,
   };
+  let clickupR: ClickupSecrets | undefined;
+  if (clickup && own.integrations) {
+    clickupR = {
+      token: await resolveSecret("CLICKUP_API_TOKEN", secretDeps),
+      webhook: await resolveSecret("CLICKUP_WEBHOOK_SECRET", secretDeps),
+    };
+  }
+  const clickupOpts = {
+    fetch: deps.fetch,
+    setup: `bun run clickup:setup --target ${deps.targetPath}`,
+  };
   const slackR = await resolveIf(integrations?.slack?.enabled, "SLACK_BOT_TOKEN");
   const webhookR = await resolveIf(integrations?.githubApp?.enabled, "GITHUB_WEBHOOK_SECRET");
   // GitLab: the token, and with the webhooks on, the webhook token under the
@@ -372,6 +387,13 @@ export async function install(
   if (jira && opts.skipJiraCheck) {
     log("warning: Jira check skipped (--skip-jira-check)");
     jiraR = await jiraPreflight(jira, jiraR, secretDeps, { ...jiraOpts, skip: true });
+  }
+  if (clickup && opts.skipClickupCheck) {
+    log("warning: ClickUp check skipped (--skip-clickup-check)");
+    clickupR = await clickupPreflight(clickup, clickupR, secretDeps, {
+      ...clickupOpts,
+      skip: true,
+    });
   }
   if (slackR) await offerSave(slackR, secretDeps);
   if (webhookR) await offerSave(webhookR, secretDeps);
@@ -492,6 +514,12 @@ export async function install(
   if (jira && !opts.skipJiraCheck) {
     jiraR = await jiraPreflight(jira, jiraR, secretDeps, { ...jiraOpts, skip: false });
   }
+  if (clickup && !opts.skipClickupCheck) {
+    clickupR = await clickupPreflight(clickup, clickupR, secretDeps, {
+      ...clickupOpts,
+      skip: false,
+    });
+  }
   // None for a Secret the user brings, or one the seed job fills.
   const github = minted ?? (githubR ? { token: githubR.value } : undefined);
   const llm = llmR?.value ?? "";
@@ -501,6 +529,8 @@ export async function install(
     linearR?.webhook,
     jiraR?.token,
     jiraR?.webhook,
+    clickupR?.token,
+    clickupR?.webhook,
     slackR,
     webhookR,
     gitlabWebhookR,
@@ -833,7 +863,7 @@ then: bun run k8s:check --target ${deps.targetPath}`);
 devbox is installed in context ${context}. The CLI uses profile "${profile}".
 ${local ? `\n  bun run k8s:connect --target ${deps.targetPath}     # keep it running in another terminal` : ""}
   bun run devbox create "Add a /health endpoint to ${cfg.repos[0]?.owner}/${cfg.repos[0]?.name}"
-  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}${gitlab ? `\n\nCheck GitLab with: bun run gitlab:status --target ${deps.targetPath}` : ""}${jira ? `\n\nCheck Jira with: bun run jira:status --target ${deps.targetPath}` : ""}`);
+  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}${gitlab ? `\n\nCheck GitLab with: bun run gitlab:status --target ${deps.targetPath}` : ""}${jira ? `\n\nCheck Jira with: bun run jira:status --target ${deps.targetPath}` : ""}${clickup ? `\n\nCheck ClickUp with: bun run clickup:status --target ${deps.targetPath}` : ""}`);
 }
 
 // A running `k8s:connect` already holds the profile's port: use it.

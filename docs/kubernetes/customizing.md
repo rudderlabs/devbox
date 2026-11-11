@@ -41,7 +41,8 @@ The control plane has a ClusterIP Service, `devbox-control-plane` on port
 They take the same fields: `enabled`, `className`, `host`, `annotations` and
 `tls`.
 
-- `ingress.webhooks` routes `/webhook/` only, for GitHub, Linear and Jira.
+- `ingress.webhooks` routes `/webhook/` only, for GitHub, Linear, Jira and
+  ClickUp.
 - `ingress.api` routes `/`, webhooks included, for the API, the CLI and event
   streams. The API requires an API token.
 
@@ -242,7 +243,8 @@ Only `enabled: true` turns one on: its secrets alone, in a Secret or in your
 shell, never do. With the installer, set them in the target file's top-level
 `integrations` block, which the installer copies into these values (`values`
 refuses `integrations`); `bun run linear:setup` writes the Linear part and
-`bun run jira:setup` the Jira part. With GitOps, set the values directly, and
+`bun run jira:setup` the Jira part and `bun run clickup:setup` the ClickUp
+part. With GitOps, set the values directly, and
 keep the target file's `integrations` block in step with them: `bun run k8s:check` reads which integrations are
 enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 
@@ -269,6 +271,10 @@ enabled from that block ([Check the Secrets](README.md#check-the-secrets)).
 | `integrations.jira.botEmail`, `integrations.jira.botAccountId`, `integrations.jira.botName` | The service account's email, account ID and display name. Required when enabled. |
 | `integrations.jira.statuses.started`, `.done`, `.failed` | The statuses devbox moves an issue to. Empty: no move ([docs/jira.md](../jira.md#statuses)). |
 | `integrations.jira.allowRestrictedIssues` | Default `false`. `true` acts on issues with a security level too. |
+| `integrations.clickup.enabled` | Turns ClickUp on: webhooks at `/webhook/clickup`. See [docs/clickup.md](../clickup.md). |
+| `integrations.clickup.teamId` | The workspace's id, a quoted string of digits. Required when enabled. |
+| `integrations.clickup.botUserId`, `integrations.clickup.botName` | The bot's numeric user ID and its username. Required when enabled. |
+| `integrations.clickup.statuses.started`, `.done`, `.failed` | The statuses devbox moves a task to. Empty: no move ([docs/clickup.md](../clickup.md#statuses)). |
 
 For example, in a target file:
 
@@ -283,7 +289,9 @@ For example, in a target file:
                    "tokens": "devbox", "tokenScope": "repos", "ciResults": true },
     "jira": { "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
               "botEmail": "…", "botAccountId": "…", "botName": "devbox",
-              "statuses": { "started": "In Progress" } } } }
+              "statuses": { "started": "In Progress" } },
+    "clickup": { "enabled": true, "teamId": "1234567890", "botUserId": 12345678,
+                 "botName": "devbox", "statuses": { "started": "in progress" } } } }
 ```
 
 `bun run github:setup --target <file>` writes the `githubApp` block, and the
@@ -291,8 +299,9 @@ trust list when none is set ([docs/github.md](../github.md)). The installer
 copies the block into the chart values, with `slug` as `botLogin`. `org` and
 `pending`, which setup also writes, are not chart values.
 `bun run jira:setup --target <file>` writes the `jira` block, which the
-installer copies as it is. `publicUrl` stays in the target file, and Linear,
-GitHub and Jira share it.
+installer copies as it is, and `bun run clickup:setup --target <file>` the
+`clickup` block, likewise. `publicUrl` stays in the target file, and Linear,
+GitHub, Jira and ClickUp share it.
 
 The chart refuses to render an enabled integration with a required setting
 missing, for example `integrations.slack.enabled is true:
@@ -311,22 +320,24 @@ Each message starts with `integrations.githubApp.enabled is true: `. GitLab's
 start with `integrations.gitlab.enabled is true: ` and name the missing
 `gitlab.baseUrl`, bot setting or trust list.
 For Jira it refuses an enabled block without `siteUrl`, `cloudId`, `botEmail`,
-`botAccountId` or `botName`.
+`botAccountId` or `botName`, and for ClickUp one without `teamId`,
+`botUserId` or `botName`.
 
 - **The secrets** go in the Secret `devbox-integrations`, or your own with
   `secrets.integrations.existingSecret`, under their env names:
   `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`,
-  `GITHUB_WEBHOOK_SECRET`, `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET`
+  `GITHUB_WEBHOOK_SECRET`, `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET`,
+  `CLICKUP_API_TOKEN`, `CLICKUP_WEBHOOK_SECRET`
   ([secrets.md](secrets.md)). The installer writes only those of the enabled
   integrations.
 - **Webhooks** need a public route to `/webhook/`: the `webhooks` or `api`
   Ingress, or an `HTTPRoute`.
 - **Egress.** With an egress policy on the control plane, allow
-  `api.linear.app` for Linear, `api.atlassian.com` for Jira and `slack.com`
-  for Slack. The GitHub App's minter has its own NetworkPolicy: DNS, port 443
+  `api.linear.app` for Linear, `api.atlassian.com` for Jira,
+  `api.clickup.com` for ClickUp and `slack.com` for Slack. The GitHub App's minter has its own NetworkPolicy: DNS, port 443
   and the Kubernetes API.
 - **Slack is Kubernetes-only** for now; the local stack refuses it. Linear,
-  Jira and the GitHub App run on both.
+  Jira, ClickUp and the GitHub App run on both.
 
 **Restarting the control plane.** It reads the integrations Secret as env at
 start, so a changed Secret takes effect only after a restart. `k8s:install`

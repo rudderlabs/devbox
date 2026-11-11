@@ -94,6 +94,30 @@ describe("probeWebhook", () => {
     });
   });
 
+  it("ClickUp: 403 invalid signature is ok, 401 is not; 404 names integrations.clickup.enabled", async () => {
+    const hook = "https://hooks.example.com/webhook/clickup";
+    const opts = { fromApiIngress: false, integration: "ClickUp" } as const;
+    const ok = fakeFetch(() => Response.json({ error: "invalid signature" }, { status: 403 }));
+    expect(await probeWebhook(PUBLIC, "/webhook/clickup", ok.fetch, opts)).toEqual({ ok: true });
+    expect(ok.requests.map((r) => r.url)).toEqual([hook]);
+    const other = fakeFetch(() => Response.json({ error: "invalid signature" }, { status: 401 }));
+    expect(await probeWebhook(PUBLIC, "/webhook/clickup", other.fetch, opts)).toEqual({
+      ok: false,
+      message: `the webhook URL ${hook} got 401: {"error":"invalid signature"}`,
+    });
+    const missing = fakeFetch(() => new Response("404 Not Found", { status: 404 }));
+    expect(await probeWebhook(PUBLIC, "/webhook/clickup", missing.fetch, opts)).toEqual({
+      ok: false,
+      message: `the webhook URL ${hook} got 404: something answered, but not devbox with ClickUp on. Check that the tunnel or proxy forwards to the control plane (port 3000 on Compose), that integrations.clickup.enabled is true and applied, or restart the control plane`,
+    });
+    // The others still take only 401.
+    const jira = fakeFetch(() => Response.json({ error: "invalid signature" }, { status: 403 }));
+    expect(
+      (await probeWebhook(PUBLIC, "/webhook/jira", jira.fetch, { ...opts, integration: "Jira" }))
+        .ok,
+    ).toBe(false);
+  });
+
   it("no answer", async () => {
     expect(await probe(new Error("getaddrinfo ENOTFOUND hooks.example.com"))).toEqual({
       ok: false,

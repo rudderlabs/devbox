@@ -1,0 +1,7 @@
+integrations:
+  clickup:
+    enabled: true
+    teamId: "9000000000"
+    botUserId: 100000001
+    botName: devbox
+    statuses: { started: in progress }

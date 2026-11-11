@@ -58,13 +58,14 @@ describe("createApp", () => {
     const res = await bundle.app.request("/api/tasks?source=github");
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({
-      error: { code: "invalid_request", message: "source must be linear, api, or jira" },
+      error: { code: "invalid_request", message: "source must be linear, api, jira, or clickup" },
     });
     // The claim filter (TaskProcessorService's own list).
     expect((bundle.taskProcessor as unknown as { taskSources: string[] }).taskSources).toEqual([
       "linear",
       "api",
       "jira",
+      "clickup",
     ]);
   });
 
@@ -75,7 +76,8 @@ describe("createApp", () => {
     expect(await status("linear")).toEqual({ configured: false, holds: none });
     expect(await status("api")).toEqual({ enabled: true, holds: none });
     expect(await status("jira")).toEqual({ configured: false, holds: none });
-    for (const name of ["linear", "github", "jira"]) {
+    expect(await status("clickup")).toEqual({ configured: false, holds: none });
+    for (const name of ["linear", "github", "jira", "clickup"]) {
       const res = await bundle.app.request(`/webhook/${name}`, { method: "POST", body: "{}" });
       expect(res.status).toBe(404);
     }

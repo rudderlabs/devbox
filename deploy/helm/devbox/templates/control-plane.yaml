@@ -153,6 +153,7 @@ spec:
             {{- $slack := .Values.integrations.slack | default dict }}
             {{- $app := .Values.integrations.githubApp | default dict }}
             {{- $jira := .Values.integrations.jira | default dict }}
+            {{- $clickup := .Values.integrations.clickup | default dict }}
             {{- $github := .Values.github | default dict }}
             {{- $gitlabApp := .Values.integrations.gitlab | default dict }}
             {{- $gitlab := .Values.gitlab | default dict }}
@@ -198,6 +199,24 @@ spec:
             {{- end }}
             {{- if $jira.allowRestrictedIssues }}
             - { name: JIRA_ALLOW_RESTRICTED_ISSUES, value: "true" }
+            {{- end }}
+            {{- end }}
+            {{- /* ClickUp's settings, only when it is on; its two secrets come from the
+            integrations Secret below. */}}
+            {{- if $clickup.enabled }}
+            {{- $clickupStatuses := $clickup.statuses | default dict }}
+            - { name: CLICKUP_ENABLED, value: "true" }
+            - { name: CLICKUP_TEAM_ID, value: {{ $clickup.teamId | quote }} }
+            - { name: CLICKUP_BOT_USER_ID, value: {{ $clickup.botUserId | int64 | toString | quote }} }
+            - { name: CLICKUP_BOT_NAME, value: {{ $clickup.botName | quote }} }
+            {{- with $clickupStatuses.started }}
+            - { name: CLICKUP_STATUS_STARTED, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $clickupStatuses.done }}
+            - { name: CLICKUP_STATUS_DONE, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $clickupStatuses.failed }}
+            - { name: CLICKUP_STATUS_FAILED, value: {{ . | quote }} }
             {{- end }}
             {{- end }}
             {{- with $github.trustedOrgs }}

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { enabledGithubApp } from "../lib/integrations";
 import {
+  clickupComposeEnv,
   composeEnvFor,
   composeProfiles,
   composeStartSteps,
@@ -43,6 +44,20 @@ const JIRA_OFF = Object.fromEntries(
     "API_TOKEN",
     "WEBHOOK_SECRET",
   ].map((name) => [`JIRA_${name}`, ""]),
+);
+// Every CLICKUP_* empty: ClickUp off, whatever the shell holds.
+const CLICKUP_OFF = Object.fromEntries(
+  [
+    "ENABLED",
+    "TEAM_ID",
+    "BOT_USER_ID",
+    "BOT_NAME",
+    "STATUS_STARTED",
+    "STATUS_DONE",
+    "STATUS_FAILED",
+    "API_TOKEN",
+    "WEBHOOK_SECRET",
+  ].map((name) => [`CLICKUP_${name}`, ""]),
 );
 const MODEL_ENV_EMPTY = {
   HARNESS_REASONING_EFFORT: "",
@@ -96,6 +111,7 @@ const common = {
   ...MODEL_ENV_EMPTY,
   ...GITLAB_OFF,
   ...JIRA_OFF,
+  ...CLICKUP_OFF,
 };
 
 const OFF = {
@@ -218,6 +234,57 @@ describe("jiraComposeEnv", () => {
       jira: SECRETS,
     });
     expect(env).toMatchObject({ JIRA_ENABLED: "true", JIRA_API_TOKEN: "jira-token" });
+  });
+});
+
+describe("clickupComposeEnv", () => {
+  const CLICKUP = {
+    enabled: true,
+    teamId: "9000000000",
+    botUserId: 100000001,
+    botName: "devbox",
+    statuses: { started: "in progress", done: "review" },
+  };
+  const SECRETS = { apiToken: "pk_bot", webhookSecret: "clickup-whs" };
+
+  it("all empty when not configured or disabled, secrets or not", () => {
+    expect(clickupComposeEnv(undefined, SECRETS)).toEqual(CLICKUP_OFF);
+    expect(clickupComposeEnv({ ...CLICKUP, enabled: false }, SECRETS)).toEqual(CLICKUP_OFF);
+  });
+
+  it("every setting and both secrets when enabled", () => {
+    expect(clickupComposeEnv(CLICKUP, SECRETS)).toEqual({
+      ...CLICKUP_OFF,
+      CLICKUP_ENABLED: "true",
+      CLICKUP_TEAM_ID: "9000000000",
+      CLICKUP_BOT_USER_ID: "100000001",
+      CLICKUP_BOT_NAME: "devbox",
+      CLICKUP_STATUS_STARTED: "in progress",
+      CLICKUP_STATUS_DONE: "review",
+      CLICKUP_API_TOKEN: "pk_bot",
+      CLICKUP_WEBHOOK_SECRET: "clickup-whs",
+    });
+  });
+
+  it("refuses an enabled ClickUp without its secrets", () => {
+    expect(() => clickupComposeEnv(CLICKUP)).toThrow(
+      "integrations.clickup is enabled but the ClickUp secrets were not resolved",
+    );
+  });
+
+  it("composeEnvFor: a CLICKUP_* left in the shell never turns ClickUp on, the config's win", () => {
+    const shell = { ...base, CLICKUP_ENABLED: "true", CLICKUP_API_TOKEN: "from-shell" };
+    const opts = { github: "gh", llm: "llm", opensandboxKey: "osk" };
+    expect(composeEnvFor(shell, parseConfig(raw), opts)).toEqual({
+      ...common,
+      ...OFF,
+      ...GITHUB_OFF,
+    });
+    const env = composeEnvFor(shell, parseConfig({ ...raw, integrations: { clickup: CLICKUP } }), {
+      ...opts,
+      clickup: SECRETS,
+    });
+    expect(env).toMatchObject({ CLICKUP_ENABLED: "true", CLICKUP_API_TOKEN: "pk_bot" });
   });
 });
 
@@ -346,6 +413,7 @@ describe("composeEnvFor", () => {
       ...MODEL_ENV_EMPTY,
       ...GITLAB_OFF,
       ...JIRA_OFF,
+      ...CLICKUP_OFF,
       GITHUB_TOKEN: "no-github-token",
       LLM_API_KEY: "",
       ...OFF,
@@ -660,6 +728,15 @@ describe("docker-compose.yml", () => {
     // Only the control plane: no other service gets a Jira value.
     for (const [svc, s] of Object.entries(doc.services)) {
       if (svc !== "control-plane") expect(JSON.stringify(s)).not.toContain("JIRA_");
+    }
+  });
+
+  it("lists every CLICKUP_* setting with an empty default", () => {
+    const env = service("control-plane").environment;
+    for (const name of Object.keys(CLICKUP_OFF)) expect(env[name]).toBe(empty(name));
+    // Only the control plane: no other service gets a ClickUp value.
+    for (const [svc, s] of Object.entries(doc.services)) {
+      if (svc !== "control-plane") expect(JSON.stringify(s)).not.toContain("CLICKUP_");
     }
   });
 

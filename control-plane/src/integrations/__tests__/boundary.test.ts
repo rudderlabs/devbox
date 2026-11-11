@@ -20,6 +20,7 @@ const SHARED = [
   "integrations/outbound",
   "integrations/http",
   "integrations/env",
+  "integrations/markdown",
   "services/experimentalFlags",
 ];
 const TYPES_ONLY = ["db/schema"];

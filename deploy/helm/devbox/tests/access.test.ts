@@ -382,3 +382,36 @@ describe("Jira env", () => {
     expect(await jiraEnv([], ["integrations.jira=null"])).toEqual({});
   });
 });
+
+describe("ClickUp env", () => {
+  // The control plane's CLICKUP_* env, as a name -> value map.
+  async function clickupEnv(set: string[] = [], setJson: string[] = []): Promise<Record<string, string>> {
+    const r = await renderWith(["base.yaml", "clickup.yaml"], set, setJson);
+    const c = (r["Deployment/devbox/devbox-control-plane"] as Doc).spec.template.spec.containers[0];
+    return Object.fromEntries((c.env as Doc[]).filter((e) => e.name.startsWith("CLICKUP_")).map((e) => [e.name, e.value]));
+  }
+
+  it("on: every setting, the user ID as a string; the secrets come from the integrations Secret", async () => {
+    expect(await clickupEnv()).toEqual({
+      CLICKUP_ENABLED: "true",
+      CLICKUP_TEAM_ID: "9000000000",
+      CLICKUP_BOT_USER_ID: "100000001",
+      CLICKUP_BOT_NAME: "devbox",
+      CLICKUP_STATUS_STARTED: "in progress",
+    });
+    const r = await renderWith(["base.yaml", "clickup.yaml"]);
+    const c = (r["Deployment/devbox/devbox-control-plane"] as Doc).spec.template.spec.containers[0];
+    expect(c.envFrom).toEqual([{ secretRef: { name: "devbox-integrations", optional: true } }]);
+  });
+
+  it("the optional statuses when set", async () => {
+    expect(
+      await clickupEnv(["integrations.clickup.statuses.done=review", "integrations.clickup.statuses.failed=blocked"]),
+    ).toMatchObject({ CLICKUP_STATUS_DONE: "review", CLICKUP_STATUS_FAILED: "blocked" });
+  });
+
+  it("off: none of the block renders, settings included", async () => {
+    expect(await clickupEnv(["integrations.clickup.enabled=false"])).toEqual({});
+    expect(await clickupEnv([], ["integrations.clickup=null"])).toEqual({});
+  });
+});

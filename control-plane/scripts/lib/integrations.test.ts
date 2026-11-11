@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { homedir } from "node:os";
 import {
+  enabledClickup,
   enabledGithubApp,
   enabledGitlab,
   enabledJira,
@@ -127,11 +128,11 @@ describe("parseIntegrations", () => {
   });
 
   it("refuses an unknown key in integrations", () => {
-    expect(failure({ clickup: {} })).toBe(
-      'integrations: unknown key "clickup" (allowed: linear, slack, gitlab, githubApp, jira)',
+    expect(failure({ asana: {} })).toBe(
+      'integrations: unknown key "asana" (allowed: linear, slack, gitlab, githubApp, jira, clickup)',
     );
-    expect(failure({ clickup: {} }, COMPOSE)).toBe(
-      'integrations: unknown key "clickup" (allowed: linear, githubApp, gitlab, jira)',
+    expect(failure({ asana: {} }, COMPOSE)).toBe(
+      'integrations: unknown key "asana" (allowed: linear, githubApp, gitlab, jira, clickup)',
     );
   });
 
@@ -477,6 +478,71 @@ describe("integrations.jira", () => {
     expect(enabledJira({ jira: JIRA })).toEqual(JIRA);
     expect(enabledJira({ jira: { ...JIRA, enabled: false } })).toBeUndefined();
     expect(enabledJira({})).toBeUndefined();
+  });
+});
+
+describe("integrations.clickup", () => {
+  const CLICKUP = {
+    enabled: true as const,
+    teamId: "9000000000",
+    botUserId: 100000001,
+    botName: "devbox",
+    statuses: { started: "in progress", done: "review", failed: "blocked" },
+  };
+
+  it("parses every key, on both platforms", () => {
+    for (const opts of [COMPOSE, K8S]) {
+      expect(parseIntegrations({ clickup: CLICKUP }, fail, opts)).toEqual({ clickup: CLICKUP });
+    }
+  });
+
+  it("each required key is required when enabled", () => {
+    for (const key of ["teamId", "botUserId", "botName"]) {
+      const { [key as keyof typeof CLICKUP]: _, ...rest } = CLICKUP;
+      expect(failure({ clickup: rest })).toBe(
+        `integrations.clickup.${key}: required when enabled is true`,
+      );
+      // A disabled block may leave it out.
+      expect(
+        parseIntegrations({ clickup: { ...rest, enabled: false } }, fail, K8S).clickup?.enabled,
+      ).toBe(false);
+    }
+  });
+
+  it("checks each value, also with ClickUp off", () => {
+    const cases: Array<[string, unknown, string]> = [
+      ["teamId", 9000000000, "must be a ClickUp workspace id, a string of digits"],
+      ["teamId", "team-1", "must be a ClickUp workspace id, a string of digits"],
+      ["botUserId", "100000001", "must be a positive integer"],
+      ["botUserId", 0, "must be a positive integer"],
+      ["botName", " ", "must be a non-empty string"],
+      ["statuses", "done", "must be an object"],
+    ];
+    for (const [key, value, why] of cases) {
+      for (const enabled of [true, false]) {
+        expect(failure({ clickup: { ...CLICKUP, enabled, [key]: value } })).toBe(
+          `integrations.clickup.${key}: ${why}`,
+        );
+      }
+    }
+    expect(failure({ clickup: { ...CLICKUP, statuses: { started: "" } } })).toBe(
+      "integrations.clickup.statuses.started: must be a non-empty string",
+    );
+  });
+
+  it("refuses unknown keys, a secret above all", () => {
+    expect(failure({ clickup: { ...CLICKUP, apiToken: "t" } })).toBe(
+      'integrations.clickup: unknown key "apiToken" (allowed: enabled, teamId, botUserId, botName, statuses)',
+    );
+    expect(failure({ clickup: { ...CLICKUP, statuses: { review: "review" } } })).toBe(
+      'integrations.clickup.statuses: unknown key "review" (allowed: started, done, failed)',
+    );
+  });
+
+  it("enabledClickup is the block only when enabled", () => {
+    expect(enabledClickup({ clickup: CLICKUP })).toEqual(CLICKUP);
+    expect(enabledClickup({ clickup: { ...CLICKUP, enabled: false } })).toBeUndefined();
+    expect(enabledClickup({})).toBeUndefined();
   });
 });
 

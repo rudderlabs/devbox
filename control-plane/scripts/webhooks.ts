@@ -1,6 +1,7 @@
 // Every integration that takes webhooks at the deployment's public URL, in
 // the order their lines print. A new one is a `webhook.ts` next to its setup
 // and one entry here.
+import { clickupWebhook } from "./clickup/webhook";
 import { githubWebhook } from "./github/webhook";
 import { gitlabWebhook } from "./gitlab/webhook";
 import { jiraWebhook } from "./jira/webhook";
@@ -13,6 +14,7 @@ export const webhooks: readonly WebhookTarget[] = [
   githubWebhook,
   gitlabWebhook,
   jiraWebhook,
+  clickupWebhook,
 ];
 
 // What each integration that is on needs when the public URL changes from

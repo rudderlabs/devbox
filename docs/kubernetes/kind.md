@@ -32,7 +32,7 @@ kept and its `context` and `profile` are rewritten to kind's. The other
 commands take it like any target file: `--target devbox.kind.json`. To install
 from it, run `bun run k8s:kind` again, not `k8s:install`, which lacks kind's
 settings. The next steps `linear:setup`, `linear:status`, `linear:disable`
-and the `jira:*` commands print for it say so.
+and the `jira:*` and `clickup:*` commands print for it say so.
 
 It:
 

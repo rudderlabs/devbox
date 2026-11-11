@@ -274,6 +274,52 @@ describe("chart validation", () => {
     });
   });
 
+  describe("integrations.clickup", () => {
+    const CLICKUP = join(import.meta.dir, "values", "clickup.yaml");
+    const clickupFailure = async (set: string[], setJson: string[] = []) => {
+      const r = await helmTemplate([
+        ...BASE,
+        "-f",
+        CLICKUP,
+        ...set.flatMap((s) => ["--set", s]),
+        ...setJson.flatMap((s) => ["--set-json", s]),
+      ]);
+      expect(r.code).not.toBe(0);
+      return r.stderr;
+    };
+
+    it.each([
+      ["teamId", 'integrations.clickup.teamId=""'],
+      ["botUserId", "integrations.clickup.botUserId=0"],
+      ["botName", 'integrations.clickup.botName=""'],
+    ])("requires %s when enabled", async (key, unset) => {
+      expect(await clickupFailure([], [unset])).toContain(
+        `integrations.clickup.enabled is true: integrations.clickup.${key} is required`,
+      );
+    });
+
+    it("a disabled block needs none of them", async () => {
+      const r = await helmTemplate([...BASE, "--set-json", 'integrations.clickup.teamId="9000000000"']);
+      expect(r.code).toBe(0);
+    });
+
+    it.each([
+      ["integrations.clickup.apiToken=x", "apiToken"],
+      ["integrations.clickup.webhookSecret=x", "webhookSecret"],
+      ["integrations.clickup.teamId=team-1", "teamId"],
+      ["integrations.clickup.botUserId=-1", "botUserId"],
+      ["integrations.clickup.statuses.review=x", "review"],
+    ])("refuses %s through the schema", async (set, key) => {
+      const stderr = await clickupFailure([set]);
+      expect(stderr).toContain("values don't meet the specifications of the schema");
+      expect(stderr).toContain(key);
+    });
+
+    it("refuses a teamId given as a number", async () => {
+      expect(await clickupFailure([], ["integrations.clickup.teamId=9000000000"])).toContain("teamId");
+    });
+  });
+
   it("refuses an unknown provider", async () => {
     expect(await failure(["llm.provider=gemini"])).toContain("provider");
   });

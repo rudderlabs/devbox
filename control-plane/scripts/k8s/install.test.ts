@@ -96,6 +96,10 @@ function fakeFetch(me: number, base = URL_) {
       calls.push(`jira ${Buffer.from((auth ?? "").slice(6), "base64").toString()}`);
       return Response.json({ accountId: JIRA_BOT_ID, accountType: "app", displayName: "devbox" });
     }
+    if (url === "https://api.clickup.com/api/v2/user") {
+      calls.push(`clickup ${auth}`);
+      return Response.json({ user: { id: 100000001, username: "devbox" } });
+    }
     if (url === `${base}/health`) return new Response("ok");
     if (url === `${base}/api/me`) return new Response("", { status: me });
     return new Response("", { status: 404 });
@@ -172,6 +176,7 @@ const OPTS: InstallOptions = {
   skipLlmCheck: false,
   skipLinearCheck: false,
   skipJiraCheck: false,
+  skipClickupCheck: false,
   netpol: "auto",
   timeout: "15m",
 };
@@ -2080,6 +2085,87 @@ Check Jira with: bun run jira:status --target devbox.k8s.json`;
       });
       await expect(install(s.deps, OPTS, OVERLAY)).rejects.toThrow(
         `JIRA_API_TOKEN belongs to devbox (${JIRA_BOT_ID}), not the configured bot devbox (712020:x): run bun run jira:setup --target devbox.k8s.json`,
+      );
+      s.f.done();
+    });
+  });
+
+  describe("ClickUp", () => {
+    const CLICKUP = {
+      clickup: {
+        enabled: true,
+        teamId: "9000000000",
+        botUserId: 100000001,
+        botName: "devbox",
+        statuses: { started: "in progress" },
+      },
+    };
+    const clickupTarget = (): Target => ({ ...target(), integrations: CLICKUP });
+    const ENV = { GITHUB_TOKEN: "ghp_x", LLM_API_KEY: "sk-y" };
+    const integrationsSecret = (s: ReturnType<typeof setup>) =>
+      stdinOf(s.f, APPLY)
+        .map((t) => JSON.parse(t as string))
+        .at(-1);
+
+    it("configured ClickUp: resolves, checks the token, writes the Secret and the chart values", async () => {
+      const script = writingIntegrations(FRESH([TOKEN]));
+      const s = setup(script, {
+        target: clickupTarget(),
+        keychain: new MemoryKeychain({
+          "k8s:kind-devbox/devbox/CLICKUP_API_TOKEN": "pk_saved",
+          "k8s:kind-devbox/devbox/CLICKUP_WEBHOOK_SECRET": "cwh-saved",
+        }),
+        env: ENV,
+      });
+      await install(s.deps, OPTS, OVERLAY);
+      s.f.done();
+      expect(integrationsSecret(s)).toEqual(
+        JSON.parse(
+          secretManifest({
+            name: "devbox-integrations",
+            data: { CLICKUP_API_TOKEN: "pk_saved", CLICKUP_WEBHOOK_SECRET: "cwh-saved" },
+          }),
+        ),
+      );
+      // The settings go to the chart; the secrets never do.
+      const values = JSON.parse(stdinOf(s.f, HELM_UPGRADE)[0] as string) as Values;
+      expect(values.integrations).toEqual(CLICKUP);
+      expect(JSON.stringify(values)).not.toContain("pk_saved");
+      expect(JSON.stringify(values)).not.toContain("cwh-saved");
+      expect(s.fetchCalls).toContain("clickup pk_saved");
+      expect(s.logs).toContain("ClickUp: devbox acts as devbox in workspace 9000000000");
+      expect(s.logs.at(-1)).toEndWith(
+        "Check ClickUp with: bun run clickup:status --target devbox.k8s.json",
+      );
+    });
+
+    it("--skip-clickup-check: no call to ClickUp, the Secret still written", async () => {
+      const script = writingIntegrations(FRESH([TOKEN]));
+      const s = setup(script, {
+        target: clickupTarget(),
+        env: { ...ENV, CLICKUP_API_TOKEN: "pk_env", CLICKUP_WEBHOOK_SECRET: "cw" },
+      });
+      await install(s.deps, { ...OPTS, skipClickupCheck: true }, OVERLAY);
+      s.f.done();
+      expect(s.fetchCalls.some((c) => c.includes("clickup"))).toBe(false);
+      expect(s.logs).toContain("warning: ClickUp check skipped (--skip-clickup-check)");
+      expect(integrationsSecret(s)).toEqual(
+        JSON.parse(
+          secretManifest({
+            name: "devbox-integrations",
+            data: { CLICKUP_API_TOKEN: "pk_env", CLICKUP_WEBHOOK_SECRET: "cw" },
+          }),
+        ),
+      );
+    });
+
+    it("a token of another account fails before the cluster is touched", async () => {
+      const s = setup([...TOOLS], {
+        target: { ...target(), integrations: { clickup: { ...CLICKUP.clickup, botUserId: 7 } } },
+        env: { ...ENV, CLICKUP_API_TOKEN: "pk_env", CLICKUP_WEBHOOK_SECRET: "cw" },
+      });
+      await expect(install(s.deps, OPTS, OVERLAY)).rejects.toThrow(
+        "CLICKUP_API_TOKEN belongs to devbox (user 100000001), not the configured bot devbox (user 7): run bun run clickup:setup --target devbox.k8s.json",
       );
       s.f.done();
     });
