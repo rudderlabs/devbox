@@ -10,42 +10,33 @@
 # fails the gates again, on purpose. Then bump the component or renew the
 # entry with a new reason.
 vulnerabilities:
-  # kubectl v1.37.1, the latest release on every supported minor, is built with
-  # Go 1.26.8. The control plane runs it only against the in-cluster API server,
-  # with the service account token and cluster CA. Expires early: the next
-  # Kubernetes patch release should rebuild with a fixed Go.
-  - id: CVE-2026-111943
-    purls: ["pkg:golang/stdlib@v1.26.8"]
+  # kubectl v1.37.2, the latest release on every supported minor, bundles
+  # golang.org/x/net v0.57.0 and golang.org/x/text v0.40.0. The control plane
+  # runs it only against the in-cluster API server, with the service account
+  # token and cluster CA. Expires early: the next Kubernetes patch release
+  # should rebuild with fixed modules.
+  - id: CVE-2026-78661
+    purls: ["pkg:golang/golang.org/x/net@v0.57.0"]
     paths: ["usr/local/bin/kubectl"]
-    statement: In kubectl v1.37.1 (latest); kubectl only talks to the in-cluster API server.
-    expired_at: 2026-11-30
-  - id: CVE-2026-78667
-    purls: ["pkg:golang/stdlib@v1.26.8"]
-    paths: ["usr/local/bin/kubectl"]
-    statement: In kubectl v1.37.1 (latest); server-side net/http Range handling, which kubectl does not serve.
+    statement: In kubectl v1.37.2 (latest); x/net/html DoS on crafted HTML, and kubectl reads only in-cluster API server responses.
     expired_at: 2026-11-30
   - id: CVE-2026-78669
-    purls: ["pkg:golang/stdlib@v1.26.8", "pkg:golang/golang.org/x/net@v0.57.0"]
+    purls: ["pkg:golang/golang.org/x/net@v0.57.0"]
     paths: ["usr/local/bin/kubectl"]
-    statement: In kubectl v1.37.1 (latest); kubectl only talks to the in-cluster API server.
-    expired_at: 2026-11-30
-  - id: CVE-2026-97031
-    purls: ["pkg:golang/stdlib@v1.26.8"]
-    paths: ["usr/local/bin/kubectl"]
-    statement: In kubectl v1.37.1 (latest); kubectl only talks to the in-cluster API server.
+    statement: In kubectl v1.37.2 (latest); kubectl only talks to the in-cluster API server.
     expired_at: 2026-11-30
   - id: CVE-2026-56851
     purls: ["pkg:golang/golang.org/x/text@v0.40.0"]
     paths: ["usr/local/bin/kubectl"]
-    statement: In kubectl v1.37.1 (latest); kubectl does not apply the x/text Nickname profile to input.
+    statement: In kubectl v1.37.2 (latest); kubectl does not apply the x/text Nickname profile to input.
     expired_at: 2026-11-30
-  # npm vendors its own undici. No npm release ships a fixed one yet: 11.21.1
-  # (latest 11.x) and 12.2.1 (latest) both bundle undici 6.29.0. npm uses it
-  # only as an HTTP client for registry requests during installs; nothing in
-  # the harness serves or streams through it. Bump npm in harness/Dockerfile
-  # once a release bundles undici 6.29.1 or newer, and drop this entry.
-  - id: CVE-2026-109869
-    purls: ["pkg:npm/undici@6.29.0"]
-    paths: ["usr/local/lib/node_modules/npm/node_modules/undici/package.json"]
-    statement: In npm's bundled undici (npm 11.21.1, latest 11.x); no npm release bundles a fixed undici yet.
+  # gh v2.103.3, the latest release, still bundles golang.org/x/net v0.60.0.
+  # The finding is a denial of service in x/net/html on crafted HTML; at worst
+  # it stops one gh invocation inside a sandbox. Bump GH_VERSION in
+  # harness/Dockerfile once a release bundles x/net 0.62.0 or newer, and drop
+  # this entry.
+  - id: CVE-2026-78661
+    purls: ["pkg:golang/golang.org/x/net@v0.60.0"]
+    paths: ["usr/local/bin/gh"]
+    statement: In gh v2.103.0 (v2.103.3, latest, bundles the same x/net); a DoS confined to one gh process in a sandbox.
     expired_at: 2026-11-30
