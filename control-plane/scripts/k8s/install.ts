@@ -20,6 +20,7 @@ import {
   gitlabCommitIdentity,
   identityKnown,
 } from "../gitlab/check";
+import { type JiraSecrets, jiraPreflight } from "../jira/check";
 import {
   appIdentity,
   GithubAppSetupError,
@@ -31,6 +32,7 @@ import {
   type EnabledGithubApp,
   enabledGithubApp,
   enabledGitlab,
+  enabledJira,
   enabledLinear,
   gitlabWebhookSecretName,
 } from "../lib/integrations";
@@ -122,6 +124,7 @@ export type InstallOptions = {
   skipPushCheck: boolean;
   skipLlmCheck: boolean;
   skipLinearCheck: boolean;
+  skipJiraCheck: boolean;
   netpol: "auto" | "force" | "skip"; // auto = first install only
   timeout: string; // helm --timeout
 };
@@ -241,6 +244,7 @@ export async function install(
   // never count. The whole block goes to the chart, switches included.
   const integrations = deps.target.integrations;
   const linear = enabledLinear(integrations ?? {});
+  const jira = enabledJira(integrations ?? {});
   const app = enabledGithubApp(integrations ?? {});
   refuseGithubApp(
     app,
@@ -333,6 +337,17 @@ export async function install(
       webhook: await resolveSecret("LINEAR_WEBHOOK_SECRET", secretDeps),
     };
   }
+  let jiraR: JiraSecrets | undefined;
+  if (jira && own.integrations) {
+    jiraR = {
+      token: await resolveSecret("JIRA_API_TOKEN", secretDeps),
+      webhook: await resolveSecret("JIRA_WEBHOOK_SECRET", secretDeps),
+    };
+  }
+  const jiraOpts = {
+    fetch: deps.fetch,
+    setup: `bun run jira:setup --target ${deps.targetPath}`,
+  };
   const slackR = await resolveIf(integrations?.slack?.enabled, "SLACK_BOT_TOKEN");
   const webhookR = await resolveIf(integrations?.githubApp?.enabled, "GITHUB_WEBHOOK_SECRET");
   // GitLab: the token, and with the webhooks on, the webhook token under the
@@ -353,6 +368,10 @@ export async function install(
   if (linearR && opts.skipLinearCheck) {
     await offerSave(linearR.client, secretDeps);
     await offerSave(linearR.webhook, secretDeps);
+  }
+  if (jira && opts.skipJiraCheck) {
+    log("warning: Jira check skipped (--skip-jira-check)");
+    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { ...jiraOpts, skip: true });
   }
   if (slackR) await offerSave(slackR, secretDeps);
   if (webhookR) await offerSave(webhookR, secretDeps);
@@ -468,11 +487,24 @@ export async function install(
       );
     }
   }
+  // With the user's own integrations Secret, nothing is checked here;
+  // k8s:check checks the token in it.
+  if (jira && !opts.skipJiraCheck) {
+    jiraR = await jiraPreflight(jira, jiraR, secretDeps, { ...jiraOpts, skip: false });
+  }
   // None for a Secret the user brings, or one the seed job fills.
   const github = minted ?? (githubR ? { token: githubR.value } : undefined);
   const llm = llmR?.value ?? "";
   const integrationSecrets: Partial<Record<IntegrationSecretName, string>> = {};
-  for (const r of [linearR?.client, linearR?.webhook, slackR, webhookR, gitlabWebhookR]) {
+  for (const r of [
+    linearR?.client,
+    linearR?.webhook,
+    jiraR?.token,
+    jiraR?.webhook,
+    slackR,
+    webhookR,
+    gitlabWebhookR,
+  ]) {
     if (r) integrationSecrets[r.name as IntegrationSecretName] = r.value;
   }
 
@@ -801,7 +833,7 @@ then: bun run k8s:check --target ${deps.targetPath}`);
 devbox is installed in context ${context}. The CLI uses profile "${profile}".
 ${local ? `\n  bun run k8s:connect --target ${deps.targetPath}     # keep it running in another terminal` : ""}
   bun run devbox create "Add a /health endpoint to ${cfg.repos[0]?.owner}/${cfg.repos[0]?.name}"
-  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}${gitlab ? `\n\nCheck GitLab with: bun run gitlab:status --target ${deps.targetPath}` : ""}`);
+  bun run devbox logs -f <task>${linear ? `\n\nCheck Linear with: bun run linear:status --target ${deps.targetPath}` : ""}${gitlab ? `\n\nCheck GitLab with: bun run gitlab:status --target ${deps.targetPath}` : ""}${jira ? `\n\nCheck Jira with: bun run jira:status --target ${deps.targetPath}` : ""}`);
 }
 
 // A running `k8s:connect` already holds the profile's port: use it.

@@ -124,5 +124,6 @@ identity and pull request `@mentions` ([integrations.md](integrations.md)).
 - Compose: `bun run up`. It does the secret lookup and the checks, builds the
   images, starts the stack and logs the CLI in (profile `local`).
 - kind: `bun run k8s:kind` ([docs/kubernetes/kind.md](../../../docs/kubernetes/kind.md)).
-- Then, if wanted, `bun run github:setup` / `bun run linear:setup`, and
-  `bun run up` (or `k8s:kind`) again to apply.
+- Then, if wanted, `bun run github:setup` / `bun run linear:setup` /
+  `bun run jira:setup` (the quickstart doesn't set up Jira), and `bun run up`
+  (or `k8s:kind`) again to apply.

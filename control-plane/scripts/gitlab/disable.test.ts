@@ -68,7 +68,7 @@ async function run(o: {
     ],
     gitlab: o.gitlab,
     trust: { trustedGroups: ["platform"], trustedUsers: [] },
-    linear: false,
+    integrations: {},
     applyCommand: `bun run k8s:install --target ${path}`,
     statusCommand: `bun run gitlab:status --target ${path}`,
     api: async () => Response.json({}),

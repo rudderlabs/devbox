@@ -48,7 +48,7 @@ async function run(o: {
     repos: [REPO],
     gitlab: o.gitlab,
     trust: { trustedGroups: ["platform"], trustedUsers: [] },
-    linear: false,
+    integrations: {},
     ...(o.publicUrl === null ? {} : { publicUrl: o.publicUrl ?? PUBLIC }),
     applyCommand: "bun run k8s:install --target devbox.k8s.json",
     statusCommand: "bun run gitlab:status --target devbox.k8s.json",

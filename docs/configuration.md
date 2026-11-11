@@ -217,7 +217,7 @@ deployment defaults are:
 
 ### `integrations`
 
-Optional. The local stack's integrations: Linear and the GitHub App.
+Optional. The local stack's integrations: Linear, Jira and the GitHub App.
 
 ```json
 "publicUrl": "https://…",
@@ -251,14 +251,34 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 | `org` | no | The organization that owns the App; `github:setup` writes it, and the settings links use it. Not a chart value. |
 | `pending` | no | A new App waiting for its install while the current one keeps working (`appId`, `slug`, `org`). Only `github:setup` reads it. |
 
+**`integrations.jira`** turns on Jira ([docs/jira.md](jira.md)).
+`bun run jira:setup` writes it.
+
+```json
+"integrations": { "jira": {
+  "enabled": true, "siteUrl": "https://example.atlassian.net", "cloudId": "…",
+  "botEmail": "…", "botAccountId": "…", "botName": "devbox",
+  "statuses": { "started": "In Progress" } } }
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `enabled` | yes | `true` turns Jira on, `false` turns it off and keeps the other fields. |
+| `siteUrl` | when `enabled` is `true` | The site, an `https` origin with no path: `https://example.atlassian.net`. |
+| `cloudId` | when `enabled` is `true` | The site's cloud ID, a UUID. `jira:setup` reads it from the site. |
+| `botEmail` | when `enabled` is `true` | The service account's email. With `JIRA_API_TOKEN`, it signs devbox in to Jira. |
+| `botAccountId`, `botName` | when `enabled` is `true` | The service account's account ID and display name, as Jira reported them to `jira:setup`. People type `@<botName>` to mention the bot. |
+| `statuses` | no | `started`, `done` and `failed`: the status names devbox moves an issue to, in any letter case. An absent one means no move ([docs/jira.md](jira.md#statuses)). |
+| `allowRestrictedIssues` | no, default `false` | `true` acts on issues with a security level too. |
+
 **`github`** is a top-level key: `trustedOrgs` and `trustedUsers`, lists of
 strings ([Trust settings](#trust-settings)). With `integrations.githubApp`
 enabled, one of them must be set.
 
 `publicUrl` is a top-level key, not part of a block: the public HTTPS URL
-webhooks reach. One tunnel or Ingress serves every integration, so Linear and
-GitHub share it. Only the CLI (`linear:setup`, `github:setup` and the
-`*:status` commands) reads it.
+webhooks reach. One tunnel or Ingress serves every integration, so they all
+share it. Only the CLI reads it: every integration's setup command and the
+`*:status` commands ([docs/public-url.md](public-url.md)).
 
 `bun run linear:setup` writes this block ([docs/linear.md](linear.md)); you may
 also edit it. Unknown keys are refused. Only `enabled: true` turns Linear on: a
@@ -268,6 +288,13 @@ also edit it. Unknown keys are refused. Only `enabled: true` turns Linear on: a
 `LINEAR_ENABLED`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` and
 `LINEAR_WEBHOOK_SECRET` to the control plane. Otherwise it passes all four
 empty.
+
+`bun run jira:setup` writes `integrations.jira` ([docs/jira.md](jira.md)); you
+may also edit it. Only `enabled: true` turns Jira on. With it, `up` needs
+`JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET` ([Secrets](#secrets)), checks the
+token with Jira, and passes the
+`JIRA_*` variables ([Control-plane settings](#control-plane-settings)) to the
+control plane. Otherwise it passes them all empty.
 
 With `integrations.githubApp.enabled: true`, `up` needs the App's private key
 (unless `tokens` is `"external"`) and `GITHUB_WEBHOOK_SECRET`
@@ -307,7 +334,7 @@ kube context, so a command never acts on a cluster you did not name.
 | `context` | yes | The kube context of the cluster. |
 | `profile` | no, default `k8s-<context>` | The CLI profile the installer writes. Lower-case letters, digits and `-`; the default is the context made lower-case with other characters replaced by `-`. |
 | `values` | no | Helm values for the chart, passed as they are. `storage.storageClass` and `storage.volumeSnapshotClass` are required by the chart. Sandbox sizing goes under `values.sandbox`; the Compose-only `devbox.config.json` block is ignored. `repos` and `llm` are refused: the installer copies the full `llm` block, including effort and stage overrides, from `devbox.config.json`. `integrations` is refused: it goes at the top level. |
-| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`), `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`) and `gitlab` (`enabled`, `botUsername`, `botUserId`, `ciResults`, `webhookAuth`; written by `bun run gitlab:setup`, [docs/gitlab.md](gitlab.md)), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
+| `integrations` | no | The deployment's integrations: `linear` (`enabled`, `clientId`), `slack` (`enabled`, `channelId`), `githubApp` (the fields [above](#integrations) except `tokenFile`; `slug` is copied as `botLogin`), `gitlab` (`enabled`, `botUsername`, `botUserId`, `ciResults`, `webhookAuth`; written by `bun run gitlab:setup`, [docs/gitlab.md](gitlab.md)) and `jira` (the fields [above](#integrations)), with the same `enabled` rule. The installer copies them into the chart values. The top-level `publicUrl` (the public HTTPS URL webhooks reach, shared by all integrations) is read only by the CLI, never copied ([customizing.md](kubernetes/customizing.md#integrations)). The trust lists go under `values.github`. |
 
 Any other key is an error: chart values go under `values`. The installer adds
 `repos`, `llm`, `integrations`, `ironProxy.clusterIP`,
@@ -340,6 +367,7 @@ your environment → the system keychain → gh auth token (GITHUB_TOKEN only) �
 | Linear client secret, webhook signing secret | `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET` | with `integrations.linear.enabled: true` |
 | Slack bot token | `SLACK_BOT_TOKEN` | Kubernetes, with `integrations.slack.enabled: true` |
 | GitHub webhook secret | `GITHUB_WEBHOOK_SECRET` | with `integrations.githubApp.enabled: true` |
+| Jira API token, webhook secret | `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET` | with `integrations.jira.enabled: true` |
 
 An integration that is off has its secrets ignored: none is looked up, even
 when the variable is set.
@@ -349,7 +377,7 @@ when the variable is set.
   Otherwise it prompts.
 - **A variable that is set wins.** For `GITHUB_TOKEN` and `LLM_API_KEY` that
   holds even when it is empty: an empty `LLM_API_KEY` means the endpoint needs
-  no key. An empty Linear, Slack or webhook secret counts as missing.
+  no key. An empty Linear, Slack, Jira or webhook secret counts as missing.
 - **The App's private key is never prompted for.** A PEM has many lines, so
   it comes from `GITHUB_APP_PRIVATE_KEY_FILE`, then `GITHUB_APP_PRIVATE_KEY`,
   then the keychain entry `GITHUB_APP_PRIVATE_KEY`. `github:setup` saves it,
@@ -376,24 +404,31 @@ each cluster keep their own tokens:
 | A cluster | `k8s:<context>/devbox` | `k8s:<context>/devbox/<NAME>` |
 
 - Where the platform has no keychain (headless Linux without libsecret),
-  `up`, `k8s:install` and the `linear:*` and `github:*` commands skip it without
-  a message.
+  `up`, `k8s:install` and the `linear:*`, `github:*` and `jira:*` commands
+  skip it without a message.
   `bun run secrets` prints `The system keychain is not available on this
   machine.` and exits 1.
 - `--no-keychain`, on `up`, `k8s:install`, `linear:setup`, `linear:status`,
-  `linear:disable`, `github:setup`, `github:status` and `github:disable`, never
-  reads or writes it.
+  `linear:disable`, `github:setup`, `github:status`, `github:disable`,
+  `jira:setup`, `jira:status` and `jira:disable`, never reads or writes it.
 - `bun run linear:setup` saves the two Linear secrets only if you choose to,
   and never takes them from your environment ([docs/linear.md](linear.md#saving-the-secrets-or-not)).
   `bun run github:setup` does the same for the App's private key and webhook
-  secret ([docs/github.md](github.md#the-private-key)).
+  secret ([docs/github.md](github.md#the-private-key)). `bun run jira:setup`
+  offers to save the API token and the webhook secret you type, and uses
+  `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET` from your environment as they are
+  ([docs/jira.md](jira.md#2-run-jirasetup)).
 
 ### Rejected values
 
-When a check rejects a secret (GitHub, the LLM endpoint or Linear refuses it):
+When a check rejects a secret (GitHub, the LLM endpoint, Linear or Jira refuses
+it):
 
 - **A saved value** is removed: `The saved <NAME> for <scope> was rejected;
-  removing it`. Then, with a terminal, it is asked for as a typed one is.
+  removing it`. Then, with a terminal, it is asked for as a typed one is. A
+  saved `JIRA_API_TOKEN` is kept instead (`… was rejected; keeping it`): Jira
+  answers a wrong email with the same 401, and Atlassian shows a token only
+  once.
 - **A typed value**, with a terminal: the check's message, then
   `Enter <NAME> again, or press Enter on an empty value to exit.`, and the
   prompt again, until a value is accepted. An empty answer stops the run,
@@ -420,13 +455,14 @@ cluster that target file names.
   without a terminal.
 
 There is no `secrets set`: run `up` or `k8s:install` in a terminal and save
-the value at the prompt, or use `linear:setup` for the Linear secrets and
-`github:setup` for the GitHub App's.
+the value at the prompt, or use `linear:setup` for the Linear secrets,
+`github:setup` for the GitHub App's and `jira:setup` for Jira's.
 
 ### Destructive commands
 
 `bun run secrets clear`, `bun run linear:disable --forget`,
-`bun run github:disable --forget` and `bun run k8s:uninstall --purge` delete data, and confirm the same way:
+`bun run github:disable --forget`, `bun run jira:disable --forget` and
+`bun run k8s:uninstall --purge` delete data, and confirm the same way:
 
 - **With a terminal**, they list what they will delete, one item per line,
   and ask a question ending `[y/N]`. Enter or Ctrl-D answers no: nothing is
@@ -479,7 +515,8 @@ you named with `existingSecret`
 
 `up` passes the secrets only in the environment of the `docker compose` process
 it starts. Compose gives `GITHUB_TOKEN` and `LLM_API_KEY` to iron-proxy, and
-`GITHUB_TOKEN` (and the Linear secrets, with Linear on) to the control plane.
+`GITHUB_TOKEN` (and the Linear and Jira secrets, with those on) to the control
+plane.
 With the GitHub App, `GITHUB_TOKEN` is empty: the token is a file in a volume
 the minter fills (or your `tokenFile`'s directory), and the control plane gets
 `GITHUB_WEBHOOK_SECRET`. The App's private key goes only to the minter, as a
@@ -500,8 +537,8 @@ These flows run the checks, which the code calls preflight:
 
 | Flow | When the checks run | How to skip them |
 |---|---|---|
-| `bun run up` | Step 3, before any container starts | `--skip-checks` skips all of them, LLM and Linear included |
-| `bun run k8s:install` | Step 2, before the namespaces, Secrets and chart are installed. A re-run (an upgrade) checks again. | `--skip-push-check` skips requests 3 and 4, `--skip-llm-check` request 5, `--skip-linear-check` requests 6 and 7 |
+| `bun run up` | Step 3, before any container starts | `--skip-checks` skips all of them, LLM, Linear and Jira included; `--skip-jira-check` skips request 8 |
+| `bun run k8s:install` | Step 2, before the namespaces, Secrets and chart are installed. A re-run (an upgrade) checks again. | `--skip-push-check` skips requests 3 and 4, `--skip-llm-check` request 5, `--skip-linear-check` requests 6 and 7, `--skip-jira-check` request 8 |
 | `bun run k8s:kind` | It runs `k8s:install`, so the same as above | Same as above |
 | `bun run k8s:check` | When you run it, against the values in the cluster's Secrets | `--skip-push-check` skips requests 3 and 4 |
 
@@ -517,6 +554,8 @@ reason.
 Requests 1 to 4 use the GitHub token; requests 2 to 4 run once per repo, in
 the order of `repos`. Request 5 uses the LLM key. Requests 6 and 7 run only
 with Linear enabled, and use the client ID and `LINEAR_CLIENT_SECRET`.
+Request 8 runs only with Jira enabled, and uses `botEmail` and
+`JIRA_API_TOKEN`.
 
 | # | Request | What it proves | Passes on | Fails with |
 |---|---|---|---|---|
@@ -527,6 +566,7 @@ with Linear enabled, and use the client ID and `LINEAR_CLIENT_SECRET`.
 | 5 | The LLM request, once: a one-message chat completion, or a Responses call, to `llm.baseUrl` with the LLM key | The endpoint, model and key work | 2xx | `LLM check failed: ...`. `k8s:install --skip-llm-check` skips it. |
 | 6 | `POST https://api.linear.app/oauth/token`, the client-credentials grant with the client ID and secret | Linear accepts the app's credentials, and the app allows client credentials | a token | `Linear rejected the client ID or LINEAR_CLIENT_SECRET (invalid_client): ...`, `the Linear app does not allow client credentials: ...`, or `can't reach api.linear.app: ...` |
 | 7 | `POST https://api.linear.app/graphql`, `{ viewer { name } organization { name urlKey } }`, with that token | The app user and the workspace devbox acts in. They are printed: `Linear: devbox acts as <name> in workspace <workspace>`. | 200 with both | `Linear check failed: ...` |
+| 8 | `GET https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/myself`, with Basic auth (`botEmail` and the token) | Jira accepts the token, and it belongs to `botAccountId`. Printed: `Jira: devbox acts as <name> on <site>`. | 200 with the bot's account ID | `Jira rejected JIRA_API_TOKEN, or the email <email> doesn't match it (401): ...`, `JIRA_API_TOKEN belongs to <name> (<id>), not the configured bot ...: run bun run jira:setup`, `Jira check failed: ...`, or `can't reach api.atlassian.com: ...` |
 
 **Rate limits.** If GitHub answers any of requests 1 to 4 with 429, or with a
 403 that is a rate limit (`x-ratelimit-remaining: 0`, or a message about a rate
@@ -688,6 +728,12 @@ way.
 | `GITLAB_CI_RESULT_MAX_PER_TASK` | `20` | The same cap for failed GitLab pipelines, counted on its own. Environment only, set the same way. |
 | `SANDBOX_GIT_NAME`, `SANDBOX_GIT_EMAIL` | | The commit identity of the agent in every sandbox. Set both or neither. Unset, the harness image's own identity applies. The chart sets them from `git.name` and `git.email`. |
 | `SANDBOX_GITLAB_GIT_NAME`, `SANDBOX_GITLAB_GIT_EMAIL` | | The commit identity for commits on GitLab repos, instead of the one above. Set both or neither. Unset, GitLab repos get the one above too. `bun run up` sets them from the GitLab token's user; the chart sets them from `gitlab.git.name` and `gitlab.git.email`. |
+| `JIRA_ENABLED` | | `true` turns on Jira and `POST /webhook/jira`. Unset, empty or `false` is off; anything else fails startup. With it on, every `JIRA_*` below is required except the statuses and `JIRA_ALLOW_RESTRICTED_ISSUES`. Compose and the chart set these from `integrations.jira`. |
+| `JIRA_SITE_URL`, `JIRA_CLOUD_ID` | | The site's `https` origin and its cloud ID (a UUID). |
+| `JIRA_BOT_EMAIL`, `JIRA_BOT_ACCOUNT_ID`, `JIRA_BOT_NAME` | | The service account's email, account ID and display name. |
+| `JIRA_STATUS_STARTED`, `JIRA_STATUS_DONE`, `JIRA_STATUS_FAILED` | | The statuses devbox moves an issue to. Unset: no move. |
+| `JIRA_ALLOW_RESTRICTED_ISSUES` | `false` | `true` acts on issues with a security level too. |
+| `JIRA_API_TOKEN`, `JIRA_WEBHOOK_SECRET` | | The service account's API token, and the webhook's secret, which signs each delivery (`X-Hub-Signature`). |
 | `SHUTDOWN_DRAIN_MS` | `10000` | How long shutdown waits, in milliseconds, for in-flight provisions and integration hooks once it has finished the task it was reconciling. On Kubernetes, set it with `extraEnv` and raise `controlPlane.terminationGracePeriodSeconds` by as much. |
 
 ### Settings for the token minter
@@ -826,7 +872,9 @@ With the GitHub App, the trust lists also decide whose `@mentions` and
 reviews reach the agent ([docs/github.md](github.md#trust-lists)); with GitLab
 webhooks, the GitLab lists decide whose notes do
 ([docs/gitlab.md](gitlab.md#webhooks-notes-and-pipelines)). On Kubernetes set
-them with `gitlab.trustedGroups` and `gitlab.trustedUsers`.
+them with `gitlab.trustedGroups` and `gitlab.trustedUsers`. Jira has no trust
+lists: it trusts every person with access to the site, as Linear does
+([docs/jira.md](jira.md#trust)).
 
 In the quickstart, none of these is set. Follow-ups come from
 `bun run devbox send`, and the agent reads no pull request discussion.

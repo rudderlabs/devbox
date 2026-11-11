@@ -10,7 +10,7 @@ import { installCommand } from "../k8s/kind";
 import { NAMESPACE } from "../k8s/run";
 import { existingSecret } from "../k8s/secrets";
 import { loadTarget } from "../k8s/target";
-import { enabledGithubApp, enabledLinear, type GitlabIntegration } from "../lib/integrations";
+import type { GitlabIntegration, Integrations } from "../lib/integrations";
 import type { Deployment } from "../lib/keychain";
 import { ingressPublicUrl, ingressSource } from "../lib/publicUrl";
 import { composeApi, k8sApi } from "../linear/deployment";
@@ -33,10 +33,9 @@ export type GitlabDeployment = {
   gitlab: GitlabIntegration | undefined;
   // Who may drive the agent from GitLab: the target's values.gitlab.
   trust: TrustLists;
-  // Whether Linear and the GitHub App are on: their webhook URLs follow the
-  // shared public URL.
-  linear: boolean;
-  githubApp?: { tokens: "devbox" | "external"; slug: string; org?: string };
+  // Every integration's block: those on say what their webhooks need when the
+  // shared public URL changes.
+  integrations: Integrations;
   publicUrl?: string;
   ingressUrl?: string;
   fromApiIngress?: boolean;
@@ -65,7 +64,6 @@ export function loadDeployment(opts: {
   const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
   if (opts.target === undefined) {
     const cfg = loadConfig(configPath);
-    const app = enabledGithubApp(cfg.integrations);
     return {
       deployment: { kind: "compose" },
       configPath,
@@ -77,16 +75,7 @@ export function loadDeployment(opts: {
         trustedGroups: cfg.gitlab?.trustedGroups ?? [],
         trustedUsers: cfg.gitlab?.trustedUsers ?? [],
       },
-      linear: enabledLinear(cfg.integrations) !== undefined,
-      ...(app
-        ? {
-            githubApp: {
-              tokens: app.tokens,
-              slug: app.slug,
-              ...(app.org !== undefined ? { org: app.org } : {}),
-            },
-          }
-        : {}),
+      integrations: cfg.integrations,
       ...(cfg.publicUrl !== undefined ? { publicUrl: cfg.publicUrl } : {}),
       applyCommand: "bun run up",
       statusCommand: "bun run gitlab:status",
@@ -98,7 +87,6 @@ export function loadDeployment(opts: {
   const target = loadTarget(path);
   const trust = (target.values.gitlab ?? {}) as Record<string, unknown>;
   const integrations = target.integrations ?? {};
-  const app = enabledGithubApp(integrations);
   const ingressUrl = ingressPublicUrl(target);
   const apply = installCommand(target.context, path);
   const byoGitlab = existingSecret(target.values, "gitlab");
@@ -114,16 +102,7 @@ export function loadDeployment(opts: {
       trustedGroups: strings(trust.trustedGroups),
       trustedUsers: strings(trust.trustedUsers),
     },
-    linear: enabledLinear(integrations) !== undefined,
-    ...(app
-      ? {
-          githubApp: {
-            tokens: app.tokens,
-            slug: app.slug,
-            ...(app.org !== undefined ? { org: app.org } : {}),
-          },
-        }
-      : {}),
+    integrations,
     ...(target.publicUrl !== undefined ? { publicUrl: target.publicUrl } : {}),
     ...(ingressUrl !== undefined ? { ingressUrl } : {}),
     fromApiIngress: ingressSource(target) === "api",

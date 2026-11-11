@@ -59,13 +59,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-SOURCE_CHOICES = ("linear", "github", "api")
+SOURCE_CHOICES = ("linear", "github", "api", "jira")
 # Sources the control plane actually sends per kind. review and ci_result are
-# GitHub-driven in production (no agent-session UI, never source='api'); the
-# 'linear' default is kept so existing local invocations keep working.
+# GitHub-driven in production (no agent-session UI, never source='api' or
+# 'jira'); the 'linear' default is kept so existing local invocations keep
+# working.
 KIND_SOURCES = {
-    "assignment": ("linear", "github", "api"),
-    "comment": ("linear", "github", "api"),
+    "assignment": ("linear", "github", "api", "jira"),
+    "comment": ("linear", "github", "api", "jira"),
     "review": ("linear", "github"),
     "ci_result": ("linear", "github"),
 }

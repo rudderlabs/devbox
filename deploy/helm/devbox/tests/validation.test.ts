@@ -239,6 +239,41 @@ describe("chart validation", () => {
     );
   });
 
+  describe("integrations.jira", () => {
+    const JIRA = join(import.meta.dir, "values", "jira.yaml");
+    const jiraFailure = async (set: string[]) => {
+      const r = await helmTemplate([...BASE, "-f", JIRA, ...set.flatMap((s) => ["--set", s])]);
+      expect(r.code).not.toBe(0);
+      return r.stderr;
+    };
+
+    it.each(["siteUrl", "cloudId", "botEmail", "botAccountId", "botName"])(
+      "requires %s when enabled",
+      async (key) => {
+        expect(await jiraFailure([`integrations.jira.${key}=`])).toContain(
+          `integrations.jira.enabled is true: integrations.jira.${key} is required`,
+        );
+      },
+    );
+
+    it("a disabled block needs none of them", async () => {
+      const r = await helmTemplate([...BASE, "--set", "integrations.jira.siteUrl=https://example.atlassian.net"]);
+      expect(r.code).toBe(0);
+    });
+
+    it.each([
+      ["integrations.jira.apiToken=x", "apiToken"],
+      ["integrations.jira.webhookSecret=x", "webhookSecret"],
+      ["integrations.jira.siteUrl=http://example.atlassian.net", "siteUrl"],
+      ["integrations.jira.cloudId=abc", "cloudId"],
+      ["integrations.jira.statuses.review=x", "review"],
+    ])("refuses %s through the schema", async (set, key) => {
+      const stderr = await jiraFailure([set]);
+      expect(stderr).toContain("values don't meet the specifications of the schema");
+      expect(stderr).toContain(key);
+    });
+  });
+
   it("refuses an unknown provider", async () => {
     expect(await failure(["llm.provider=gemini"])).toContain("provider");
   });

@@ -147,6 +147,20 @@ describe("chartValues", () => {
     expect(chartValues(cfg, {}, { integrations: {} })).not.toHaveProperty("integrations");
   });
 
+  it("the Jira block is copied as it is: the chart's keys are the target file's", () => {
+    const jira = {
+      enabled: true,
+      siteUrl: "https://example.atlassian.net",
+      cloudId: "00000000-0000-0000-0000-000000000000",
+      botEmail: "devbox@example.com",
+      botAccountId: "712020:00000000-0000-0000-0000-000000000000",
+      botName: "devbox",
+      statuses: { started: "In Progress", done: "Done" },
+      allowRestrictedIssues: false,
+    };
+    expect(chartValues(cfg, {}, { integrations: { jira } }).integrations).toEqual({ jira });
+  });
+
   it("a user value wins over the integrations", () => {
     expect(
       chartValues(

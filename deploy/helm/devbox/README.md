@@ -50,7 +50,7 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | ingress.api.tls | list | `[]` | Standard Ingress TLS entries. Without TLS the chart prints a warning. |
 | ingress.webhooks.annotations | object | `{}` | Ingress annotations, for example the controller's timeouts. |
 | ingress.webhooks.className | string | `""` | The Ingress class. |
-| ingress.webhooks.enabled | bool | `false` | Public Ingress for /webhook/ only (GitHub, GitLab, Linear). |
+| ingress.webhooks.enabled | bool | `false` | Public Ingress for /webhook/ only (GitHub, GitLab, Linear, Jira). |
 | ingress.webhooks.host | string | `""` | Required when enabled. |
 | ingress.webhooks.tls | list | `[]` | Standard Ingress TLS entries. Without TLS the chart prints a warning. |
 | integrations.githubApp.appId | int | `0` | Required when enabled: the App's numeric ID (0 means unset). |
@@ -65,6 +65,16 @@ docker run --rm -v "$PWD/deploy/helm/devbox:/helm-docs" jnorwood/helm-docs:v1.14
 | integrations.gitlab.botUsername | string | `""` | Required when enabled: the username of the user the GitLab token belongs to (a group or project access token's bot user). Notes mention it; its own notes are ignored. |
 | integrations.gitlab.ciResults | bool | `true` | Posts failed pipelines on the agent's merge requests back to the agent (GITLAB_CI_RESULT_ENABLED). |
 | integrations.gitlab.enabled | bool | `false` | Turns GitLab webhooks on at /webhook/gitlab (GITLAB_WEBHOOKS_ENABLED): `@<botUsername>` notes and failed pipelines on the agent's merge requests reach the agent. Needs gitlab.baseUrl. The webhook's signing token goes in the integrations Secret as GITLAB_WEBHOOK_SIGNING_TOKEN (or the legacy secret token as GITLAB_WEBHOOK_SECRET). See docs/gitlab.md. |
+| integrations.jira.allowRestrictedIssues | bool | `false` | Act on issues restricted by a security level too (JIRA_ALLOW_RESTRICTED_ISSUES). |
+| integrations.jira.botAccountId | string | `""` | Required when enabled: the service account's account ID (bun run jira:setup reads it from Jira). |
+| integrations.jira.botEmail | string | `""` | Required when enabled: the email of the service account devbox acts as. |
+| integrations.jira.botName | string | `""` | Required when enabled: the service account's display name, which people @-mention. |
+| integrations.jira.cloudId | string | `""` | Required when enabled: the site's cloud ID (a UUID, from the site's /_edge/tenant_info). |
+| integrations.jira.enabled | bool | `false` | Turns Jira on (JIRA_ENABLED). JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET go in the integrations Secret. Set by bun run jira:setup through bun run k8s:install. Off, none of the block renders. |
+| integrations.jira.siteUrl | string | `""` | Required when enabled: the site's https origin, for example https://example.atlassian.net. |
+| integrations.jira.statuses.done | string | `""` | The status devbox moves an issue to when it finishes. Empty: no move. |
+| integrations.jira.statuses.failed | string | `""` | The status devbox moves an issue to when the task fails. Empty: no move. |
+| integrations.jira.statuses.started | string | `""` | The status devbox moves an issue to when it starts work. Empty: no move. |
 | integrations.linear.clientId | string | `""` | Required when enabled: the Linear app's client ID; set by bun run linear:setup. |
 | integrations.linear.enabled | bool | `false` | Turns Linear on (LINEAR_ENABLED). Its secrets go in the integrations Secret. |
 | integrations.slack.channelId | string | `""` | Required when enabled: the Slack channel ID. |

@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { writeConfigKeys } from "../lib/configFile";
 import { gitlabWebhookSecretName } from "../lib/integrations";
 import { deploymentScope, entryName, keychainUsable } from "../lib/keychain";
-import { publicUrlChangeLines, resolvePublicUrl } from "../lib/publicUrl";
+import { resolvePublicUrl } from "../lib/publicUrl";
 import {
   checkWithRetry,
   offerSave,
@@ -18,6 +18,7 @@ import {
   type SecretName,
 } from "../lib/secrets";
 import type { Fetch } from "../up/preflight";
+import { publicUrlChangeLines } from "../webhooks";
 import {
   checkGitlab,
   type GitlabIdentity,
@@ -359,8 +360,8 @@ export async function setup(
   for (const line of publicUrlChangeLines(
     d.publicUrl,
     publicUrl,
-    { linear: d.linear, ...(d.githubApp ? { githubApp: d.githubApp } : {}) },
-    "linear",
+    d.integrations,
+    { name: "gitlab" },
     d.deployment.kind === "k8s" ? ` --target ${d.configPath}` : "",
   )) {
     log(line);

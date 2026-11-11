@@ -1,4 +1,4 @@
-// The unsigned probe of the webhook URL (Linear, GitHub and GitLab): an empty POST without a
+// The unsigned probe of the webhook URL (Linear, GitHub, GitLab and Jira): an empty POST without a
 // signature header. devbox with the integration on answers it 401 "invalid signature" before parsing, and
 // records nothing. No secret is used.
 import type { Fetch } from "../up/preflight";
@@ -9,6 +9,7 @@ const ENABLED = {
   Linear: "integrations.linear.enabled",
   GitHub: "integrations.githubApp.enabled",
   GitLab: "integrations.gitlab.enabled",
+  Jira: "integrations.jira.enabled",
 } as const;
 
 const TIMEOUT_MS = 10_000;
@@ -19,9 +20,9 @@ const truncate = (text: string): string =>
 
 export async function probeWebhook(
   publicUrl: string,
-  path: "/webhook/linear" | "/webhook/github" | "/webhook/gitlab",
+  path: "/webhook/linear" | "/webhook/github" | "/webhook/gitlab" | "/webhook/jira",
   fetch: Fetch,
-  opts: { fromApiIngress: boolean; integration: "Linear" | "GitHub" | "GitLab" },
+  opts: { fromApiIngress: boolean; integration: keyof typeof ENABLED },
 ): Promise<ProbeResult> {
   const url = `${publicUrl}${path}`;
   const failed = (what: string): ProbeResult => ({

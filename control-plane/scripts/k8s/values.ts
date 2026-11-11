@@ -36,7 +36,7 @@ export function deepMerge(base: Values, top: Values): Values {
 
 // The block as chart values, verbatim; nothing when it is empty.
 function integrationValues(integrations: Integrations = {}): Values {
-  const { linear, slack, githubApp, gitlab } = integrations;
+  const { linear, slack, githubApp, gitlab, jira } = integrations;
   const out: Values = {
     ...(linear
       ? {
@@ -47,6 +47,8 @@ function integrationValues(integrations: Integrations = {}): Values {
         }
       : {}),
     ...(slack ? { slack } : {}),
+    // The chart's keys are the target file's, so the block goes as it is.
+    ...(jira ? { jira } : {}),
     // The slug becomes the control plane's botLogin; tokenFile is Compose-only and org is for the CLI's links.
     ...(githubApp
       ? {

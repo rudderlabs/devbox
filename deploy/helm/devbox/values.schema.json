@@ -303,6 +303,31 @@
               "type": "boolean"
             }
           }
+        },
+        "jira": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "siteUrl": { "type": "string", "pattern": "^(https://[^/?#@\\s]+/?)?$" },
+            "cloudId": {
+              "type": "string",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$"
+            },
+            "botEmail": { "type": "string" },
+            "botAccountId": { "type": "string", "pattern": "^[A-Za-z0-9:_-]{0,128}$" },
+            "botName": { "type": "string" },
+            "statuses": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "started": { "type": "string" },
+                "done": { "type": "string" },
+                "failed": { "type": "string" }
+              }
+            },
+            "allowRestrictedIssues": { "type": "boolean" }
+          }
         }
       }
     },

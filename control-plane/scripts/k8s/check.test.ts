@@ -67,6 +67,17 @@ const { privateKey: PEM } = generateKeyPairSync("rsa", {
 });
 
 const LINEAR_ON: Integrations = { linear: { enabled: true, clientId: "lin_client" } };
+const JIRA_TOKEN = "jira-token";
+const JIRA_ON: Integrations = {
+  jira: {
+    enabled: true,
+    siteUrl: "https://example.atlassian.net",
+    cloudId: "00000000-0000-0000-0000-000000000000",
+    botEmail: "devbox@example.com",
+    botAccountId: "712020:00000000-0000-0000-0000-000000000000",
+    botName: "devbox",
+  },
+};
 
 // GitHub, the LLM endpoint and Linear; each accepts only the planted value.
 // The GitHub App's calls: `app` is how its coverage and token calls answer.
@@ -133,6 +144,14 @@ function fakeFetch(
       return Response.json({
         data: { viewer: { name: "devbox" }, organization: { name: "Example", urlKey: "example" } },
       });
+    }
+    if (url === `https://api.atlassian.com/ex/jira/${JIRA_ON.jira?.cloudId}/rest/api/3/myself`) {
+      const token = Buffer.from((auth ?? "").slice(6), "base64")
+        .toString()
+        .split(":")[1];
+      return token === JIRA_TOKEN
+        ? Response.json({ accountId: JIRA_ON.jira?.botAccountId, displayName: "devbox" })
+        : new Response("Unauthorized", { status: 401 });
     }
     return new Response("", { status: 404 });
   };
@@ -362,6 +381,36 @@ describe("k8sCheck", () => {
       "2 failed.",
     ]);
     expect(noKeys.code).toBe(1);
+  });
+
+  it("Jira enabled: the token checked against Jira, both keys required", async () => {
+    const ok = await run(
+      [
+        GITHUB_OK,
+        LLM_OK,
+        found("devbox-integrations", { JIRA_API_TOKEN: JIRA_TOKEN, JIRA_WEBHOOK_SECRET: "jw" }),
+      ],
+      { integrations: JIRA_ON },
+    );
+    expect(ok.logs.slice(-4)).toEqual([
+      "  ok    Jira API token (devbox acts as devbox on https://example.atlassian.net)",
+      "  ok    Secret devbox-integrations: JIRA_API_TOKEN",
+      "  ok    Secret devbox-integrations: JIRA_WEBHOOK_SECRET",
+      "All checks passed.",
+    ]);
+    expect(ok.code).toBe(0);
+
+    const rejected = await run(
+      [GITHUB_OK, LLM_OK, found("devbox-integrations", { JIRA_API_TOKEN: "expired" })],
+      { integrations: JIRA_ON },
+    );
+    expect(rejected.logs.slice(-4)).toEqual([
+      "  FAIL  Jira API token: Jira rejected JIRA_API_TOKEN, or the email devbox@example.com doesn't match it (401): use the service account's API token, with scopes read:jira-work, write:jira-work and read:jira-user, and the service account's email",
+      "  ok    Secret devbox-integrations: JIRA_API_TOKEN",
+      '  FAIL  Secret devbox-integrations: JIRA_WEBHOOK_SECRET: no key "JIRA_WEBHOOK_SECRET"',
+      "2 failed.",
+    ]);
+    expect([...ok.logs, ...rejected.logs].filter((l) => l.includes("warning"))).toEqual([]);
   });
 
   it("slack and github app webhook keys required when enabled", async () => {

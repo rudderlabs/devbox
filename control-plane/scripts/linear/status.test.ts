@@ -35,6 +35,7 @@ async function run(o: {
     deployment: COMPOSE,
     configPath: "devbox.config.json",
     linear: o.linear,
+    integrations: o.linear ? { linear: o.linear } : {},
     ...(o.publicUrl === null ? {} : { publicUrl: o.publicUrl ?? PUBLIC }),
     applyCommand: "bun run up",
     statusCommand: "bun run linear:status",

@@ -114,6 +114,21 @@ describe("parseTarget", () => {
     );
   });
 
+  it("accepts integrations.jira and refuses a secret in it", () => {
+    const jira = {
+      enabled: true,
+      siteUrl: "https://example.atlassian.net",
+      cloudId: "00000000-0000-0000-0000-000000000000",
+      botEmail: "devbox@example.com",
+      botAccountId: "712020:00000000-0000-0000-0000-000000000000",
+      botName: "devbox",
+    };
+    expect(parseTarget({ context: "c", integrations: { jira } }, F).integrations).toEqual({ jira });
+    expect(() =>
+      parseTarget({ context: "c", integrations: { jira: { ...jira, webhookSecret: "x" } } }, F),
+    ).toThrow(/^devbox\.k8s\.json: integrations\.jira: unknown key "webhookSecret"/);
+  });
+
   it.each([
     ["eks", "devbox.k8s.json: must be a JSON object"],
     [{}, "devbox.k8s.json: context: required, the kube context of the cluster"],

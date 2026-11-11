@@ -156,6 +156,29 @@ integrations:
     botUserId: 0
     # -- Posts failed pipelines on the agent's merge requests back to the agent (GITLAB_CI_RESULT_ENABLED).
     ciResults: true
+  jira:
+    # -- Turns Jira on (JIRA_ENABLED). JIRA_API_TOKEN and JIRA_WEBHOOK_SECRET go in the integrations
+    # Secret. Set by bun run jira:setup through bun run k8s:install. Off, none of the block renders.
+    enabled: false
+    # -- Required when enabled: the site's https origin, for example https://example.atlassian.net.
+    siteUrl: ""
+    # -- Required when enabled: the site's cloud ID (a UUID, from the site's /_edge/tenant_info).
+    cloudId: ""
+    # -- Required when enabled: the email of the service account devbox acts as.
+    botEmail: ""
+    # -- Required when enabled: the service account's account ID (bun run jira:setup reads it from Jira).
+    botAccountId: ""
+    # -- Required when enabled: the service account's display name, which people @-mention.
+    botName: ""
+    statuses:
+      # -- The status devbox moves an issue to when it starts work. Empty: no move.
+      started: ""
+      # -- The status devbox moves an issue to when it finishes. Empty: no move.
+      done: ""
+      # -- The status devbox moves an issue to when the task fails. Empty: no move.
+      failed: ""
+    # -- Act on issues restricted by a security level too (JIRA_ALLOW_RESTRICTED_ISSUES).
+    allowRestrictedIssues: false
 
 github:
   # -- GitHub orgs whose members may drive devbox. Required with trustedUsers (either) when the GitHub App is enabled.
@@ -217,7 +240,7 @@ snapshotBuilder:
 
 ingress:
   webhooks:
-    # -- Public Ingress for /webhook/ only (GitHub, GitLab, Linear).
+    # -- Public Ingress for /webhook/ only (GitHub, GitLab, Linear, Jira).
     enabled: false
     # -- The Ingress class.
     className: ""

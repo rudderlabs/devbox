@@ -404,7 +404,7 @@ describe("source lines", () => {
 });
 
 describe("secretNamesFor", () => {
-  it("Compose gets nine, k8s ten (Slack)", () => {
+  it("Compose gets eleven, k8s twelve (Slack)", () => {
     const compose: SecretName[] = [
       "GITHUB_TOKEN",
       "LLM_API_KEY",
@@ -415,6 +415,8 @@ describe("secretNamesFor", () => {
       "GITLAB_TOKEN",
       "GITLAB_WEBHOOK_SIGNING_TOKEN",
       "GITLAB_WEBHOOK_SECRET",
+      "JIRA_API_TOKEN",
+      "JIRA_WEBHOOK_SECRET",
     ];
     expect(secretNamesFor(COMPOSE)).toEqual(compose);
     expect(secretNamesFor(K8S)).toEqual([...compose, "SLACK_BOT_TOKEN"]);
@@ -470,6 +472,29 @@ describe("checkWithRetry", () => {
       "compose/GITHUB_TOKEN": "ghp_local",
       "k8s:ctx/devbox/GITHUB_TOKEN": "ghp_new",
     });
+  });
+
+  it("forgetRejected: false keeps a rejected keychain value, and still asks again", async () => {
+    const kc = new MemoryKeychain({ "compose/JIRA_API_TOKEN": "saved" });
+    const d = deps({ keychain: kc, answers: ["typed"] });
+    const r = await resolveSecret("JIRA_API_TOKEN", d.deps);
+    const out = await checkWithRetry(
+      r,
+      d.deps,
+      async (v) => {
+        if (v === "saved") throw new CredentialRejected("Jira rejected JIRA_API_TOKEN (401)");
+        return "bot";
+      },
+      { forgetRejected: false },
+    );
+    expect(out.resolved).toEqual({ name: "JIRA_API_TOKEN", value: "typed", source: "prompt" });
+    expect(kc.entries()).toEqual({ "compose/JIRA_API_TOKEN": "saved" });
+    expect(d.calls.log).toEqual([
+      "JIRA_API_TOKEN: from the system keychain (compose)",
+      "The saved JIRA_API_TOKEN for compose was rejected; keeping it",
+      "Jira rejected JIRA_API_TOKEN (401)",
+      "Enter JIRA_API_TOKEN again, or press Enter on an empty value to exit.",
+    ]);
   });
 
   it("a rejected typed value is asked again until accepted", async () => {

@@ -1,7 +1,7 @@
 // `bun run k8s:check --target <file> [--skip-push-check]`:
 // the only command that reads Secrets. For every Secret the chart will use, it
-// checks the Secret and its keys, then the GitHub token, the LLM key and the
-// Linear client secret against their services, and each enabled integration's
+// checks the Secret and its keys, then the GitHub token, the LLM key, the
+// Linear client secret and the Jira API token against their services, and each enabled integration's
 // keys. With the GitHub App's devbox-minted tokens, the token checks run on a
 // token minted with the key from the App's key Secret (after checking that the
 // installation covers the repos). One line per item, never a value: Secrets
@@ -9,11 +9,13 @@
 import { createPrivateKey } from "node:crypto";
 import { GithubAppError } from "../../src/githubToken/mint";
 import { botMismatch, checkGitlab, identityKnown } from "../gitlab/check";
+import { checkJiraBot } from "../jira/check";
 import { GithubAppSetupError, mintAppToken } from "../lib/githubApp";
 import { isPem, PrivateKeyError } from "../lib/githubAppKey";
 import {
   enabledGithubApp,
   enabledGitlab,
+  enabledJira,
   enabledLinear,
   gitlabWebhookSecretName,
 } from "../lib/integrations";
@@ -52,6 +54,7 @@ const INTEGRATION_KEYS = {
   slack: ["SLACK_BOT_TOKEN"],
   githubApp: ["GITHUB_WEBHOOK_SECRET"],
   gitlab: [],
+  jira: ["JIRA_API_TOKEN", "JIRA_WEBHOOK_SECRET"],
 } as const;
 
 class Forbidden extends Error {}
@@ -330,6 +333,17 @@ export async function k8sCheck(deps: CheckDeps, opts: { skipPushCheck: boolean }
         await serviceItem("Linear client secret", async () => {
           const id = await checkLinear(linear.clientId, secret, deps.fetch);
           return `(devbox acts as ${id.viewerName} in workspace ${id.workspaceName})`;
+        });
+      }
+    }
+    const jira = enabledJira(integrations);
+    if (jira && ints) {
+      const setup = `bun run jira:setup --target ${deps.targetPath}`;
+      const token = usable(ints, "JIRA_API_TOKEN", false, "Jira API token");
+      if (token !== undefined) {
+        await serviceItem("Jira API token", async () => {
+          const bot = await checkJiraBot(jira, token, deps.fetch, setup);
+          return `(devbox acts as ${bot.displayName} on ${jira.siteUrl})`;
         });
       }
     }

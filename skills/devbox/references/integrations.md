@@ -11,8 +11,8 @@ Without `--target` the commands act on Compose (`devbox.config.json`); with
 
 ## The public URL
 
-GitHub and Linear deliver webhooks only to a public HTTPS URL, the
-deployment's top-level `publicUrl`, shared by both. The setups refuse
+GitHub, GitLab, Linear and Jira deliver webhooks only to a public HTTPS URL,
+the deployment's top-level `publicUrl`, shared by all of them. The setups refuse
 `http://`, `localhost` and private addresses.
 
 - Compose: a tunnel or reverse proxy to port 3000 (`ngrok http 3000`,
@@ -21,11 +21,12 @@ deployment's top-level `publicUrl`, shared by both. The setups refuse
   `bun run k8s:connect --target devbox.kind.json`.
 - Kubernetes: the Ingress host (`ingress.webhooks`, else `ingress.api`).
 
-A free tunnel gets a new URL each time it restarts, and GitHub and Linear keep
-sending to the old one. Recommend a URL that doesn't change: a free ngrok
-static domain (`ngrok http --url=<domain> 3000`) or a named Cloudflare tunnel.
+A free tunnel gets a new URL each time it restarts, and GitHub, Linear and
+Jira keep sending to the old one. Recommend a URL that doesn't change: a free
+ngrok static domain (`ngrok http --url=<domain> 3000`) or a named Cloudflare
+tunnel.
 If it changed anyway, run the setup again with the new `--public-url`
-([docs/linear.md](../../../docs/linear.md#when-the-public-url-changes)).
+([docs/public-url.md](../../../docs/public-url.md#when-it-changes)).
 
 ## GitHub App
 
@@ -82,6 +83,47 @@ token `gitlab:setup` generates (`GITLAB_WEBHOOK_SIGNING_TOKEN`, or
 deployment. No GitHub token is needed with GitLab repos only. Everything:
 [docs/gitlab.md](../../../docs/gitlab.md).
 
+## Jira
+
+Jira Cloud only. Assign an issue to the bot (a Jira service account) and it
+starts a task; comments that `@mention` the bot are follow-ups; replies are
+comments. A Jira admin creates the webhook that `jira:setup` prints. In a
+terminal, setup opens the page each step needs and always prints the link:
+Atlassian Administration for a new token, and the webhooks page on a first
+run, whenever it asks for the webhook secret, and when the public URL
+changed.
+
+```bash
+bun run jira:setup [--target <file>] [--public-url <url>] [--site <url>]
+bun run up                      # or k8s:kind / k8s:install --target <file>
+bun run jira:status [--target <file>]
+```
+
+- The service account's API token needs exactly the classic scopes
+  `read:jira-work`, `write:jira-work` and `read:jira-user`; setup names them
+  in its hint and in the token prompt. A token lasts at most a year: when it
+  expires, `jira:status` shows `auth rejected`; create a new one and run
+  `jira:setup` again.
+- Secrets: `JIRA_API_TOKEN` and `JIRA_WEBHOOK_SECRET`. Unlike
+  `linear:setup`, `jira:setup` uses them from the environment when they are
+  set.
+- Trust: every person with access to the site, as with Linear; never apps
+  such as Automation for Jira, service-desk customer accounts or the bot.
+  There are no trust lists. On a site with Jira Service Management,
+  help-center users who sign in with an Atlassian account count as people:
+  keep service projects out with the webhook's JQL (`project not in ("HELP")`)
+  or by not giving the service account access there. Both the person who
+  assigns the issue and its reporter must be people. Untrusted events are
+  ignored: nothing is posted, and the log has `jira_webhook.ignored` with its
+  reason.
+- Projects: devbox works in every project where the service account has its
+  role (Browse projects, Assignable user, Add comments, Transition work items,
+  Link work items); there is no project list. To keep it out of a project,
+  don't give the service account access there, or set the webhook's JQL.
+  `jira:setup` and `jira:status` warn about a permission held in no project.
+
+Everything: [docs/jira.md](../../../docs/jira.md).
+
 ## Slack
 
 Kubernetes only: `integrations.slack` in the target file and `SLACK_BOT_TOKEN`
@@ -89,8 +131,9 @@ Kubernetes only: `integrations.slack` in the target file and `SLACK_BOT_TOKEN`
 
 ## Turning one off
 
-`bun run github:disable` / `bun run linear:disable` set `enabled: false` and
-keep the settings, so the setup turns it back on. `--forget` deletes the
-settings and saved secrets: ask first. Apply with `up` (or the k8s command).
-Open Linear tasks keep running with nothing posted to Linear; GitHub rounds
-already queued run without replies.
+`bun run github:disable` / `bun run linear:disable` / `bun run jira:disable`
+set `enabled: false` and keep the settings, so the setup turns it back on.
+`--forget` deletes the settings and saved secrets: ask first. Apply with `up`
+(or the k8s command). Open Linear and Jira tasks keep running with nothing
+posted to them; GitHub rounds already queued run without replies. Jira's
+webhook stays in Jira: the user disables it there.

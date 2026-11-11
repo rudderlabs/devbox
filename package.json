@@ -24,6 +24,9 @@
     "gitlab:setup": "bun run setup && bun control-plane/scripts/gitlab.ts setup",
     "gitlab:status": "bun control-plane/scripts/gitlab.ts status",
     "gitlab:disable": "bun control-plane/scripts/gitlab.ts disable",
+    "jira:setup": "bun run setup && bun control-plane/scripts/jira.ts setup",
+    "jira:status": "bun control-plane/scripts/jira.ts status",
+    "jira:disable": "bun control-plane/scripts/jira.ts disable",
     "test:chart": "bun test deploy/helm/devbox/tests",
     "test": "cd harness && make test && cd ../control-plane && bun test && cd ../cli && bun test && cd .. && bun run test:chart"
   }

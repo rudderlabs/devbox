@@ -81,6 +81,19 @@ describe("probeWebhook", () => {
     });
   });
 
+  it("Jira: probes /webhook/jira and names integrations.jira.enabled on 404", async () => {
+    const hook = "https://hooks.example.com/webhook/jira";
+    const ok = fakeFetch(() => Response.json({ error: "invalid signature" }, { status: 401 }));
+    const opts = { fromApiIngress: false, integration: "Jira" } as const;
+    expect(await probeWebhook(PUBLIC, "/webhook/jira", ok.fetch, opts)).toEqual({ ok: true });
+    expect(ok.requests.map((r) => r.url)).toEqual([hook]);
+    const missing = fakeFetch(() => new Response("404 Not Found", { status: 404 }));
+    expect(await probeWebhook(PUBLIC, "/webhook/jira", missing.fetch, opts)).toEqual({
+      ok: false,
+      message: `the webhook URL ${hook} got 404: something answered, but not devbox with Jira on. Check that the tunnel or proxy forwards to the control plane (port 3000 on Compose), that integrations.jira.enabled is true and applied, or restart the control plane`,
+    });
+  });
+
   it("no answer", async () => {
     expect(await probe(new Error("getaddrinfo ENOTFOUND hooks.example.com"))).toEqual({
       ok: false,

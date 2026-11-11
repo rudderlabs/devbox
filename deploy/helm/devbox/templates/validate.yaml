@@ -104,12 +104,20 @@ selectors all assume the release namespace devbox. */ -}}
 {{- $linear := .Values.integrations.linear | default dict }}
 {{- $slack := .Values.integrations.slack | default dict }}
 {{- $app := .Values.integrations.githubApp | default dict }}
+{{- $jira := .Values.integrations.jira | default dict }}
 {{- $github := .Values.github | default dict }}
 {{- if and $linear.enabled (not $linear.clientId) }}
 {{- fail "integrations.linear.enabled is true: integrations.linear.clientId is required" }}
 {{- end }}
 {{- if and $slack.enabled (not $slack.channelId) }}
 {{- fail "integrations.slack.enabled is true: integrations.slack.channelId is required" }}
+{{- end }}
+{{- if $jira.enabled }}
+{{- range $key := list "siteUrl" "cloudId" "botEmail" "botAccountId" "botName" }}
+{{- if not (index $jira $key) }}
+{{- fail (printf "integrations.jira.enabled is true: integrations.jira.%s is required" $key) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- $gitlabApp := .Values.integrations.gitlab | default dict }}
 {{- if $gitlabApp.enabled }}

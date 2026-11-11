@@ -10,6 +10,7 @@ describe("installOptions", () => {
       skipPushCheck: false,
       skipLlmCheck: false,
       skipLinearCheck: false,
+      skipJiraCheck: false,
       netpol: "auto",
       timeout: "15m",
     });
@@ -22,6 +23,7 @@ describe("installOptions", () => {
         "skip-push-check": true,
         "skip-llm-check": true,
         "skip-linear-check": true,
+        "skip-jira-check": true,
         "netpol-check": true,
         timeout: "30m",
       }),
@@ -30,6 +32,7 @@ describe("installOptions", () => {
       skipPushCheck: true,
       skipLlmCheck: true,
       skipLinearCheck: true,
+      skipJiraCheck: true,
       netpol: "force",
       timeout: "30m",
     });
@@ -66,6 +69,11 @@ describe("checkKindArgs", () => {
   it("parses --skip-linear-check", () => {
     const { values } = parseArgs({ args: ["--skip-linear-check"], options: INSTALL_FLAGS });
     expect(installOptions(values).skipLinearCheck).toBe(true);
+  });
+
+  it("parses --skip-jira-check", () => {
+    const { values } = parseArgs({ args: ["--skip-jira-check"], options: INSTALL_FLAGS });
+    expect(installOptions(values).skipJiraCheck).toBe(true);
   });
 
   it("--no-keychain gives the install no keychain", () => {

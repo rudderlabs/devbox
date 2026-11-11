@@ -255,7 +255,7 @@ describe("IntegrationRegistry", () => {
       holds: { heldTasks: 2, oldestHoldAgeMs: 5_000 },
     });
     expect(await r.status("linear")).toEqual({ off: "linear", holds: none });
-    for (const name of ["jira", "constructor"]) expect(r.status(name)).toBeUndefined();
+    for (const name of ["clickup", "constructor"]) expect(r.status(name)).toBeUndefined();
   });
 });
 
@@ -280,10 +280,10 @@ describe("parseIntegrationConfigs", () => {
 });
 
 describe("the integrations this build has", () => {
-  it("are linear, github, gitlab and api; linear and api create tasks", () => {
+  it("are linear, github, gitlab, api and jira; linear, api and jira create tasks", () => {
     const r = registry([...definitions]);
-    expect(definitions.map((d) => d.name)).toEqual(["linear", "github", "gitlab", "api"]);
-    expect(r.taskSources).toEqual(["linear", "api"]);
+    expect(definitions.map((d) => d.name)).toEqual(["linear", "github", "gitlab", "api", "jira"]);
+    expect(r.taskSources).toEqual(["linear", "api", "jira"]);
   });
 
   it("answer their status bodies while off", async () => {
@@ -300,9 +300,10 @@ describe("the integrations this build has", () => {
       holds: none,
     });
     expect(await r.status("api")).toEqual({ enabled: false, holds: none });
+    expect(await r.status("jira")).toEqual({ configured: false, holds: none });
   });
 
-  it("bind each TaskService to its integration; only linear and api may assign and restart", async () => {
+  it("bind each TaskService to its integration; only linear, api and jira may assign and restart", async () => {
     const r = registry([...definitions]);
     assigned.length = 0;
     const assign = (name: string, target: ReplyTarget) =>
@@ -317,7 +318,8 @@ describe("the integrations this build has", () => {
       });
     await assign("linear", { id: "s", spec: { kind: "linear_session" } });
     await assign("api", { id: "s", spec: { kind: "api_session" } });
-    expect(assigned.map((a) => a.source)).toEqual(["linear", "api"]);
+    await assign("jira", { id: "1:2", spec: { kind: "jira_issue", issueId: "1" } });
+    expect(assigned.map((a) => a.source)).toEqual(["linear", "api", "jira"]);
 
     const pr = { kind: "issue_comment", owner: "o", repo: "r", prNumber: 1, commentId: 1 } as const;
     await expect(assign("github", { id: "1", spec: pr })).rejects.toThrow(
@@ -331,7 +333,7 @@ describe("the integrations this build has", () => {
         target: { id: "1", spec: pr },
       }),
     ).rejects.toThrow("restart: github creates no tasks");
-    expect(assigned).toHaveLength(2);
+    expect(assigned).toHaveLength(3);
   });
 
   it("are on from their own settings", async () => {

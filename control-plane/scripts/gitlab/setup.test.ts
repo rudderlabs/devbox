@@ -141,7 +141,7 @@ function harness(o: {
     repos: o.instance === null ? [] : [REPO],
     gitlab: o.gitlab,
     trust: o.trust ?? { trustedGroups: [], trustedUsers: [] },
-    linear: false,
+    integrations: {},
     ...(o.publicUrl ? { publicUrl: o.publicUrl } : {}),
     ...(o.ingressUrl ? { ingressUrl: o.ingressUrl } : {}),
     ...(o.byoGitlabSecret ? { byoGitlabSecret: o.byoGitlabSecret } : {}),
