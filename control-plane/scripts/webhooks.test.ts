@@ -9,10 +9,12 @@ const EXTERNAL_LINE = `Update the webhook URL in the GitHub App to ${NEXT}/webho
 const RUN_GITHUB = "Run bun run github:setup to update the GitHub App's webhook URL";
 const JIRA_LINE = `Update the webhook URL in Jira (Settings → System → WebHooks) to ${NEXT}/webhook/jira`;
 const GITLAB_LINE = `Update the URL of the devbox webhook on each GitLab project (Settings → Webhooks) to ${NEXT}/webhook/gitlab`;
+const CLICKUP_LINE = "Run bun run clickup:setup to update the ClickUp webhook's URL";
 const OWN = "the setup's own line";
 
 const LINEAR: Integrations = { linear: { enabled: true, clientId: "c" } };
 const JIRA: Integrations = { jira: { enabled: true } };
+const CLICKUP: Integrations = { clickup: { enabled: true } };
 const GITLAB_BLOCK = {
   enabled: true,
   botUsername: "devbox",
@@ -46,11 +48,13 @@ describe("publicUrlChangeLines", () => {
     ["Jira, from another setup", JIRA, { name: "linear" }, [JIRA_LINE]],
     ["GitLab, from another setup", GITLAB, { name: "jira" }, [GITLAB_LINE]],
     ["GitLab, from its own setup, which prints its own webhooks", GITLAB, { name: "gitlab" }, []],
+    ["ClickUp, from another setup", CLICKUP, { name: "jira" }, [CLICKUP_LINE]],
+    ["ClickUp, from its own setup, which updates its webhook", CLICKUP, { name: "clickup" }, []],
     [
-      "everything on: Linear, GitHub, GitLab, Jira",
-      { ...LINEAR, ...app("devbox"), ...GITLAB, ...JIRA },
+      "everything on: Linear, GitHub, GitLab, Jira, ClickUp",
+      { ...LINEAR, ...app("devbox"), ...GITLAB, ...JIRA, ...CLICKUP },
       { name: "linear", line: LINEAR_LINE },
-      [LINEAR_LINE, RUN_GITHUB, GITLAB_LINE, JIRA_LINE],
+      [LINEAR_LINE, RUN_GITHUB, GITLAB_LINE, JIRA_LINE, CLICKUP_LINE],
     ],
     [
       "the own line keeps its place",
@@ -71,6 +75,7 @@ describe("publicUrlChangeLines", () => {
         githubApp: { ...app("devbox").githubApp, enabled: false },
         jira: { enabled: false },
         gitlab: { ...GITLAB_BLOCK, enabled: false },
+        clickup: { enabled: false },
       },
       { name: "linear" },
       [],
@@ -82,10 +87,19 @@ describe("publicUrlChangeLines", () => {
     });
   }
 
-  it("on k8s, the github:setup line names the target file", () => {
+  it("on k8s, the github:setup and clickup:setup lines name the target file", () => {
     expect(
-      publicUrlChangeLines(OLD, NEXT, app("devbox"), { name: "linear" }, " --target /t.json"),
-    ).toEqual(["Run bun run github:setup --target /t.json to update the GitHub App's webhook URL"]);
+      publicUrlChangeLines(
+        OLD,
+        NEXT,
+        { ...app("devbox"), ...CLICKUP },
+        { name: "linear" },
+        " --target /t.json",
+      ),
+    ).toEqual([
+      "Run bun run github:setup --target /t.json to update the GitHub App's webhook URL",
+      "Run bun run clickup:setup --target /t.json to update the ClickUp webhook's URL",
+    ]);
   });
 
   it("an organization's App: its settings link is the organization's", () => {
