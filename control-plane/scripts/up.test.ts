@@ -1,18 +1,25 @@
 import { describe, expect, it } from "bun:test";
-import { jiraPreflightMode } from "./up";
+import { preflightMode } from "./up";
 
-describe("jiraPreflightMode", () => {
-  it("none without Jira, whatever the flags", () => {
-    expect(jiraPreflightMode(false, {})).toBeUndefined();
-    expect(jiraPreflightMode(false, { "skip-checks": true })).toBeUndefined();
-  });
+describe("preflightMode", () => {
+  for (const flag of ["skip-jira-check", "skip-clickup-check"] as const) {
+    it(`${flag}: none without the integration, whatever the flags`, () => {
+      expect(preflightMode(false, {}, flag)).toBeUndefined();
+      expect(preflightMode(false, { "skip-checks": true, [flag]: true }, flag)).toBeUndefined();
+    });
 
-  it("checks the token by default", () => {
-    expect(jiraPreflightMode(true, {})).toBe("checked");
-  });
+    it(`${flag}: checks the token by default`, () => {
+      expect(preflightMode(true, {}, flag)).toBe("checked");
+    });
 
-  it("--skip-checks and --skip-jira-check each leave it unchecked", () => {
-    expect(jiraPreflightMode(true, { "skip-checks": true })).toBe("unchecked");
-    expect(jiraPreflightMode(true, { "skip-jira-check": true })).toBe("unchecked");
+    it(`--skip-checks and --${flag} each leave it unchecked`, () => {
+      expect(preflightMode(true, { "skip-checks": true }, flag)).toBe("unchecked");
+      expect(preflightMode(true, { [flag]: true }, flag)).toBe("unchecked");
+    });
+  }
+
+  it("one integration's flag leaves the other checked", () => {
+    expect(preflightMode(true, { "skip-jira-check": true }, "skip-clickup-check")).toBe("checked");
+    expect(preflightMode(true, { "skip-clickup-check": true }, "skip-jira-check")).toBe("checked");
   });
 });

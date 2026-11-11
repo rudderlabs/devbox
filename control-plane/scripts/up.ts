@@ -24,10 +24,12 @@
 // four empty, so a LINEAR_* variable left in the shell never turns it on.
 // Jira likewise, with `integrations.jira.enabled: true`: its settings and its
 // two secrets (JIRA_API_TOKEN, JIRA_WEBHOOK_SECRET), every JIRA_* empty
-// otherwise.
+// otherwise. ClickUp the same way, with `integrations.clickup.enabled: true`
+// and CLICKUP_API_TOKEN and CLICKUP_WEBHOOK_SECRET.
 //
-// --skip-checks skips the GitHub, LLM, Linear and Jira checks before startup,
-// for offline verification and development; --skip-jira-check only Jira's.
+// --skip-checks skips the GitHub, LLM, Linear, Jira and ClickUp checks before
+// startup, for offline verification and development; --skip-jira-check only
+// Jira's, --skip-clickup-check only ClickUp's.
 //
 // --no-keychain never reads or writes the keychain.
 //
@@ -39,6 +41,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { parseArgs } from "node:util";
+import { clickupPreflight, type ClickupSecrets as ResolvedClickup } from "./clickup/check";
 import {
   checkGitlab,
   type GitlabIdentity,
@@ -56,7 +59,9 @@ import {
 } from "./lib/githubApp";
 import { type PrivateKey, resolvePrivateKey } from "./lib/githubAppKey";
 import {
+  type ClickupIntegration,
   type EnabledGithubApp,
+  enabledClickup,
   enabledGithubApp,
   enabledGitlab,
   enabledJira,
@@ -201,6 +206,44 @@ export function jiraComposeEnv(
     JIRA_ALLOW_RESTRICTED_ISSUES: on.allowRestrictedIssues ? "true" : "",
     JIRA_API_TOKEN: secrets.apiToken,
     JIRA_WEBHOOK_SECRET: secrets.webhookSecret,
+  };
+}
+
+type ClickupSecrets = { apiToken: string; webhookSecret: string };
+const CLICKUP_ENV_NAMES = [
+  "CLICKUP_ENABLED",
+  "CLICKUP_TEAM_ID",
+  "CLICKUP_BOT_USER_ID",
+  "CLICKUP_BOT_NAME",
+  "CLICKUP_STATUS_STARTED",
+  "CLICKUP_STATUS_DONE",
+  "CLICKUP_STATUS_FAILED",
+  "CLICKUP_API_TOKEN",
+  "CLICKUP_WEBHOOK_SECRET",
+] as const;
+
+// The ClickUp values for Compose: every one empty unless
+// `integrations.clickup` is enabled, whatever the shell or the secrets say.
+export function clickupComposeEnv(
+  clickup: ClickupIntegration | undefined,
+  secrets?: ClickupSecrets,
+): Record<string, string> {
+  const off = Object.fromEntries(CLICKUP_ENV_NAMES.map((name) => [name, ""]));
+  const on = enabledClickup({ clickup });
+  if (!on) return off;
+  if (!secrets) {
+    throw new Error("integrations.clickup is enabled but the ClickUp secrets were not resolved");
+  }
+  return {
+    CLICKUP_ENABLED: "true",
+    CLICKUP_TEAM_ID: on.teamId,
+    CLICKUP_BOT_USER_ID: String(on.botUserId),
+    CLICKUP_BOT_NAME: on.botName,
+    CLICKUP_STATUS_STARTED: on.statuses?.started ?? "",
+    CLICKUP_STATUS_DONE: on.statuses?.done ?? "",
+    CLICKUP_STATUS_FAILED: on.statuses?.failed ?? "",
+    CLICKUP_API_TOKEN: secrets.apiToken,
+    CLICKUP_WEBHOOK_SECRET: secrets.webhookSecret,
   };
 }
 
@@ -480,6 +523,7 @@ export function composeEnvFor(
     opensandboxKey: string;
     linear?: LinearSecrets;
     jira?: JiraSecrets;
+    clickup?: ClickupSecrets;
     githubApp?: GithubAppSecrets;
     gitlab?: GitlabSecrets;
     gitlabGit?: Identity;
@@ -503,6 +547,7 @@ export function composeEnvFor(
     ...llmComposeEnv(cfg.llm),
     ...linearComposeEnv(cfg.integrations.linear, values.linear),
     ...jiraComposeEnv(cfg.integrations.jira, values.jira),
+    ...clickupComposeEnv(cfg.integrations.clickup, values.clickup),
     ...githubComposeEnv(enabledGithubApp(cfg.integrations), cfg, values.githubApp ?? {}),
     ...gitlabComposeEnv(
       cfg.gitlab,
@@ -640,16 +685,18 @@ export async function appToken(
   return token;
 }
 
-// Whether and when `up` runs Jira's preflight: not at all without Jira;
-// "unchecked" (save offers only) before the other checks
-// with --skip-checks or --skip-jira-check, so a failing GitHub or LLM check
-// doesn't lose its typed secrets; else "checked" after them.
-export function jiraPreflightMode(
-  jiraOn: boolean,
-  values: { "skip-checks"?: boolean; "skip-jira-check"?: boolean },
+// Whether and when `up` runs Jira's or ClickUp's preflight: not at all
+// without the integration; "unchecked" (save offers only) before the other
+// checks with --skip-checks or its own --skip-*-check flag, so a failing
+// GitHub or LLM check doesn't lose its typed secrets; else "checked" after
+// them.
+export function preflightMode(
+  on: boolean,
+  values: { "skip-checks"?: boolean; "skip-jira-check"?: boolean; "skip-clickup-check"?: boolean },
+  flag: "skip-jira-check" | "skip-clickup-check",
 ): "unchecked" | "checked" | undefined {
-  if (!jiraOn) return undefined;
-  return values["skip-checks"] || values["skip-jira-check"] ? "unchecked" : "checked";
+  if (!on) return undefined;
+  return values["skip-checks"] || values[flag] ? "unchecked" : "checked";
 }
 
 export async function up(argv: string[], env: Env = process.env): Promise<void> {
@@ -658,6 +705,7 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
     options: {
       "skip-checks": { type: "boolean" },
       "skip-jira-check": { type: "boolean" },
+      "skip-clickup-check": { type: "boolean" },
       "dns-resolver": { type: "string" },
       "no-keychain": { type: "boolean" },
     },
@@ -735,12 +783,22 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
   }
   // Both Jira secrets, likewise only when Jira is enabled.
   const jira = enabledJira(cfg.integrations);
-  const jiraMode = jiraPreflightMode(jira !== undefined, values);
+  const jiraMode = preflightMode(jira !== undefined, values, "skip-jira-check");
   let jiraR: ResolvedJira | undefined;
   if (jira) {
     jiraR = {
       token: await resolveSecret("JIRA_API_TOKEN", secretDeps),
       webhook: await resolveSecret("JIRA_WEBHOOK_SECRET", secretDeps),
+    };
+  }
+  // Both ClickUp secrets, likewise only when ClickUp is enabled.
+  const clickup = enabledClickup(cfg.integrations);
+  const clickupMode = preflightMode(clickup !== undefined, values, "skip-clickup-check");
+  let clickupR: ResolvedClickup | undefined;
+  if (clickup) {
+    clickupR = {
+      token: await resolveSecret("CLICKUP_API_TOKEN", secretDeps),
+      webhook: await resolveSecret("CLICKUP_WEBHOOK_SECRET", secretDeps),
     };
   }
 
@@ -754,6 +812,10 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
   if (jira && jiraMode === "unchecked") {
     if (!skipChecks) log("warning: Jira check skipped (--skip-jira-check)");
     jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: true, fetch });
+  }
+  if (clickup && clickupMode === "unchecked") {
+    if (!skipChecks) log("warning: ClickUp check skipped (--skip-clickup-check)");
+    clickupR = await clickupPreflight(clickup, clickupR, secretDeps, { skip: true, fetch });
   }
   if (gh.app) {
     github = await appToken(gh.app, cfg, gh.key, secretDeps, { skipChecks, fetch });
@@ -859,6 +921,9 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
   if (jira && jiraMode === "checked") {
     jiraR = await jiraPreflight(jira, jiraR, secretDeps, { skip: false, fetch });
   }
+  if (clickup && clickupMode === "checked") {
+    clickupR = await clickupPreflight(clickup, clickupR, secretDeps, { skip: false, fetch });
+  }
   const llm = llmR.value;
   if (!github && usesGithub) {
     log("warning: no GitHub token: cloning anonymously; GitHub calls from devbox will fail");
@@ -877,6 +942,10 @@ export async function up(argv: string[], env: Env = process.env): Promise<void> 
       webhookSecret: linearR.webhook.value,
     },
     jira: jiraR && { apiToken: jiraR.token.value, webhookSecret: jiraR.webhook.value },
+    clickup: clickupR && {
+      apiToken: clickupR.token.value,
+      webhookSecret: clickupR.webhook.value,
+    },
     githubApp: gh.app && { webhookSecret: gh.webhook.value, pem: gh.key?.pem },
     gitlab: gitlabR && { token: gitlabR.token.value, webhookToken: gitlabR.webhook?.value },
     ...(gitlabGit ? { gitlabGit } : {}),
@@ -955,6 +1024,7 @@ with more than one, name the repo in the task.
   bun run down`);
   if (linear) log("\nCheck Linear with: bun run linear:status");
   if (jira) log("\nCheck Jira with: bun run jira:status");
+  if (clickup) log("\nCheck ClickUp with: bun run clickup:status");
   if (app) log("\nCheck GitHub with: bun run github:status");
   if (gitlabOn) log("\nCheck GitLab with: bun run gitlab:status");
   else if (cfg.gitlab) log("\nFor merge request notes and pipelines: bun run gitlab:setup");

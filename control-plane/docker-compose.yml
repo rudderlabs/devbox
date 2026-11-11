@@ -176,6 +176,18 @@ services:
       JIRA_ALLOW_RESTRICTED_ISSUES: ${JIRA_ALLOW_RESTRICTED_ISSUES:-}
       JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
       JIRA_WEBHOOK_SECRET: ${JIRA_WEBHOOK_SECRET:-}
+      # ClickUp, on only when devbox.config.json has `integrations.clickup`
+      # with `enabled: true`: `bun run up` then sets these from it and from
+      # the two secrets, and otherwise passes them all empty.
+      CLICKUP_ENABLED: ${CLICKUP_ENABLED:-}
+      CLICKUP_TEAM_ID: ${CLICKUP_TEAM_ID:-}
+      CLICKUP_BOT_USER_ID: ${CLICKUP_BOT_USER_ID:-}
+      CLICKUP_BOT_NAME: ${CLICKUP_BOT_NAME:-}
+      CLICKUP_STATUS_STARTED: ${CLICKUP_STATUS_STARTED:-}
+      CLICKUP_STATUS_DONE: ${CLICKUP_STATUS_DONE:-}
+      CLICKUP_STATUS_FAILED: ${CLICKUP_STATUS_FAILED:-}
+      CLICKUP_API_TOKEN: ${CLICKUP_API_TOKEN:-}
+      CLICKUP_WEBHOOK_SECRET: ${CLICKUP_WEBHOOK_SECRET:-}
       # GitHub webhooks, on only with `integrations.githubApp` enabled:
       # `bun run up` then sets them from the App, and otherwise passes them
       # empty. The trust lists come from devbox.config.json's `github` block
