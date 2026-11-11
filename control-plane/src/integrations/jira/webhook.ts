@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import { parseExperimentalFlags } from "../../services/experimentalFlags";
 import { errorClass, withTimeout } from "../http";
 import type { Logger, ReplyTarget, TaskService } from "../types";
+import { adfComments } from "./adf";
 import type { JiraClient } from "./client";
 import type { JiraConfig } from "./config";
 import {
@@ -21,6 +22,14 @@ import { wikiToMarkdown } from "./wiki";
 // The issue read on the webhook request is kept short.
 const ISSUE_READ_TIMEOUT_MS = 3_000;
 const ISSUE_ID = /^[1-9]\d{0,14}$/;
+
+// Said on the issue when devbox takes an assignment, so people see it was
+// picked up: until the reply, minutes later, nothing else may show (the status
+// can already be the started one, or none is configured).
+const START_COMMENT = "Working on this. I'll reply here when I'm done.";
+// The start comment is sent beside the answer, not awaited, under its own
+// timeout.
+const START_COMMENT_TIMEOUT_MS = 10_000;
 
 // A Jira reply target's spec: replies are comments on the issue. The
 // target's id is the delegation id (`issueId:changelogId`) for an assignment,
@@ -57,7 +66,7 @@ export class JiraWebhookController {
   constructor(
     private readonly tasks: Pick<TaskService, "assign" | "findTask" | "enqueueRound">,
     private readonly cfg: JiraConfig,
-    private readonly client: Pick<JiraClient, "getIssue">,
+    private readonly client: Pick<JiraClient, "getIssue" | "addComment">,
     private readonly log: Logger,
     private readonly onSignedWebhook: () => void,
   ) {}
@@ -153,7 +162,22 @@ export class JiraWebhookController {
       target: () => issueTarget(id, issueId, order),
     });
     this.log.info("jira assignment", { ...meta, taskId, result, accountId: a.actor.accountId });
+    if (result !== "duplicate") this.sayStarted(issueId, meta);
     return c.json({ status: "ok" }, 200);
+  }
+
+  // The start comment, once per assignment: a redelivery is a duplicate and
+  // says nothing, a re-assignment (a restart) says it again. Not awaited, so
+  // Jira gets its answer at once; a failure is logged, and the reply still
+  // comes when the run ends.
+  private sayStarted(issueId: string, meta: Record<string, unknown>): void {
+    const [doc] = adfComments(START_COMMENT);
+    if (!doc) return;
+    withTimeout(START_COMMENT_TIMEOUT_MS, (signal) =>
+      this.client.addComment(issueId, doc, signal),
+    ).catch((err) => {
+      this.log.warn("jira start comment failed", { ...meta, error: errorClass(err) });
+    });
   }
 
   // A follow-up on the issue's task. Only a comment that mentions the bot and
