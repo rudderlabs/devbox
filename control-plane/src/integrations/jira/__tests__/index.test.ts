@@ -401,8 +401,67 @@ describe("JiraIntegration onPrOpened", () => {
     await jira.onPrOpened(hookCtx([]), ISSUE_TASK, { ...PR, url });
     expect(jiraCalls).toEqual([]);
     expect(logged(warn)).toEqual([
-      ["jira PR link skipped: not a GitHub pull request URL", { taskId: "task-1" }],
+      [
+        "jira PR link skipped: not a GitHub pull request or GitLab merge request URL",
+        { taskId: "task-1" },
+      ],
     ]);
+  });
+
+  it("links a merge request under the GitLab instance, titled group/project!N", async () => {
+    const { jira, jiraCalls } = setup({ cfg: { gitlabBaseUrl: "https://git.example.com/gl" } });
+    for (const url of [
+      "https://git.example.com/gl/acme/sub/widgets/-/merge_requests/12",
+      "https://git.example.com/gl/acme/sub/widgets/-/merge_requests/12/diffs",
+    ]) {
+      await jira.onPrOpened(hookCtx([]), ISSUE_TASK, { ...PR, url });
+    }
+    expect(linked(jiraCalls).map((l) => l.title)).toEqual([
+      "acme/sub/widgets!12",
+      "acme/sub/widgets!12",
+    ]);
+  });
+
+  it.each([
+    [
+      "no GitLab instance set",
+      undefined,
+      "https://git.example.com/acme/widgets/-/merge_requests/12",
+    ],
+    [
+      "another host",
+      "https://git.example.com",
+      "https://gitlab.com/acme/widgets/-/merge_requests/12",
+    ],
+    [
+      "a lookalike host",
+      "https://git.example.com",
+      "https://git.example.com.evil.example/acme/widgets/-/merge_requests/12",
+    ],
+    [
+      "credentials",
+      "https://git.example.com",
+      "https://u:p@git.example.com/acme/widgets/-/merge_requests/12",
+    ],
+    [
+      "a path outside the instance's prefix",
+      "https://git.example.com/gl",
+      "https://git.example.com/glx/acme/widgets/-/merge_requests/12",
+    ],
+    [
+      "a dot segment",
+      "https://git.example.com",
+      "https://git.example.com/../widgets/-/merge_requests/12",
+    ],
+    [
+      "not a merge request",
+      "https://git.example.com",
+      "https://git.example.com/acme/widgets/-/issues/12",
+    ],
+  ])("never links a GitLab URL with %s", async (_, gitlabBaseUrl, url) => {
+    const { jira, jiraCalls } = setup({ cfg: { gitlabBaseUrl } });
+    await jira.onPrOpened(hookCtx([]), ISSUE_TASK, { ...PR, url });
+    expect(jiraCalls).toEqual([]);
   });
 
   it("lets a retryable failure escape so the event is held, and nothing else", async () => {

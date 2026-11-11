@@ -1,3 +1,4 @@
+import { parseGitlabBaseUrl } from "../../sandboxConfig";
 import { missingError, parseSwitch, present } from "../env";
 
 export type JiraConfig = {
@@ -19,6 +20,9 @@ export type JiraConfig = {
   apiToken: string;
   // HMAC secret for /webhook/jira (X-Hub-Signature).
   webhookSecret: string;
+  // The deployment's GitLab instance (core's GITLAB_BASE_URL): merge requests
+  // under it are linked on issues, as github.com pull requests are.
+  gitlabBaseUrl?: string;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -51,6 +55,7 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
   if (!JIRA_ACCOUNT_ID.test(botAccountId)) {
     throw new Error("JIRA_BOT_ACCOUNT_ID is not a Jira account id");
   }
+  const gitlabBaseUrl = parseGitlabBaseUrl(env);
   return {
     siteUrl: jiraSiteOrigin(siteUrl),
     cloudId,
@@ -65,6 +70,7 @@ export function parseJiraConfig(env: Record<string, string | undefined>): JiraCo
     allowRestrictedIssues: parseSwitch(env, "JIRA_ALLOW_RESTRICTED_ISSUES"),
     apiToken,
     webhookSecret,
+    ...(gitlabBaseUrl !== undefined ? { gitlabBaseUrl } : {}),
   };
 }
 

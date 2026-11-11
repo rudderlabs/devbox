@@ -114,11 +114,14 @@ export class JiraIntegration implements Integration {
   // Links the pull request on the issue. Jira updates the link with the same
   // globalId in place, so this runs on every pr_opened dispatch; a
   // RetryableError holds the event. The URL comes from the sandbox and Jira
-  // shows it as a link, so only an https github.com pull request is linked.
+  // shows it as a link, so only an https github.com pull request or a merge
+  // request on the deployment's GitLab instance is linked.
   async onPrOpened(ctx: HookCtx, task: Task, pr: PrRef): Promise<void> {
-    const title = githubPrTitle(pr.url);
+    const title = prTitle(pr.url, this.cfg.gitlabBaseUrl);
     if (!title) {
-      ctx.log.warn("jira PR link skipped: not a GitHub pull request URL", { taskId: task.id });
+      ctx.log.warn("jira PR link skipped: not a GitHub pull request or GitLab merge request URL", {
+        taskId: task.id,
+      });
       return;
     }
     try {
@@ -228,12 +231,19 @@ function failureText(m: Extract<Outbound, { type: "failure" }>, bot: string): st
   }
 }
 
-// `owner/repo#N` for an https github.com pull request URL, or any page of one;
-// undefined for anything else (another host, a lookalike, credentials, http).
+// The link title for a pull request or any page of one: `owner/repo#N` on
+// https github.com, `group/project!N` for a merge request under the GitLab
+// instance. Undefined for anything else: another host, a lookalike,
+// credentials, http on github.com, or a GitLab URL with no instance set.
 const GITHUB_PR = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/pull\/(\d+)(?:[/?#]|$)/;
-function githubPrTitle(url: string): string | undefined {
-  const m = GITHUB_PR.exec(url);
-  return m ? `${m[1]}/${m[2]}#${m[3]}` : undefined;
+const SEGMENT = "[A-Za-z0-9_][A-Za-z0-9._-]*";
+const GITLAB_MR = new RegExp(`^/(${SEGMENT}(?:/${SEGMENT})*)/-/merge_requests/(\\d+)(?:[/?#]|$)`);
+function prTitle(url: string, gitlabBaseUrl: string | undefined): string | undefined {
+  const gh = GITHUB_PR.exec(url);
+  if (gh) return `${gh[1]}/${gh[2]}#${gh[3]}`;
+  if (!gitlabBaseUrl || !url.startsWith(`${gitlabBaseUrl}/`)) return undefined;
+  const mr = GITLAB_MR.exec(url.slice(gitlabBaseUrl.length));
+  return mr ? `${mr[1]}!${mr[2]}` : undefined;
 }
 
 // Jira's 400 for a comment over its length limit.

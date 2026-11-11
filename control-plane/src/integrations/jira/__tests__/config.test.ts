@@ -52,6 +52,14 @@ describe("parseJiraConfig", () => {
     });
   });
 
+  it("JIRA: takes core's GitLab instance, normalised, for merge request links", () => {
+    expect(parseJiraConfig(JIRA_ENV)?.gitlabBaseUrl).toBeUndefined();
+    expect(
+      parseJiraConfig({ ...JIRA_ENV, GITLAB_BASE_URL: " https://git.example.com/gl/ " })
+        ?.gitlabBaseUrl,
+    ).toBe("https://git.example.com/gl");
+  });
+
   it("JIRA: optional settings default to no transitions and no restricted issues", () => {
     expect(parseJiraConfig(JIRA_ENV)).toMatchObject({
       statuses: { started: undefined, done: undefined, failed: undefined },

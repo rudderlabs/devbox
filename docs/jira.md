@@ -9,9 +9,10 @@ GitOps).
 
 - **Assign an issue** to the bot (the service account), and it starts a task,
   as `bun run devbox create` does. It moves the issue to In Progress (the
-  "started" status), links the draft pull request on the issue and, when the
-  run finishes, moves the issue to a done or failed status if one is set
-  ([Statuses](#statuses)).
+  "started" status), links the draft pull request on the issue (a github.com
+  pull request, or a merge request on the deployment's GitLab instance) and,
+  when the run finishes, moves the issue to a done or failed status if one is
+  set ([Statuses](#statuses)).
 - **Follow-ups** are comments that mention the bot, picked from Jira's @-list
   or typed as `@<bot name>`. They reach the task, like `bun run devbox send`.
 - **Replies** arrive as comments on the issue.
