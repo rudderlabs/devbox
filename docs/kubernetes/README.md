@@ -111,7 +111,7 @@ acts on a cluster you did not name. The file has five keys:
 | `profile` | The CLI profile to write. Default: `k8s-<context>`, made lower-case with other characters replaced by `-` (an EKS ARN context becomes `k8s-<cluster name>`). |
 | `values` | Chart values, passed to Helm as they are. See the [values reference](../../deploy/helm/devbox/README.md). `storage.storageClass` and `storage.volumeSnapshotClass` are required. Set concurrency and per-sandbox limits under `values.sandbox`; Kubernetes ignores the Compose-only `sandbox` block in `devbox.config.json`. `repos`, `llm` and `integrations` are refused: the installer copies repos and the full LLM model/effort/stage configuration from `devbox.config.json`, and integrations from the target's `integrations` key. |
 | `integrations` | Linear, Slack, Jira and the GitHub App: each one's `enabled` switch and settings ([customizing.md](customizing.md#integrations)). `bun run linear:setup` writes the Linear part ([Linear](../linear.md)), `bun run github:setup` the GitHub App's ([GitHub](../github.md)), `bun run jira:setup` Jira's ([Jira](../jira.md)). |
-| `publicUrl` | The public HTTPS URL webhooks reach, shared by Linear, GitHub and Jira. Read only by the CLI. |
+| `publicUrl` | The public HTTPS URL webhooks reach, shared by Linear, GitHub, GitLab and Jira. Read only by the CLI. |
 
 Any other key is an error. The installer fills these chart values itself:
 `repos` and `llm` from `devbox.config.json`, `integrations` from the target

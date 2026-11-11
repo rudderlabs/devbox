@@ -415,7 +415,10 @@ restricted content in Jira. So by default devbox skips it:
   `reason: restricted_issue`. On an assignment, devbox reads the issue when
   the webhook leaves the level out; on a follow-up it always reads it again.
   If that read fails, it answers 503, logs
-  `jira_webhook.security_unresolved`, and Jira retries. Set
+  `jira_webhook.security_unresolved`, and Jira retries. An answer without the
+  `security` field counts as restricted too, since devbox can't tell; a
+  project whose field configuration hides Security Level may answer that way.
+  Set
   `allowRestrictedIssues: true` in `integrations.jira` to act on these
   issues too.
 - **A comment restricted to a role or a group**, and an internal comment on a
@@ -665,6 +668,7 @@ issue or posting anything to it. So:
 | Jira | Assigning does nothing; webhooks arrive | Read the logs for `jira_webhook.ignored` and its `reason`: `untrusted` with `side: assigner` or `side: reporter` ([Trust](#trust)), `restricted_issue`, or `non_human` (an app, or an automation rule running as Automation for Jira, assigned it). |
 | Jira | Assigning does nothing; the log shows `jira webhook failed` with `code: 23505` | The issue's key is already the key of a task from another source, such as a Linear issue with the same key: task keys are unique across sources regardless of case. Jira retries and then gives up; nothing is posted on the issue. Use a project key that no other source uses. |
 | Jira | A comment that mentions the bot does nothing | The author is not a person ([Trust](#trust)), the comment is restricted, the mention is inside a code block, the typed name differs from the bot's name, or the bot was never assigned the issue (`jira_webhook.ignored` with `reason: no_task`). When the bot is the assignee but has no task there, as after an ignored assignment, devbox answers 503 in case the assignment is still on its way, and logs `jira_webhook.task_not_found` at each of Jira's retries. |
+| Jira | The log shows `reason: restricted_issue` for an issue without a security level | The project's field configuration may hide Security Level, so Jira leaves the field out and devbox can't tell the issue is unrestricted ([Restricted issues](#restricted-issues-and-comments)). Show the field in that project's field configuration, or, if no project devbox works in uses security levels, set `allowRestrictedIssues: true`. |
 | Jira | The issue doesn't move | See [Statuses](#statuses): no `started` status, the issue was re-assigned or moved, or the logs show `jira transition skipped` or `jira transition refused`. |
 
 The control plane's logs:

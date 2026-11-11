@@ -11,8 +11,8 @@ Without `--target` the commands act on Compose (`devbox.config.json`); with
 
 ## The public URL
 
-GitHub, Linear and Jira deliver webhooks only to a public HTTPS URL, the
-deployment's top-level `publicUrl`, shared by all three. The setups refuse
+GitHub, GitLab, Linear and Jira deliver webhooks only to a public HTTPS URL,
+the deployment's top-level `publicUrl`, shared by all of them. The setups refuse
 `http://`, `localhost` and private addresses.
 
 - Compose: a tunnel or reverse proxy to port 3000 (`ngrok http 3000`,

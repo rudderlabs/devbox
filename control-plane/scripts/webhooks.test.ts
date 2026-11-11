@@ -8,10 +8,19 @@ const LINEAR_LINE = `Update the webhook URL in the Linear app to ${NEXT}/webhook
 const EXTERNAL_LINE = `Update the webhook URL in the GitHub App to ${NEXT}/webhook/github: https://github.com/settings/apps/example-devbox`;
 const RUN_GITHUB = "Run bun run github:setup to update the GitHub App's webhook URL";
 const JIRA_LINE = `Update the webhook URL in Jira (Settings → System → WebHooks) to ${NEXT}/webhook/jira`;
+const GITLAB_LINE = `Update the URL of the devbox webhook on each GitLab project (Settings → Webhooks) to ${NEXT}/webhook/gitlab`;
 const OWN = "the setup's own line";
 
 const LINEAR: Integrations = { linear: { enabled: true, clientId: "c" } };
 const JIRA: Integrations = { jira: { enabled: true } };
+const GITLAB_BLOCK = {
+  enabled: true,
+  botUsername: "devbox",
+  botUserId: 2,
+  ciResults: true,
+  webhookAuth: "signing" as const,
+};
+const GITLAB: Integrations = { gitlab: GITLAB_BLOCK };
 const app = (tokens: "devbox" | "external", extra: Partial<GithubAppIntegration> = {}) => ({
   githubApp: {
     enabled: true,
@@ -35,11 +44,13 @@ describe("publicUrlChangeLines", () => {
     ["devbox App: points at github:setup", app("devbox"), { name: "linear" }, [RUN_GITHUB]],
     ["external App: by hand", app("external"), { name: "jira" }, [EXTERNAL_LINE]],
     ["Jira, from another setup", JIRA, { name: "linear" }, [JIRA_LINE]],
+    ["GitLab, from another setup", GITLAB, { name: "jira" }, [GITLAB_LINE]],
+    ["GitLab, from its own setup, which prints its own webhooks", GITLAB, { name: "gitlab" }, []],
     [
-      "everything on: Linear, GitHub, Jira",
-      { ...LINEAR, ...app("devbox"), ...JIRA },
+      "everything on: Linear, GitHub, GitLab, Jira",
+      { ...LINEAR, ...app("devbox"), ...GITLAB, ...JIRA },
       { name: "linear", line: LINEAR_LINE },
-      [LINEAR_LINE, RUN_GITHUB, JIRA_LINE],
+      [LINEAR_LINE, RUN_GITHUB, GITLAB_LINE, JIRA_LINE],
     ],
     [
       "the own line keeps its place",
@@ -59,6 +70,7 @@ describe("publicUrlChangeLines", () => {
         linear: { enabled: false, clientId: "c" },
         githubApp: { ...app("devbox").githubApp, enabled: false },
         jira: { enabled: false },
+        gitlab: { ...GITLAB_BLOCK, enabled: false },
       },
       { name: "linear" },
       [],
