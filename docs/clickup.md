@@ -9,9 +9,10 @@ through ClickUp's API. Both belong to one devbox deployment: the local stack
 
 - **Assign a task** to the bot (add it to the task's assignees), and it starts
   a task, as `bun run devbox create` does. Creating a task with the bot
-  already among its assignees does the same. devbox moves the task to
-  "in progress" (the "started" status) and, when the run finishes, to a done
-  or failed status if one is set ([Statuses](#statuses)).
+  already among its assignees does the same. devbox comments "Working on
+  this. I'll reply here when I'm done.", moves the task to "in progress" (the
+  "started" status) and, when the run finishes, to a done or failed status if
+  one is set ([Statuses](#statuses)).
 - **Follow-ups** are comments that mention the bot, picked from ClickUp's
   @-list or typed as `@<bot name>`. They reach the task, like
   `bun run devbox send` ([Follow-ups](#follow-ups)).

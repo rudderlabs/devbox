@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { Task } from "../../db/schema";
-import { HttpError, retryable } from "../http";
+import { errorClass, HttpError, retryable } from "../http";
 import type { Outbound, SendCtx } from "../outbound";
 import type {
   Core,
@@ -16,6 +16,14 @@ import { type ClickUpConfig, parseClickUpConfig } from "./config";
 import { markdownToComments } from "./quill";
 import { type ClickUpIntegrationStatus, ClickUpStatusService } from "./status";
 import { ClickUpWebhookController, isClickUpSpec, MemberRoles } from "./webhook";
+
+// Posted on the task when work starts, so people see devbox picked it up even
+// when the status doesn't change (a task already in progress, a restart).
+const START_COMMENT = "Working on this. I'll reply here when I'm done.";
+// onTaskStarted runs on every provision attempt, and a deferred provision
+// repeats it, so the comment goes out once per delegation on this pod. The
+// newest are kept; a pod restart mid-provision may post it again.
+const GREETED_MAX = 1_000;
 
 export const clickup: IntegrationDefinition<ClickUpConfig> = {
   name: "clickup",
@@ -56,6 +64,9 @@ export function createClickUp(
 // ClickUp has no remote links, so there is no onPrOpened: replies carry the
 // pull request's URL.
 export class ClickUpIntegration implements Integration {
+  // Delegations whose start comment this pod has posted, oldest first.
+  private readonly greeted = new Set<string>();
+
   constructor(
     private readonly cfg: ClickUpConfig,
     private readonly client: Client,
@@ -94,12 +105,31 @@ export class ClickUpIntegration implements Integration {
     }
   }
 
-  // A fresh provision: moves the task to the started status, if one is
-  // configured and the task is still the bot's. Safe to repeat: a task
-  // already there is left alone.
-  async onTaskStarted(ctx: HookCtx, task: Task): Promise<void> {
+  // A fresh provision: says so on the task, once per delegation, then moves
+  // the task to the started status, if one is configured and the task is
+  // still the bot's. Safe to repeat: a task already there is left alone.
+  async onTaskStarted(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void> {
+    await this.sayStarted(ctx, task, target);
     const started = this.cfg.statuses.started;
     if (started) await this.moveTask(ctx, task, started);
+  }
+
+  // The start comment. A failure is logged and never holds the start: the
+  // reply still comes when the run ends, and the next attempt tries again.
+  private async sayStarted(ctx: HookCtx, task: Task, target: ReplyTarget): Promise<void> {
+    const spec = target.spec;
+    if (!isClickUpSpec(spec) || this.greeted.has(target.id)) return;
+    try {
+      await this.post(ctx, spec.taskId, START_COMMENT);
+    } catch (err) {
+      ctx.log.warn("clickup start comment failed", { taskId: task.id, error: errorClass(err) });
+      return;
+    }
+    this.greeted.add(target.id);
+    if (this.greeted.size > GREETED_MAX) {
+      const oldest = this.greeted.values().next().value;
+      if (oldest !== undefined) this.greeted.delete(oldest);
+    }
   }
 
   // When this call finished the assignment, moves the task from started to
