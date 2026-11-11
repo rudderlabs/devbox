@@ -16,9 +16,9 @@ ENV NODE_ENV=production
 # compromised dl.k8s.io mirror can't serve a matching binary+sha pair. When
 # bumping KUBECTL_VERSION, update both digests from the upstream
 # kubectl.sha256 files for each arch.
-ARG KUBECTL_VERSION=v1.37.1
-ARG KUBECTL_SHA256_AMD64=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
-ARG KUBECTL_SHA256_ARM64=ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7
+ARG KUBECTL_VERSION=v1.37.2
+ARG KUBECTL_SHA256_AMD64=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+ARG KUBECTL_SHA256_ARM64=fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
 # git and openssl: the chart's snapshot builder and bootstrap Job run in this image.
 # The upgrade picks up Debian security fixes newer than the pinned base digest.
 RUN set -eux \
