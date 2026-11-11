@@ -129,6 +129,21 @@ describe("parseTarget", () => {
     ).toThrow(/^devbox\.k8s\.json: integrations\.jira: unknown key "webhookSecret"/);
   });
 
+  it("accepts integrations.clickup and refuses a secret in it", () => {
+    const clickup = {
+      enabled: true,
+      teamId: "9000000000",
+      botUserId: 100000001,
+      botName: "devbox",
+    };
+    expect(parseTarget({ context: "c", integrations: { clickup } }, F).integrations).toEqual({
+      clickup,
+    });
+    expect(() =>
+      parseTarget({ context: "c", integrations: { clickup: { ...clickup, apiToken: "x" } } }, F),
+    ).toThrow(/^devbox\.k8s\.json: integrations\.clickup: unknown key "apiToken"/);
+  });
+
   it.each([
     ["eks", "devbox.k8s.json: must be a JSON object"],
     [{}, "devbox.k8s.json: context: required, the kube context of the cluster"],

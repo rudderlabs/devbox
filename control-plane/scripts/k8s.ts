@@ -1,7 +1,7 @@
 // The Kubernetes installer and its companion commands:
 //   bun run k8s:install --target <file> [--render <path>] [--skip-push-check]
 //                       [--skip-llm-check] [--skip-linear-check] [--skip-jira-check]
-//                       [--skip-netpol-check | --netpol-check]
+//                       [--skip-clickup-check] [--skip-netpol-check | --netpol-check]
 //                       [--timeout 15m] [--no-keychain]
 //   bun run k8s:connect | k8s:refresh-snapshot | k8s:uninstall [--purge [--yes]] --target <file>
 //   bun run k8s:kind [install flags]   (writes and uses devbox.kind.json)
@@ -13,7 +13,7 @@
 // namespace, then `gh auth token` for GITHUB_TOKEN, then a hidden prompt, after
 // which the typed value may be saved in the keychain. --no-keychain never reads
 // or writes it. Values reach the cluster only as Secrets, never a file. The
-// Linear and Jira secrets are resolved only when the target file has the
+// Linear, Jira and ClickUp secrets are resolved only when the target file has the
 // integration enabled; devbox.config.json's `integrations` is not read.
 // With the target file's `integrations.githubApp` and devbox-minted tokens,
 // the App's private key replaces GITHUB_TOKEN: GITHUB_APP_PRIVATE_KEY_FILE (a
@@ -43,7 +43,8 @@ const COMMANDS = ["install", "kind", "connect", "refresh-snapshot", "uninstall",
 const USAGE = `Usage:
   bun run k8s:install --target <file> [--render <path>] [--skip-push-check]
                       [--skip-llm-check] [--skip-linear-check] [--skip-jira-check]
-                      [--skip-netpol-check | --netpol-check] [--timeout 15m] [--no-keychain]
+                      [--skip-clickup-check] [--skip-netpol-check | --netpol-check]
+                      [--timeout 15m] [--no-keychain]
   bun run k8s:kind [install flags]   (writes and uses devbox.kind.json)
   bun run k8s:connect --target <file>
   bun run k8s:refresh-snapshot --target <file>
@@ -113,6 +114,7 @@ export function installOptions(values: {
   "skip-llm-check"?: boolean;
   "skip-linear-check"?: boolean;
   "skip-jira-check"?: boolean;
+  "skip-clickup-check"?: boolean;
   "skip-netpol-check"?: boolean;
   "netpol-check"?: boolean;
   timeout?: string;
@@ -126,6 +128,7 @@ export function installOptions(values: {
     skipLlmCheck: values["skip-llm-check"] === true,
     skipLinearCheck: values["skip-linear-check"] === true,
     skipJiraCheck: values["skip-jira-check"] === true,
+    skipClickupCheck: values["skip-clickup-check"] === true,
     netpol: values["skip-netpol-check"] ? "skip" : values["netpol-check"] ? "force" : "auto",
     timeout: values.timeout ?? "15m",
   };
@@ -147,6 +150,7 @@ export const INSTALL_FLAGS = {
   "skip-llm-check": { type: "boolean" },
   "skip-linear-check": { type: "boolean" },
   "skip-jira-check": { type: "boolean" },
+  "skip-clickup-check": { type: "boolean" },
   "skip-netpol-check": { type: "boolean" },
   "netpol-check": { type: "boolean" },
   timeout: { type: "string" },

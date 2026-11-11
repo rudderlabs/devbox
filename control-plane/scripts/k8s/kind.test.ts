@@ -19,6 +19,7 @@ const OPTS: InstallOptions = {
   skipLlmCheck: true,
   skipLinearCheck: false,
   skipJiraCheck: false,
+  skipClickupCheck: false,
   netpol: "auto",
   timeout: "15m",
 };

@@ -161,6 +161,17 @@ describe("chartValues", () => {
     expect(chartValues(cfg, {}, { integrations: { jira } }).integrations).toEqual({ jira });
   });
 
+  it("the ClickUp block is copied as it is too", () => {
+    const clickup = {
+      enabled: true,
+      teamId: "9000000000",
+      botUserId: 100000001,
+      botName: "devbox",
+      statuses: { started: "in progress" },
+    };
+    expect(chartValues(cfg, {}, { integrations: { clickup } }).integrations).toEqual({ clickup });
+  });
+
   it("a user value wins over the integrations", () => {
     expect(
       chartValues(
