@@ -8,7 +8,7 @@ import { type Doc, helmTemplate, integrationEnv, REGISTERED_ONLY, type Rendered,
 const LABELS = {
   "app.kubernetes.io/part-of": "devbox",
   "app.kubernetes.io/managed-by": "Helm",
-  "helm.sh/chart": "devbox-0.1.0",
+  "helm.sh/chart": "devbox-0.2.0",
 };
 // Bun parses YAML 1.2, where the chart's octal 0440 reads as the decimal 440;
 // the API server (YAML 1.1) reads it as octal. The raw text is checked below.
@@ -30,7 +30,7 @@ const podSpec = (component: string, command: string[], restartPolicy?: string) =
   containers: [
     {
       name: component,
-      image: "rudderlabs/devbox-control-plane:0.1.0",
+      image: "rudderlabs/devbox-control-plane:0.2.0",
       imagePullPolicy: "IfNotPresent",
       command,
       env: ENV("widgets"),

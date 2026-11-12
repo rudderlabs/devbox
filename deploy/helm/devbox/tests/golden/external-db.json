@@ -365,7 +365,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "data": {
@@ -381,7 +381,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "pre-install,pre-upgrade",
@@ -402,7 +402,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "data": {
@@ -418,7 +418,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "data": {
@@ -454,7 +454,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -486,7 +486,7 @@
               "containers": [
                 {
                   "name": "snapshot-builder",
-                  "image": "rudderlabs/devbox-control-plane:0.1.0",
+                  "image": "rudderlabs/devbox-control-plane:0.2.0",
                   "imagePullPolicy": "IfNotPresent",
                   "command": [
                     "sh",
@@ -572,7 +572,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -601,7 +601,7 @@
           "containers": [
             {
               "name": "control-plane",
-              "image": "rudderlabs/devbox-control-plane:0.1.0",
+              "image": "rudderlabs/devbox-control-plane:0.2.0",
               "imagePullPolicy": "IfNotPresent",
               "ports": [
                 {
@@ -657,7 +657,7 @@
                 },
                 {
                   "name": "SANDBOX_IMAGE",
-                  "value": "rudderlabs/devbox-harness:0.1.0"
+                  "value": "rudderlabs/devbox-harness:0.2.0"
                 },
                 {
                   "name": "SANDBOX_RESOURCE_CPU",
@@ -787,7 +787,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -805,7 +805,7 @@
             "app.kubernetes.io/component": "iron-proxy"
           },
           "annotations": {
-            "checksum/config": "374ad64ab61294cd69ced2bcb05cea27807b92c78f6527f250a51112a149cfb3"
+            "checksum/config": "57855d052e2b37e2b2d92a3c6f109cb1412056b6bce870b07a6fa41b4151d2ff"
           }
         },
         "spec": {
@@ -1188,7 +1188,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "post-install",
@@ -1218,7 +1218,7 @@
           "containers": [
             {
               "name": "snapshot-builder",
-              "image": "rudderlabs/devbox-control-plane:0.1.0",
+              "image": "rudderlabs/devbox-control-plane:0.2.0",
               "imagePullPolicy": "IfNotPresent",
               "command": [
                 "sh",
@@ -1302,7 +1302,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "pre-install,pre-upgrade",
@@ -1330,7 +1330,7 @@
           "containers": [
             {
               "name": "bootstrap",
-              "image": "rudderlabs/devbox-control-plane:0.1.0",
+              "image": "rudderlabs/devbox-control-plane:0.2.0",
               "imagePullPolicy": "IfNotPresent",
               "command": [
                 "sh",
@@ -1400,7 +1400,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -1479,7 +1479,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -1529,7 +1529,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -1588,7 +1588,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -1624,7 +1624,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -1666,7 +1666,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "pre-install,pre-upgrade",
@@ -1737,7 +1737,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "rules": [
@@ -1789,7 +1789,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "rules": [
@@ -1819,7 +1819,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "pre-install,pre-upgrade",
@@ -1866,7 +1866,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "rules": [
@@ -1960,7 +1960,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "pre-install,pre-upgrade",
@@ -1990,7 +1990,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "roleRef": {
@@ -2015,7 +2015,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "roleRef": {
@@ -2040,7 +2040,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "pre-install,pre-upgrade",
@@ -2070,7 +2070,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "roleRef": {
@@ -2124,7 +2124,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -2150,7 +2150,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     },
     "spec": {
@@ -2228,7 +2228,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     }
   },
@@ -2241,7 +2241,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       },
       "annotations": {
         "helm.sh/hook": "pre-install,pre-upgrade",
@@ -2259,7 +2259,7 @@
       "labels": {
         "app.kubernetes.io/part-of": "devbox",
         "app.kubernetes.io/managed-by": "Helm",
-        "helm.sh/chart": "devbox-0.1.0"
+        "helm.sh/chart": "devbox-0.2.0"
       }
     }
   },
