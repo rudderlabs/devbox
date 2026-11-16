@@ -373,6 +373,31 @@ class TestEntryPoints(unittest.TestCase):
             )
         )
 
+    def test_ci_from_another_tool_builds_the_agent_without_a_run(self) -> None:
+        payload = {
+            "target_id": "555",
+            "task_key": "XYZ-1",
+            "ci_source": "check_run",
+            "workflow_name": "ci/circleci: test",
+            "run_url": "https://github.com/acme/acme-server/runs/555",
+            "pr": PR,
+        }
+        fu.run_followup_ci(
+            {
+                "id": "inbox-4",
+                "kind": "ci_result",
+                "source": "github",
+                "payload": payload,
+            },
+            self.state,
+            failed_jobs=[],
+            errors=[],
+        )
+        build = self.run_round.call_args.args[0]
+        with patch.object(fu, "CiAgent") as agent_cls:
+            build()
+        agent_cls.assert_called_once_with(**self._preset_kwargs("ci:XYZ-1", run=None))
+
     def test_finished_round_skips_trace_and_timing_but_distills(self) -> None:
         self.state.append_event({
             "type": fu.FINISHED_EVENT,

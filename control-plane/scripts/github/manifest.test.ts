@@ -16,6 +16,8 @@ const MANIFEST = {
     pull_requests: "write",
     issues: "write",
     actions: "write",
+    checks: "read",
+    statuses: "read",
     metadata: "read",
     members: "read",
   },
@@ -24,6 +26,8 @@ const MANIFEST = {
     "pull_request_review",
     "pull_request_review_comment",
     "workflow_run",
+    "check_run",
+    "status",
   ],
 };
 
@@ -95,10 +99,14 @@ describe("registrationLink", () => {
     "events[]=pull_request_review",
     "events[]=pull_request_review_comment",
     "events[]=workflow_run",
+    "events[]=check_run",
+    "events[]=status",
     "contents=write",
     "pull_requests=write",
     "issues=write",
     "actions=write",
+    "checks=read",
+    "statuses=read",
     "metadata=read",
     "members=read",
   ].join("&");

@@ -45,7 +45,7 @@ describe("parseConfig", () => {
       ],
       llm: { provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5.6-sol" },
       sandbox: { maxConcurrent: 5, cpu: "2", memory: "4Gi" },
-      github: { trustedOrgs: [], trustedUsers: [] },
+      github: { trustedOrgs: [], trustedUsers: [], ciReporters: [] },
       integrations: {},
     });
   });
@@ -69,10 +69,17 @@ describe("parseConfig", () => {
   });
 
   it("github trust lists default to empty and parse when given", () => {
-    expect(parseConfig(valid()).github).toEqual({ trustedOrgs: [], trustedUsers: [] });
+    expect(parseConfig(valid()).github).toEqual({
+      trustedOrgs: [],
+      trustedUsers: [],
+      ciReporters: [],
+    });
     expect(
-      parseConfig({ ...valid(), github: { trustedOrgs: [" acme "], trustedUsers: ["me"] } }).github,
-    ).toEqual({ trustedOrgs: ["acme"], trustedUsers: ["me"] });
+      parseConfig({
+        ...valid(),
+        github: { trustedOrgs: [" acme "], trustedUsers: ["me"], ciReporters: ["ci[bot]"] },
+      }).github,
+    ).toEqual({ trustedOrgs: ["acme"], trustedUsers: ["me"], ciReporters: ["ci[bot]"] });
   });
 
   it("githubApp enabled with one non-empty trust list parses", () => {
@@ -378,7 +385,7 @@ describe("parseConfig", () => {
     [
       "an unknown github key",
       (r) => Object.assign(r, { github: { trustedTeams: [] } }),
-      'github: unknown key "trustedTeams" (allowed: trustedOrgs, trustedUsers)',
+      'github: unknown key "trustedTeams" (allowed: trustedOrgs, trustedUsers, ciReporters)',
     ],
     [
       "sandbox not an object",

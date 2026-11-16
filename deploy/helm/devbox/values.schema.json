@@ -367,6 +367,13 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "ciReporters": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },

@@ -289,7 +289,9 @@ together ([docs/github.md](github.md)). `bun run github:setup` writes it.
 
 **`github`** is a top-level key: `trustedOrgs` and `trustedUsers`, lists of
 strings ([Trust settings](#trust-settings)). With `integrations.githubApp`
-enabled, one of them must be set.
+enabled, one of them must be set. `ciReporters`, also a list of logins, names
+the CI accounts whose check runs and commit statuses reach a task
+([github.md](github.md#ci-reporters)).
 
 `publicUrl` is a top-level key, not part of a block: the public HTTPS URL
 webhooks reach. One tunnel or Ingress serves every integration, so they all
@@ -886,6 +888,7 @@ trust. There are no defaults, and with nothing configured it reads none.
 |---|---|---|
 | `GITHUB_TRUSTED_ORGS` | control plane | GitHub orgs whose members are trusted. Comma- or space-separated. |
 | `GITHUB_TRUSTED_USERS` | control plane | GitHub logins that are trusted. Comma- or space-separated. |
+| `GITHUB_CI_REPORTERS` | control plane | GitHub logins whose check runs and commit statuses reach a task as CI results. Comma- or space-separated. Not forwarded to the sandbox. |
 | `HARNESS_TRUSTED_BOT_IDS` | sandbox | Numeric GitHub user IDs of bots, for example a review bot, whose comments are also trusted. Comma- or space-separated. |
 | `GITLAB_TRUSTED_GROUPS` | control plane | GitLab groups (`group` or `group/subgroup`) whose members, inherited ones included, are trusted on merge requests. Comma- or space-separated. `bun run gitlab:setup` fills the lists (`values.gitlab` in the target file). |
 | `GITLAB_TRUSTED_USERS` | control plane | GitLab usernames trusted on merge requests. Comma- or space-separated. |

@@ -12,6 +12,9 @@ export type GithubConfig = {
   // Orgs whose members, and logins of users, whose comments the agent trusts.
   trustedOrgs: string[];
   trustedUsers: string[];
+  // Logins whose check runs and commit statuses reach a task as CI results.
+  // Separate from trustedUsers: a CI account can't drive the agent by mention.
+  ciReporters: string[];
   // Feature flag: enable workflow_run CI result inbox enqueue. Disabled by
   // default until the harness is ready to consume ci_result inbox rows.
   ciResultEnabled: boolean;
@@ -64,5 +67,6 @@ function parseWebhooks(env: Record<string, string | undefined>) {
     botUserId,
     trustedOrgs,
     trustedUsers,
+    ciReporters: parseTrustList(env.GITHUB_CI_REPORTERS),
   };
 }
