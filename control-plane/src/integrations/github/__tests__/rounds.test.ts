@@ -368,13 +368,13 @@ describe("GitHub rounds", () => {
     it("enqueueCiCheckResult for a check run", async () => {
       await enqueueCiCheckResult(
         tasks,
-        checkParams({ source: "check_run", checkRunId: 555 }),
+        checkParams({ source: "check_run", checkRunId: 555, completedAt: "2026-11-02T10:00:00Z" }),
         logger,
       );
       expect(enqueueRound).toHaveBeenCalledWith({
         task: apiTask,
         kind: "ci_result",
-        externalId: "check_run:555:7",
+        externalId: "check_run:555:2026-11-02T10:00:00Z:7",
         payload: {
           target_id: "555",
           ci_source: "check_run",
@@ -420,14 +420,14 @@ describe("GitHub rounds", () => {
       const warn = spyOn(logger, "warn").mockImplementation(() => logger);
       await enqueueCiCheckResult(
         tasks,
-        checkParams({ source: "check_run", checkRunId: 555 }),
+        checkParams({ source: "check_run", checkRunId: 555, completedAt: "2026-11-02T10:00:00Z" }),
         logger,
       );
       expect(warn).toHaveBeenCalledWith("ci_result loop breaker tripped — dropping CI failure", {
         taskId: "task-api",
         seen: 20,
         max: 20,
-        externalId: "check_run:555:7",
+        externalId: "check_run:555:2026-11-02T10:00:00Z:7",
       });
       warn.mockRestore();
     });

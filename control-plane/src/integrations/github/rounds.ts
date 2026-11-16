@@ -220,15 +220,15 @@ export async function enqueueCiResult(
   }
 }
 
-// A check run or commit status from another CI tool. A re-run is a new check
-// run id; a status is keyed by repo, commit and context, so a repeated post of
-// the same failure reaches the task once. Same loop breaker as workflow_run.
+// A check run or commit status from another CI tool. A check run is keyed by
+// its id and completion time, since a CI app may re-run it under the same id; a
+// status by repo, commit and context. A redelivered webhook reaches the task once. Same loop breaker as workflow_run.
 export async function enqueueCiCheckResult(
   tasks: Pick<TaskService, "enqueueRound">,
   params: {
     task: Pick<Task, "id" | "key">;
     check:
-      | { source: "check_run"; checkRunId: number }
+      | { source: "check_run"; checkRunId: number; completedAt: string }
       | { source: "status"; statusId: number; context: string };
     name: string;
     conclusion: string;
@@ -248,7 +248,7 @@ export async function enqueueCiCheckResult(
   const targetId = String(check.source === "check_run" ? check.checkRunId : check.statusId);
   const externalId =
     check.source === "check_run"
-      ? `check_run:${check.checkRunId}:${params.prNumber}`
+      ? `check_run:${check.checkRunId}:${check.completedAt}:${params.prNumber}`
       : `status:${params.owner}/${params.repo}:${params.headSha}:${check.context}:${params.prNumber}`;
   const prUrl = `https://github.com/${params.owner}/${params.repo}/pull/${params.prNumber}`;
   const result = await tasks.enqueueRound({

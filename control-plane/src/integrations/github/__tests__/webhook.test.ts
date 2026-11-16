@@ -337,6 +337,7 @@ const checkRunPayload = (overrides: Record<string, unknown> = {}) => ({
     head_sha: "abc123",
     status: "completed",
     conclusion: "failure",
+    completed_at: "2026-11-02T10:00:00Z",
     html_url: "https://github.com/o/r/runs/555",
     details_url: "https://circleci.com/gh/o/r/77",
     output: { title: "2 tests failed", summary: "long summary" },
@@ -369,6 +370,7 @@ describe("parseGithubEvent check_run and status", () => {
     expect(parseGithubEvent("check_run", checkRunPayload())).toEqual({
       kind: "check_run",
       checkRunId: 555,
+      completedAt: "2026-11-02T10:00:00Z",
       name: "ci/circleci: test",
       conclusion: "failure",
       htmlUrl: "https://github.com/o/r/runs/555",
@@ -1179,7 +1181,7 @@ describe("GitHubWebhookController.handleWebhook", () => {
     expect(enqueueRound.mock.calls[0]?.[0]).toEqual({
       task: linearTask,
       kind: "ci_result",
-      externalId: "check_run:555:42",
+      externalId: "check_run:555:2026-11-02T10:00:00Z:42",
       payload: {
         target_id: "555",
         ci_source: "check_run",
@@ -1202,6 +1204,21 @@ describe("GitHubWebhookController.handleWebhook", () => {
       prUrl: "https://github.com/o/r/pull/42",
       limit: 20,
     });
+  });
+
+  it("keys a re-run of the same check run apart from its first failure", async () => {
+    const first = JSON.stringify(checkRunPayload());
+    const rerun = JSON.stringify(checkRunPayload({ completed_at: "2026-11-02T11:00:00Z" }));
+    await post(first, "check_run", sign(first));
+    await post(first, "check_run", sign(first));
+    await post(rerun, "check_run", sign(rerun));
+    expect(enqueueRound.mock.calls.map((c) => (c[0] as { externalId: string }).externalId)).toEqual(
+      [
+        "check_run:555:2026-11-02T10:00:00Z:42",
+        "check_run:555:2026-11-02T10:00:00Z:42",
+        "check_run:555:2026-11-02T11:00:00Z:42",
+      ],
+    );
   });
 
   it("ignores a check run from GitHub Actions", async () => {

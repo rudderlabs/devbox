@@ -76,6 +76,8 @@ export type ParsedGitHubEvent =
   | {
       kind: "check_run";
       checkRunId: number;
+      // When the run completed: a re-run of the same check run completes again.
+      completedAt: string;
       name: string;
       conclusion: string;
       htmlUrl: string;
@@ -359,6 +361,7 @@ export function parseGithubEvent(
     return {
       kind: "check_run",
       checkRunId,
+      completedAt: str(checkRun.completed_at),
       name: str(checkRun.name),
       conclusion,
       htmlUrl: str(checkRun.html_url),
@@ -560,7 +563,11 @@ export class GitHubWebhookController {
             {
               limit: this.settings.ciResultMaxPerTask,
               task,
-              check: { source: "check_run", checkRunId: parsed.checkRunId },
+              check: {
+                source: "check_run",
+                checkRunId: parsed.checkRunId,
+                completedAt: parsed.completedAt,
+              },
               name: parsed.name,
               conclusion: parsed.conclusion,
               runUrl: parsed.htmlUrl,
