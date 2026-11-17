@@ -5,7 +5,7 @@
     "": {
       "name": "devbox-control-plane",
       "dependencies": {
-        "@alibaba-group/opensandbox": "^0.1.6",
+        "@alibaba-group/opensandbox": "^1.1.1",
         "@linear/sdk": "^98.0.0",
         "cls-rtracer": "^2.6.4",
         "drizzle-orm": "^0.45.4",
@@ -29,7 +29,7 @@
     "undici": "^7.30.1",
   },
   "packages": {
-    "@alibaba-group/opensandbox": ["@alibaba-group/opensandbox@0.1.6", "", { "dependencies": { "openapi-fetch": "^0.14.1", "undici": "^7.18.2" } }, "sha512-mZ2Q2qXNC0dgctoPIlcotnlPSJ1ODMG4DKQ3AA2lTO4ZoC/vWU3CzSL5pNEU7hakfMOotQiZVxunNItVGY4W8w=="],
+    "@alibaba-group/opensandbox": ["@alibaba-group/opensandbox@1.1.1", "", { "dependencies": { "@opentelemetry/api": "^1.9.0", "openapi-fetch": "^0.14.1", "undici": "^7.29.1" } }, "sha512-QZEmeKize8W8YeIH/qYxXRhZOE5RwvYw5s3r2xzgD2AgjABbYAqRH1KktK/I1+uqFA0Dc0AE/EaODr03wS34og=="],
 
     "@biomejs/biome": ["@biomejs/biome@2.5.15", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "2.5.15", "@biomejs/cli-darwin-x64": "2.5.15", "@biomejs/cli-linux-arm64": "2.5.15", "@biomejs/cli-linux-arm64-musl": "2.5.15", "@biomejs/cli-linux-x64": "2.5.15", "@biomejs/cli-linux-x64-musl": "2.5.15", "@biomejs/cli-win32-arm64": "2.5.15", "@biomejs/cli-win32-x64": "2.5.15" }, "bin": { "biome": "bin/biome" } }, "sha512-WZTW4slm/pdkh92K6t/3aEN++44JD1PQ7squ7RCMLI1flHGl43DVOIGXvCjHiZgBMO1V4uYxoFNtqrIA4qGuIQ=="],
 
@@ -114,6 +114,8 @@
     "@graphql-typed-document-node/core": ["@graphql-typed-document-node/core@3.2.0", "", { "peerDependencies": { "graphql": "^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0 || ^0.13.0 || ^14.0.0 || ^15.0.0 || ^16.0.0 || ^17.0.0" } }, "sha512-mB9oAsNCm9aM3/SOv4YtBMqZbYj10R7dkq8byBqxGY/ncFwhf2oQzMV+LCRlWoDSEBJ3COiR1yeDvMtsoOsuFQ=="],
 
     "@linear/sdk": ["@linear/sdk@98.0.0", "", { "dependencies": { "@graphql-typed-document-node/core": "^3.2.0" } }, "sha512-DRakJJiGe4QE2tc49+XQVE0lyeR9CUHJTpCPsx5291LsmDaMvhP8+beCgXQQ7jET+OshHEm2BYtMx6EUt9ZR8Q=="],
+
+    "@opentelemetry/api": ["@opentelemetry/api@1.10.0", "", {}, "sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ=="],
 
     "@so-ric/colorspace": ["@so-ric/colorspace@1.1.6", "", { "dependencies": { "color": "^5.0.2", "text-hex": "1.0.x" } }, "sha512-/KiKkpHNOBgkFJwu9sh48LkHSMYGyuTcSFK/qMBdnOAlrRJzRSXAOFB5qwzaVQuDl8wAvHVMkaASQDReTahxuw=="],
 
