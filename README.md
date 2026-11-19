@@ -344,6 +344,7 @@ No. The CLI does everything. Linear, Jira or ClickUp makes it a team tool: anyon
 
 No. Those help one developer at the keyboard, and we use them every day.
 DevBox is the org's shared harness that picks up tickets in the background.
+How it compares with Claude Code, Codex, Devin, Claude Managed Agents and Open SWE: [docs/comparison.md](docs/comparison.md).
 
 </details>
 
@@ -359,6 +360,7 @@ DevBox is the org's shared harness that picks up tickets in the background.
 - [docs/kubernetes/README.md](docs/kubernetes/README.md): running DevBox on Kubernetes.
 - [docs/database.md](docs/database.md): database migrations, upgrades and rollbacks.
 - [docs/extending.md](docs/extending.md): where DevBox could be extended. Not a stable interface.
+- [docs/comparison.md](docs/comparison.md): how DevBox compares with Claude Code, Codex, Devin, Claude Managed Agents and Open SWE.
 - [CONTRIBUTING.md](CONTRIBUTING.md): running the tests and lint.
 
 ## License
