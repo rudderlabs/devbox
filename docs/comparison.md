@@ -9,9 +9,10 @@ DevBox does not replace the coding tool at your keyboard. We use Claude Code
 and Codex every day. DevBox is the shared harness the whole org hands tickets
 to, running where your code and secrets already live.
 
-Facts about other products come from their public docs, linked under each
-section, as checked on November 18, 2026. They change often. If something here
-is out of date, open an issue or a pull request.
+Facts about other products come from their public docs, as checked on
+November 18, 2026. The sources are listed under each tool's section below.
+Prices change often, so this page links to pricing pages instead of quoting
+them. If something here is out of date, open an issue or a pull request.
 
 ## DevBox in one table
 
@@ -36,14 +37,16 @@ from GitHub issues.
 
 ## At a glance
 
+A summary of the sections below, where each fact has its source.
+
 | | DevBox | Claude Code | Codex | Devin | Claude Managed Agents | Open SWE |
 | --- | --- | --- | --- | --- | --- | --- |
 | What it is | Ticket-to-PR harness for a team | Coding agent for one developer | Coding agent for one developer | Hosted autonomous engineer | API to run an agent you define | Open source "software factory" |
 | Work starts from | Linear, Jira, ClickUp, CLI | Developer session, `@claude` on GitHub (Actions) | Developer session, Linear issue | Slack, Teams, Linear, Jira, web app | Your code calls the API | Dashboard, GitHub, Slack, Linear |
 | Agent runs on | Your infra | Local, or Anthropic cloud | Local, or OpenAI cloud | Cognition cloud | Anthropic (sandbox can be yours, beta) | As is, LangSmith's Managed Deep Agents |
-| Models | OpenAI, Anthropic, per stage | Claude | OpenAI | OpenAI, Claude, Gemini, SpaceXAI, open models | Claude | Configurable |
+| Models | OpenAI, Anthropic, per stage | Claude | OpenAI | OpenAI, Claude, Gemini, open source and more | Claude | Configurable |
 | Source | MIT | Closed | CLI Apache-2.0, cloud closed | Closed | Closed | MIT (own code) |
-| Price | Free; your compute and tokens | Claude plan or API | ChatGPT plan | From $20/month | Tokens + $0.08 per session-hour | Free; your runtime and tokens |
+| Price | Free; your compute and tokens | Claude plan or API | ChatGPT plan | Paid plans | Tokens + session runtime | Free; your runtime and tokens |
 
 ## DevBox vs Claude Code and Codex
 
@@ -89,10 +92,10 @@ is in the repo for you to read and change.
 | --- | --- | --- |
 | Runs on | Your Docker Compose or Kubernetes | Cognition's cloud; a dedicated deployment option on Enterprise [1] |
 | Source | MIT | Closed |
-| Models | OpenAI or Anthropic, per stage | OpenAI, Claude, Gemini, SpaceXAI and open source models [1] |
+| Models | OpenAI or Anthropic, per stage | Frontier models from OpenAI, Anthropic, Google and others, plus open source models [1] |
 | Work comes in from | Linear, Jira Cloud, ClickUp, CLI | Slack, Teams, Linear, Jira and more [1] |
 | Code hosts | GitHub, GitLab | GitHub, GitLab, Bitbucket, custom git providers [1] |
-| Price | Free. You pay compute and tokens | Pro $20/month, Max $200/month, Teams $80/month + $40 per seat [1] |
+| Price | Free. You pay compute and tokens | Individual and team plans, per seat for teams [1] |
 
 **Where Devin is ahead.** A hosted UI, nothing to operate, more models, Slack
 as a place to start work, and Bitbucket. DevBox has no web UI yet.
@@ -118,7 +121,7 @@ ticket-to-PR workflow that runs on your infra, and it can use Claude models.
 | Sandbox | Yours, one per task | Anthropic's, or yours (beta) [2] |
 | Models | OpenAI or Anthropic, per stage | Claude [1] |
 | Status | v0.2.0 | Beta [1] |
-| Price | Free. You pay compute and tokens | Tokens + $0.08 per session-hour of running time [3] |
+| Price | Free. You pay compute and tokens | Tokens plus a fee per hour of session runtime [3] |
 
 **Worth knowing**
 
