@@ -99,6 +99,32 @@ def _maybe_configure_deepagents_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+def _run_daemon_start_plugins() -> None:
+    """Load the installed plugins and run their ``daemon_start`` hooks.
+
+    Plugins are optional additions (see docs/plugins.md), so nothing here may
+    stop the daemon: a plugin that cannot be loaded is logged and left out,
+    and a hook that raises or overruns its budget is logged. The import is
+    lazy so the plugin machinery loads only in the daemon, not in the
+    short-lived CLI subcommands.
+    """
+    try:
+        from harness.plugins import load_plugins
+
+        registry = load_plugins()
+        for problem in registry.problems:
+            print(f"daemon: plugin not loaded: {problem}", file=sys.stderr)
+        if registry.plugins:
+            names = ", ".join(plugin.name for plugin in registry.plugins)
+            print(f"daemon: plugins loaded: {names}")
+        registry.run("daemon_start")
+    except Exception as exc:
+        print(
+            f"daemon: plugin startup failed (ignored): {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
 class DaemonState:
     """Inbox-round state: event-log paths + the append-write delegate.
 
@@ -474,6 +500,10 @@ def run_daemon(
     # LoggingMiddleware's inner-loop records aren't dropped by the default
     # WARNING last-resort handler.
     _maybe_configure_deepagents_logging()
+
+    # Plugins last, once everything they may rely on is in place, and before
+    # the first inbox file. Best-effort, like signing above.
+    _run_daemon_start_plugins()
 
     while True:
         files = sorted(

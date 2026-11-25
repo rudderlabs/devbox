@@ -814,6 +814,7 @@ These are the forwarded `HARNESS_*` variables worth knowing. Empty counts as uns
 | `HARNESS_REVIEW_MAX_PARALLEL_LENSES` | `6` | The most review agents that run at once. |
 | `HARNESS_SYNC_REPOS_BEFORE_PLANNING` | `true` | `false` skips fetching the latest commits before planning. |
 | `HARNESS_POLL_INTERVAL_SECONDS` | `1.0` | How often the harness checks its inbox. |
+| `HARNESS_PLUGINS` | every installed plugin | The [harness plugins](plugins.md) that run, comma-separated and in that order. `none` runs no plugin. |
 | `HARNESS_DEEPAGENTS_MODEL_TIMEOUT_SECONDS` | `180` | How long a model response may stay silent before the request fails and is retried. |
 | `HARNESS_DEEPAGENTS_MODEL_MAX_RETRIES` | `5` | Retries of one model request. |
 | `HARNESS_DEEPAGENTS_MAX_RETRIES` | `3` | Retries of a whole agent run after a transient LLM error. |

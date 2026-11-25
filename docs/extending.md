@@ -2,11 +2,12 @@
 
 ## Not a stable interface
 
-devbox has no stable extension or hook interface. This page lists the places in
-the code where hooks would naturally go, and the internal interface task
-sources plug into, so you know where to look if you change devbox for your own
-needs. All of it can change in any commit, without notice and without a
-migration path.
+devbox has one stable extension interface: [harness plugins](plugins.md), with
+one hook so far. Everything else on this page is internal. It lists the places
+in the code where more hooks would naturally go, and the internal interface
+task sources plug into, so you know where to look if you change devbox for
+your own needs. All of that can change in any commit, without notice and
+without a migration path.
 
 ## The repos the agent works on
 

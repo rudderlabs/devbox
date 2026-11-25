@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "devbox-hello-plugin"
+version = "0.1.0"
+description = "Example devbox harness plugin"
+requires-python = ">=3.13"
+# The harness is already installed in the image the plugin goes into, so it is
+# not listed as a dependency here.
+dependencies = []
+
+[project.entry-points."devbox.plugins"]
+hello = "devbox_hello_plugin:Hello"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/devbox_hello_plugin"]

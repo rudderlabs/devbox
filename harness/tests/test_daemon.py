@@ -2443,6 +2443,38 @@ class TestMaybeConfigureDeepagentsLogging(unittest.TestCase):
         mock_get_logger.return_value.setLevel.assert_called_once_with(logging.WARNING)
 
 
+class TestRunDaemonStartPlugins(unittest.TestCase):
+    """daemon._run_daemon_start_plugins — best-effort plugin startup."""
+
+    def _run(self) -> tuple[str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            daemon_module._run_daemon_start_plugins()
+        return out.getvalue(), err.getvalue()
+
+    def test_runs_daemon_start_and_reports_what_loaded(self) -> None:
+        from harness.plugins import LoadedPlugin, Plugin, PluginProblem
+
+        registry = MagicMock()
+        registry.plugins = [LoadedPlugin(name="alpha", instance=Plugin(), hooks={})]
+        registry.problems = [PluginProblem("beta", "import failed")]
+        with patch("harness.plugins.load_plugins", return_value=registry):
+            out, err = self._run()
+        registry.run.assert_called_once_with("daemon_start")
+        self.assertIn("daemon: plugins loaded: alpha", out)
+        self.assertIn("daemon: plugin not loaded: beta: import failed", err)
+
+    def test_says_nothing_without_plugins(self) -> None:
+        with patch("harness.plugins._registry.metadata.entry_points", return_value=[]):
+            out, err = self._run()
+        self.assertEqual((out, err), ("", ""))
+
+    def test_a_loader_failure_never_stops_the_daemon(self) -> None:
+        with patch("harness.plugins.load_plugins", side_effect=RuntimeError("boom")):
+            _out, err = self._run()
+        self.assertIn("plugin startup failed (ignored): RuntimeError: boom", err)
+
+
 class TestImplementationAnnouncement(unittest.TestCase):
     """Plan thought + "Entered implementation mode" once per implementation."""
 

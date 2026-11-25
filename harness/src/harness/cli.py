@@ -49,10 +49,18 @@ def run_daemon_cli(argv: list[str]) -> int:
     return run_daemon()
 
 
+def run_plugins_cli(argv: list[str]) -> int:
+    # Imported lazily: only this subcommand and the daemon need the loader.
+    from harness.plugins.cli import plugins_main
+
+    return plugins_main(argv)
+
+
 ROOT_SUBCOMMANDS: dict[str, tuple[str, Callable[[list[str]], int]]] = {
     "daemon": ("Run inbox event loop", run_daemon_cli),
     "memory": ("Append a harness memory entry", memory_main),
     "archive": ("Archive harness artifacts into a tar.gz", archive_main),
+    "plugins": ("List or check installed plugins", run_plugins_cli),
 }
 
 
