@@ -3,7 +3,7 @@ the table of hooks the harness calls."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -28,6 +28,11 @@ class HookSpec:
     # How long the harness waits for one plugin's hook before it moves on.
     budget_seconds: float
     summary: str
+    # The hook may return data. The harness saves what it returns per inbox
+    # id, and on a restart reuses the saved result instead of calling again.
+    saves_result: bool = False
+    # The hook may also return sections for the pull request bodies.
+    pr_sections: bool = False
 
 
 HOOKS: dict[str, HookSpec] = {
@@ -39,7 +44,74 @@ HOOKS: dict[str, HookSpec] = {
             "Also runs when a sandbox is recreated from its volume."
         ),
     ),
+    "after_planning": HookSpec(
+        params=("ctx", "plan"),
+        budget_seconds=300.0,
+        summary="Once per assignment, after the plan is written.",
+        saves_result=True,
+    ),
+    "before_implementation": HookSpec(
+        params=("ctx", "plan"),
+        budget_seconds=30.0,
+        summary=(
+            "Each time the daemon is about to run or resume an assignment's "
+            "implementation. Not when the implementation is already complete."
+        ),
+    ),
+    "after_implementation": HookSpec(
+        params=("ctx", "plan", "implementation"),
+        budget_seconds=1800.0,
+        summary=(
+            "Once per assignment, after every repository's implementation is "
+            "complete and before the review."
+        ),
+        saves_result=True,
+        pr_sections=True,
+    ),
+    "followup_start": HookSpec(
+        params=("ctx", "kind"),
+        budget_seconds=30.0,
+        summary=(
+            "Each time the daemon is about to run or resume a follow-up "
+            "round. kind is the round's inbox kind: comment, review or "
+            "ci_result."
+        ),
+    ),
 }
+
+
+@dataclass(frozen=True)
+class TaskInfo:
+    """The round a hook runs for: an assignment, or a follow-up round of its
+    task."""
+
+    task_key: str
+    inbox_id: str
+    run_id: str
+
+
+@dataclass(frozen=True)
+class PrSection:
+    """A titled section the harness appends to one repository's pull request
+    body. ``repo`` is the repository's name in the implementation."""
+
+    repo: str
+    title: str
+    body: str
+
+
+@dataclass(frozen=True)
+class HookResult:
+    """What a hook that saves its result may return.
+
+    ``data`` must be JSON. The harness stores it under
+    ``extensions.<plugin name>`` in the stage's artifact. Returning a plain
+    mapping is the same as ``HookResult(data=mapping)``, and returning
+    ``None`` the same as an empty ``HookResult``.
+    """
+
+    data: Mapping[str, Any] | None = None
+    pr_sections: Sequence[PrSection] = ()
 
 
 class Plugin:

@@ -60,6 +60,7 @@ from harness.paths import (
     WORKSPACE,
 )
 from harness.plan_utils import repo_checkout_path
+from harness.plugins import RoundPlugins, round_plugins
 from harness.schemas.review import OPTIONAL_REVIEW_LENSES
 from harness.self_review import run_self_review_loop, validate_self_review
 from harness.stages import Stage
@@ -517,6 +518,7 @@ def _run_planning_stage(
     inbox_id: str,
     *,
     events: RoundEvents | None,
+    plugins: RoundPlugins | None = None,
 ) -> dict[str, Any]:
     if _assignment_artifact_reusable(
         PLAN_JSON,
@@ -525,8 +527,10 @@ def _run_planning_stage(
         stale_paths=_post_plan_stale(),
     ):
         # Already produced by a prior attempt (atomic write ⇒ complete/valid).
+        # A restart between the plan and its plugins' results lands here, so
+        # the hooks whose result is not saved yet run now.
         plan_data = load_json_file(PLAN_JSON)
-        return plan_data
+        return _with_plan_plugins(plan_data, plugins)
 
     from harness.planning import run_planning
 
@@ -548,7 +552,41 @@ def _run_planning_stage(
         plan_data["inbox_id"] = inbox_id
         write_json(PLAN_JSON, plan_data)
         _atomic_write(PLAN_MD, plan_json_to_markdown(plan_data))
-    return plan_data
+    return _with_plan_plugins(plan_data, plugins)
+
+
+def _with_plan_plugins(
+    plan_data: dict[str, Any], plugins: RoundPlugins | None
+) -> dict[str, Any]:
+    """Run the plugins' after_planning hooks and keep what they return.
+
+    plan.json is written before the hooks run and again when they add data, so
+    a hook never costs a finished plan. plan.md, which the task's person
+    reads, carries no plugin data.
+    """
+    if plugins is None:
+        return plan_data
+    merged = plugins.after_planning(plan_data)
+    if merged != plan_data:
+        validate_plan(merged)
+        write_json(PLAN_JSON, merged)
+    return merged
+
+
+def _with_implementation_plugins(
+    inbox_id: str,
+    plan_data: Mapping[str, Any],
+    impl_data: dict[str, Any],
+    plugins: RoundPlugins | None,
+) -> dict[str, Any]:
+    """Run the plugins' after_implementation hooks and keep what they return:
+    their data and their pull request sections."""
+    if plugins is None:
+        return impl_data
+    merged = plugins.after_implementation(plan_data, impl_data)
+    if merged != impl_data:
+        return _finalize_implementation_artifact(inbox_id, merged)
+    return impl_data
 
 
 @traced_stage("implementation")
@@ -559,6 +597,7 @@ def _run_implementation_stage(
     plan_data: Mapping[str, Any],
     *,
     events: RoundEvents | None,
+    plugins: RoundPlugins | None = None,
 ) -> dict[str, Any]:
     if _assignment_artifact_reusable(
         IMPLEMENTATION_JSON,
@@ -566,9 +605,10 @@ def _run_implementation_stage(
         validate_implementation,
         stale_paths=_post_impl_stale(),
     ):
-        return _finalize_implementation_artifact(
+        impl_data = _finalize_implementation_artifact(
             inbox_id, load_json_file(IMPLEMENTATION_JSON)
         )
+        return _with_implementation_plugins(inbox_id, plan_data, impl_data, plugins)
 
     from harness.implementation import run_implementation
     from harness.schemas import Plan
@@ -582,9 +622,11 @@ def _run_implementation_stage(
             impl_out=IMPLEMENTATION_JSON,
             events=events,
         )
-        return _finalize_implementation_artifact(
+        impl_data = _finalize_implementation_artifact(
             inbox_id, load_json_file(IMPLEMENTATION_JSON)
         )
+    # Outside the timed stage: its duration is the implementation's own.
+    return _with_implementation_plugins(inbox_id, plan_data, impl_data, plugins)
 
 
 NO_ACTION_BODY = (
@@ -758,6 +800,16 @@ def process_assignment(entry: dict[str, Any], state: DaemonState) -> None:
     has_live_channel = is_live_channel(entry["source"])
     run_id = new_run_id()
 
+    # Stage hooks of the loaded plugins; None when there are none. ctx.say
+    # posts only where the task's source shows progress.
+    plugins = round_plugins(
+        state.plugins,
+        task_key=task_key,
+        inbox_id=inbox_id,
+        run_id=run_id,
+        events=events if has_live_channel else None,
+    )
+
     summary_status = "failed"
     error: str | None = None
     try:
@@ -791,6 +843,7 @@ def process_assignment(entry: dict[str, Any], state: DaemonState) -> None:
                     run_id,
                     inbox_id,
                     events=events,
+                    plugins=plugins,
                 )
 
                 if not plan_data.get("repos"):
@@ -850,12 +903,19 @@ def process_assignment(entry: dict[str, Any], state: DaemonState) -> None:
                         "body": "Entered implementation mode",
                     })
 
+                # Plugins hear that implementation is about to run or resume,
+                # for example to start what a later check needs. Not when the
+                # implementation is already complete.
+                if plugins is not None and impl_pending:
+                    plugins.before_implementation(plan_data)
+
                 impl_data = _run_implementation_stage(
                     task_key,
                     run_id,
                     inbox_id,
                     plan_data,
                     events=events,
+                    plugins=plugins,
                 )
 
                 # Adversarial review — bounded self-review loop between

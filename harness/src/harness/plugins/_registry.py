@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from harness.paths import HARNESS_DIR, RUNTIME_DIR, WORKSPACE
 from harness.plugins._api import (
@@ -24,9 +24,13 @@ from harness.plugins._api import (
     HOOKS,
     SUPPORTED_API_VERSIONS,
     Plugin,
+    TaskInfo,
     hook_name_of,
 )
 from harness.plugins._context import PluginContext, plugin_settings
+
+if TYPE_CHECKING:
+    from harness.events import RoundEvents
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 # HARNESS_PLUGINS value that turns every installed plugin off.
@@ -124,13 +128,15 @@ def _build(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]:
 
 
 def _call(
-    handler: Callable[..., Any], args: tuple[Any, ...], failure: list[Exception]
+    handler: Callable[..., Any],
+    args: tuple[Any, ...],
+    outcome: list[tuple[bool, Any]],
 ) -> None:
-    """Thread body of one hook call: what it raises goes into ``failure``."""
+    """Thread body of one hook call: (True, value) or (False, exception)."""
     try:
-        handler(*args)
+        outcome.append((True, handler(*args)))
     except Exception as exc:
-        failure.append(exc)
+        outcome.append((False, exc))
 
 
 def _source(entry_point: metadata.EntryPoint) -> str:
@@ -149,7 +155,13 @@ class PluginRegistry:
     runtime_root: Path = RUNTIME_DIR / "devbox-plugins"
     workspace: Path = WORKSPACE
 
-    def context(self, plugin: LoadedPlugin) -> PluginContext:
+    def context(
+        self,
+        plugin: LoadedPlugin,
+        *,
+        task: TaskInfo | None = None,
+        events: RoundEvents | None = None,
+    ) -> PluginContext:
         return PluginContext(
             name=plugin.name,
             settings=plugin_settings(plugin.name, self.env),
@@ -157,46 +169,57 @@ class PluginRegistry:
             runtime_dir=self.runtime_root / plugin.name,
             workspace=self.workspace,
             log=_log.getChild(plugin.name),
+            task=task,
+            _events=events,
         )
 
-    def run(self, hook_name: str, *args: Any) -> None:
-        """Call ``hook_name`` on every plugin that handles it, in order.
+    def invoke(
+        self, plugin: LoadedPlugin, hook_name: str, ctx: PluginContext, *args: Any
+    ) -> tuple[bool, Any]:
+        """Call one plugin's hook. Returns (finished without raising, its
+        return value).
 
-        Never raises. A hook that raises is logged and the next plugin runs.
-        A hook still running after its budget is logged and left behind: it
-        keeps running on its own thread while the daemon moves on.
+        Never raises. A hook that raises is logged. A hook still running after
+        its budget is logged and left behind: it keeps running on its own
+        thread while the daemon moves on, and whatever it returns is dropped.
         """
         spec = HOOKS[hook_name]
-        for plugin in self.plugins:
-            handler = plugin.hooks.get(hook_name)
-            if handler is None:
-                continue
-            failure: list[Exception] = []
-            thread = threading.Thread(
-                target=_call,
-                args=(handler, (self.context(plugin), *args), failure),
-                name=f"plugin-{plugin.name}-{hook_name}",
-                daemon=True,
+        outcome: list[tuple[bool, Any]] = []
+        thread = threading.Thread(
+            target=_call,
+            args=(plugin.hooks[hook_name], (ctx, *args), outcome),
+            name=f"plugin-{plugin.name}-{hook_name}",
+            daemon=True,
+        )
+        thread.start()
+        thread.join(spec.budget_seconds)
+        if thread.is_alive():
+            _log.warning(
+                "plugin %s: %s is still running after %ss; continuing",
+                plugin.name,
+                hook_name,
+                spec.budget_seconds,
             )
-            thread.start()
-            thread.join(spec.budget_seconds)
-            if thread.is_alive():
-                _log.warning(
-                    "plugin %s: %s is still running after %ss; continuing",
-                    plugin.name,
-                    hook_name,
-                    spec.budget_seconds,
-                )
-            elif failure:
-                exc = failure[0]
-                _log.error(
-                    "plugin %s: %s failed (ignored): %s: %s",
-                    plugin.name,
-                    hook_name,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=exc,
-                )
+            return False, None
+        ok, value = outcome[0]
+        if not ok:
+            _log.error(
+                "plugin %s: %s failed (ignored): %s: %s",
+                plugin.name,
+                hook_name,
+                type(value).__name__,
+                value,
+                exc_info=value,
+            )
+            return False, None
+        return True, value
+
+    def run(self, hook_name: str, *args: Any) -> None:
+        """Call ``hook_name`` on every plugin that handles it, in order, and
+        drop what the hooks return. Never raises (see ``invoke``)."""
+        for plugin in self.plugins:
+            if hook_name in plugin.hooks:
+                self.invoke(plugin, hook_name, self.context(plugin), *args)
 
 
 def load_plugins(

@@ -7,8 +7,14 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from harness.plugins._api import TaskInfo
+
+if TYPE_CHECKING:
+    from harness.events import RoundEvents
 
 _KEY = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 
@@ -60,6 +66,25 @@ class PluginContext:
     runtime_dir: Path
     workspace: Path
     log: logging.Logger
+    # The assignment a stage hook runs for. None in daemon_start.
+    task: TaskInfo | None = None
+    # Where ``say`` posts. None outside a round, and for a task whose source
+    # shows no progress messages.
+    _events: RoundEvents | None = field(default=None, repr=False)
+
+    def say(self, text: str) -> None:
+        """Post a short progress line where the task's person follows it.
+
+        Best-effort: it does nothing in daemon_start or when the task's source
+        shows no progress, and it never raises. Write it as the agent would,
+        in the first person, about the work and not about how it is run.
+        """
+        if self._events is None or not text.strip():
+            return
+        try:
+            self._events.publish("agent_action", body=text.strip())
+        except Exception as exc:
+            self.log.warning("say failed (ignored): %s: %s", type(exc).__name__, exc)
 
     def spawn(
         self,

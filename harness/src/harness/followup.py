@@ -32,6 +32,7 @@ from harness.git import GitHubClient
 from harness.handlers._common import (
     _covered_target_ids,
     _read_json_or_none,
+    is_live_channel,
     require_task_key,
     seeded_context_block,
 )
@@ -39,6 +40,7 @@ from harness.memory import MemoryStore
 from harness.obs import timed_stage
 from harness.paths import PLAN_JSON, WORKSPACE
 from harness.plan_utils import knowledge_subpaths_for_repo
+from harness.plugins import round_plugins
 from harness.schemas import Plan
 from harness.stages import Stage
 from harness.tracing import flush_trace, init_trace, trace_span
@@ -499,6 +501,14 @@ def _shared_agent_kwargs(
     }
 
 
+# The inbox kind of each follow-up stage, as plugins are told it.
+_INBOX_KIND = {
+    Stage.COMMENT: "comment",
+    Stage.USER_REVIEW: "review",
+    Stage.CI: "ci_result",
+}
+
+
 def _run_round(
     *,
     state: DaemonState,
@@ -507,6 +517,7 @@ def _run_round(
     stage: Stage,
     task: str,
     primary_target: str,
+    source: str,
     pr: Mapping[str, Any] | None,
     build: Callable[[], DeepAgentSession[Any]],
     brief: Callable[[], str],
@@ -530,6 +541,19 @@ def _run_round(
         if agent_finished(state.events_file, inbox_id):
             # Re-entry after the agent returned: only distillation is left.
             return
+        # Plugins hear that the round is about to run or resume, for example
+        # to start what the agent's own checks need.
+        plugins = round_plugins(
+            state.plugins,
+            task_key=task_key,
+            inbox_id=inbox_id,
+            run_id=run_id,
+            events=state.round_events(inbox_id, primary_target)
+            if is_live_channel(source)
+            else None,
+        )
+        if plugins is not None:
+            plugins.followup_start(_INBOX_KIND[stage])
         try:
             with (
                 init_trace(
@@ -604,6 +628,7 @@ def run_followup_comment(entry: dict[str, Any], state: DaemonState) -> None:
         stage=Stage.COMMENT,
         task=body,
         primary_target=target_id,
+        source=entry["source"],
         pr=pr,
         build=build,
         brief=brief,
@@ -655,6 +680,7 @@ def run_followup_review(entry: dict[str, Any], state: DaemonState) -> None:
         stage=Stage.USER_REVIEW,
         task=str(review_body.get("body") or "PR review"),
         primary_target=summary_id,
+        source=entry["source"],
         pr=pr,
         build=build,
         brief=brief,
@@ -702,6 +728,7 @@ def run_followup_ci(
         stage=Stage.CI,
         task=f"CI failure: {payload.get('workflow_name', 'unknown')}",
         primary_target=target_id,
+        source=entry["source"],
         pr=pr,
         build=build,
         brief=brief,
