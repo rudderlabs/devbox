@@ -136,7 +136,8 @@ return a result:
   ran out of budget and the daemon then restarts, it is called again wherever
   the assignment has got to, which can be after the review or after the pull
   request is open. Data it returns then is still kept. A pull request section
-  it returns then may not reach a pull request that is already open.
+  it returns then does not reach a pull request that is already open: the
+  harness reuses an open pull request without changing its body.
 - Saved results stay on the task's volume, under
   `.harness/plugins/<name>/results/`. They are small and the harness does not
   remove them.
