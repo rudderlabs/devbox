@@ -37,7 +37,9 @@ hello = "devbox_hello_plugin:Hello"
 ```
 
 - `name` is the plugin's name: lowercase letters, digits and underscores,
-  starting with a letter. It must equal the entry point name.
+  starting with a letter. It must equal the entry point name. It must not be
+  another loaded plugin's name followed by an underscore: with `foo` loaded,
+  `foo_bar` is not, because `foo` would read its settings.
 - `requires_api` is the plugin API version the plugin was written for. This
   harness supports version 1.
 - The harness creates the class once per daemon process, with no arguments.
@@ -114,7 +116,8 @@ hooks.
 
 ## Choose which plugins run
 
-`HARNESS_PLUGINS` is a comma-separated list of plugin names.
+`HARNESS_PLUGINS` is a comma-separated list of plugin names. Upper and lower
+case are the same.
 
 - Unset or empty: every installed plugin runs, ordered by name.
 - A list: only those plugins run, in that order. A listed name that is not
