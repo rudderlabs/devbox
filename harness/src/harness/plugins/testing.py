@@ -17,7 +17,7 @@ from harness.plugins._api import Plugin
 from harness.plugins._registry import (
     PluginProblem,
     PluginRegistry,
-    _build,
+    _load_on_thread,
     _overlap_message,
     settings_overlaps,
 )
@@ -41,7 +41,7 @@ def registry_for(
         workspace=root / "workspace",
     )
     for cls in plugin_classes:
-        plugin, errors = _build(cls.name, cls)
+        plugin, errors = _load_on_thread(cls.name, lambda cls=cls: cls)
         registry.problems.extend(PluginProblem(cls.name, error) for error in errors)
         if plugin is not None:
             registry.plugins.append(plugin)

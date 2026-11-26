@@ -270,6 +270,48 @@ class TestImplementationHooks(StageTestCase):
             "Body of the change.\n\n## Checked\n\nIt works.\n",
         )
 
+    def test_a_section_keeps_its_indentation(self) -> None:
+        Recorder.implementation_result = HookResult(
+            pr_sections=[
+                PrSection(repo="repo-a", title="Checked", body="\n    assert passed\n")
+            ]
+        )
+        merged = self.round().after_implementation(_plan(), _impl())
+        self.assertTrue(
+            merged["repos"][0]["pr_body"].endswith("## Checked\n\n    assert passed\n")
+        )
+
+    def test_a_section_is_not_swallowed_by_unclosed_markdown_above_it(self) -> None:
+        Recorder.implementation_result = HookResult(
+            pr_sections=[PrSection(repo="repo-a", title="Checked", body="It works.")]
+        )
+        for label, body, closed in (
+            (
+                "code fence",
+                "Body.\n\n```sh\nmake test\n",
+                "make test\n```\n\n## Checked",
+            ),
+            ("comment", "Body.\n\n<!-- a note", "<!-- a note\n-->\n\n## Checked"),
+        ):
+            with self.subTest(label):
+                impl = _impl()
+                impl["repos"][0]["pr_body"] = body
+                merged = self.round(label).after_implementation(_plan(), impl)
+                self.assertIn(closed, merged["repos"][0]["pr_body"])
+
+    def test_data_may_be_any_mapping(self) -> None:
+        from collections import UserDict
+        from types import MappingProxyType
+
+        Recorder.implementation_result = MappingProxyType({
+            "passed": True,
+            "nested": UserDict({"n": 1}),
+        })
+        merged = self.round().after_implementation(_plan(), _impl())
+        self.assertEqual(
+            merged["extensions"]["recorder"], {"passed": True, "nested": {"n": 1}}
+        )
+
     def test_merging_twice_adds_the_section_once(self) -> None:
         Recorder.implementation_result = HookResult(
             pr_sections=[PrSection(repo="repo-a", title="Checked", body="It works.")]

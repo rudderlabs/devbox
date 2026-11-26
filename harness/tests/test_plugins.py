@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import io
+import os
+import signal
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -138,6 +141,69 @@ class StaticWrongSignature(Plugin):
     def start() -> None: ...
 
 
+class KeywordOnly(Plugin):
+    name = "keywordonly"
+    requires_api = 1
+
+    @hook("daemon_start")
+    def start(self, ctx: PluginContext, *, required: str) -> None: ...
+
+
+class ExtraBeforeStar(Plugin):
+    name = "extrabeforestar"
+    requires_api = 1
+
+    @hook("daemon_start")
+    def start(self, ctx: PluginContext, required: str, *rest: str) -> None: ...
+
+
+class AsyncHook(Plugin):
+    name = "asynchook"
+    requires_api = 1
+
+    @hook("daemon_start")
+    async def start(self, ctx: PluginContext) -> None: ...
+
+
+class GeneratorHook(Plugin):
+    name = "generatorhook"
+    requires_api = 1
+
+    @hook("daemon_start")
+    def start(self, ctx: PluginContext):
+        yield
+
+
+class TakesAnything(Plugin):
+    name = "takesanything"
+    requires_api = 1
+
+    @hook("daemon_start")
+    def start(self, *args: object, **kwargs: object) -> None:
+        Alpha.calls.append("takesanything")
+
+
+class SignalsOnCreate(Plugin):
+    """Stands in for a shutdown signal that arrives while a plugin loads."""
+
+    name = "signalsoncreate"
+    requires_api = 1
+
+    def __init__(self) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(5)
+
+
+class SignalsInHook(Plugin):
+    name = "signalsinhook"
+    requires_api = 1
+
+    @hook("daemon_start")
+    def start(self, ctx: PluginContext) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(5)
+
+
 class AlphaTwo(Plugin):
     name = "alpha_two"
     requires_api = 1
@@ -220,6 +286,7 @@ class PluginTestCase(unittest.TestCase):
                 proc.kill()
             proc.wait()
         context_module._spawned.clear()
+        context_module._exited.clear()
         self._tmp.cleanup()
 
     def load(self, entry_points: list[metadata.EntryPoint], env=None):
@@ -296,6 +363,10 @@ class TestLoading(PluginTestCase):
             "raisinglookup": (RaisingLookup, "could not be checked"),
             "exitsoncreate": (ExitsOnCreate, "could not be created: SystemExit: 4"),
             "staticwrongsignature": (StaticWrongSignature, "must take (self, ctx)"),
+            "keywordonly": (KeywordOnly, "must take (self, ctx)"),
+            "extrabeforestar": (ExtraBeforeStar, "must take (self, ctx)"),
+            "asynchook": (AsyncHook, "must be a plain function"),
+            "generatorhook": (GeneratorHook, "must be a plain function"),
             "missing": ("no_such_module_for_plugins:Thing", "import failed"),
             "notaplugin": (f"{__name__}:PluginTestCase", "not a harness.plugins"),
         }
@@ -371,6 +442,13 @@ class TestLoading(PluginTestCase):
         self.assertEqual([p.name for p in registry.plugins], ["alpha_two"])
         self.assertEqual(registry.problems, [])
 
+    def test_a_shutdown_signal_while_loading_is_not_a_plugin_problem(self) -> None:
+        # The daemon's SIGTERM handler calls sys.exit(0) on the main thread.
+        previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        self.addCleanup(signal.signal, signal.SIGTERM, previous)
+        with self.assertRaises(SystemExit):
+            self.load([_entry_point("signalsoncreate", SignalsOnCreate)])
+
     def test_a_plugin_without_hooks_loads(self) -> None:
         registry = self.load([_entry_point("nohooks", NoHooks)])
         self.assertEqual(registry.problems, [])
@@ -408,6 +486,19 @@ class TestHooks(PluginTestCase):
             self.assertEqual(list(plugin.hooks), ["daemon_start"])
         registry.run("daemon_start")
         self.assertEqual(Alpha.calls, ["static:wrappedhooks", "class:classhook"])
+
+    def test_a_shutdown_signal_during_a_hook_stops_the_run(self) -> None:
+        previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        self.addCleanup(signal.signal, signal.SIGTERM, previous)
+        registry = registry_for([SignalsInHook, Beta], root=self.root)
+        with self.assertRaises(SystemExit):
+            registry.run("daemon_start")
+        self.assertEqual(Alpha.calls, [])
+
+    def test_a_hook_that_takes_anything_fits(self) -> None:
+        registry = registry_for([TakesAnything], root=self.root)
+        registry.run("daemon_start")
+        self.assertEqual(Alpha.calls, ["takesanything"])
 
     def test_a_hook_over_budget_is_left_behind(self) -> None:
         registry = registry_for([Slow, Beta], root=self.root)
@@ -506,13 +597,31 @@ class TestContext(PluginTestCase):
             str(pid),
         )
 
-    def test_spawn_collects_processes_that_have_finished(self) -> None:
+    def test_a_finished_process_is_collected_without_another_spawn(self) -> None:
         ctx = self.context()
-        first = ctx.spawn([sys.executable, "-c", "pass"], log="a.log")
-        assert first is not None
-        context_module._spawned[first].wait()
-        second = ctx.spawn([sys.executable, "-c", "pass"], log="a.log")
-        self.assertEqual(list(context_module._spawned), [second])
+        pid = ctx.spawn([sys.executable, "-c", "pass"], log="a.log")
+        deadline = time.monotonic() + 10
+        while context_module._spawned and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(context_module._spawned, {})
+        self.assertIn(pid, context_module._exited)
+
+    def test_spawn_once_from_two_threads_starts_one_process(self) -> None:
+        ctx = self.context()
+        sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+        barrier = threading.Barrier(8)
+        pids: list[int | None] = []
+
+        def launch() -> None:
+            barrier.wait()
+            pids.append(ctx.spawn(sleeper, log="a.log", once="server"))
+
+        threads = [threading.Thread(target=launch) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len([pid for pid in pids if pid is not None]), 1)
 
     def test_spawn_rejects_paths_as_names(self) -> None:
         ctx = self.context()

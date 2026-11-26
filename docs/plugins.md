@@ -45,6 +45,11 @@ hello = "devbox_hello_plugin:Hello"
 - `requires_api` is the plugin API version the plugin was written for. This
   harness supports version 1.
 - The harness creates the class once per daemon process, with no arguments.
+  It imports and creates a plugin on a thread of its own, so a plugin must
+  not install signal handlers when it loads.
+- A hook is a plain method marked with `@hook`, one per hook name. An `async`
+  method or a generator is rejected when the plugin loads, because calling
+  one would run none of its body.
 
 [harness/examples/plugins/hello](../harness/examples/plugins/hello) is this
 plugin as a complete package.
@@ -63,7 +68,8 @@ plugin as a complete package.
 Every hook follows the same rules:
 
 - **A plugin cannot fail a task or stop the daemon.** A hook that raises is
-  logged, and the next plugin runs.
+  logged, and the next plugin runs. A hook that calls `sys.exit()` is treated
+  the same way.
 - **A hook has a time budget.** When it is used up, the harness logs that and
   moves on, and drops whatever the hook returns later. The hook is not
   stopped: it keeps running on its own thread. Start long work that needs no
@@ -240,8 +246,9 @@ RUN uv pip install --python /opt/harness/.venv/bin/python /opt/plugins/my-plugin
 
 `harness plugins check` loads every installed plugin the way the daemon does
 and exits non-zero when one cannot be loaded: an import error, a name that
-differs from its entry point, an unsupported `requires_api`, an unknown hook
-or a hook with the wrong arguments. Keep it as the last step, so a broken
+differs from its entry point or would share another plugin's settings, an
+unsupported `requires_api`, an unknown hook, two methods for one hook, or a
+hook that is `async` or has the wrong arguments. Keep it as the last step, so a broken
 plugin fails the image build and never reaches a sandbox.
 
 `harness plugins list` shows the plugins the daemon would load and their
