@@ -75,7 +75,7 @@ HOOKS: dict[str, HookSpec] = {
         summary=(
             "Each time the daemon is about to start a stage's agents. Returns "
             "text for their system prompt. stage is planning, implementation, "
-            "comment, review or ci_result."
+            "review_fix, comment, review or ci_result."
         ),
     ),
     "followup_start": HookSpec(
@@ -91,9 +91,18 @@ HOOKS: dict[str, HookSpec] = {
 
 
 # The stages whose agents take plugin text in their system prompt, as the
-# prompt_fragments hook is told them. The last three are the follow-up rounds,
-# named by inbox kind like followup_start's ``kind``.
-PROMPT_STAGES = ("planning", "implementation", "comment", "review", "ci_result")
+# prompt_fragments hook is told them. ``review_fix`` is the agent that fixes
+# what the harness's own review of the change found. The last three are the
+# follow-up rounds, named by inbox kind like followup_start's ``kind``; there
+# ``review`` is a person's review of the pull request.
+PROMPT_STAGES = (
+    "planning",
+    "implementation",
+    "review_fix",
+    "comment",
+    "review",
+    "ci_result",
+)
 
 
 @dataclass(frozen=True)

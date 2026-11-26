@@ -168,7 +168,14 @@ class TestPromptFragments(FragmentTestCase):
     def test_the_stages_are_the_documented_ones(self) -> None:
         self.assertEqual(
             PROMPT_STAGES,
-            ("planning", "implementation", "comment", "review", "ci_result"),
+            (
+                "planning",
+                "implementation",
+                "review_fix",
+                "comment",
+                "review",
+                "ci_result",
+            ),
         )
 
 
@@ -230,7 +237,40 @@ class TestAgentWiring(unittest.TestCase):
                         expected,
                     )
 
-    def test_follow_up_and_ci_agents_get_it_last(self) -> None:
+    def test_the_review_fix_agent_gets_it(self) -> None:
+        from harness import self_review
+        from harness.deepagents.agents import review as agents
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(
+                agents.DeepAgentSession, "__init__", return_value=None
+            ) as init,
+            patch.object(
+                self_review._retry,
+                "run_agent_with_retries",
+                side_effect=lambda build, *_a, **_k: build() and MagicMock(),
+            ),
+        ):
+            for text, expected in (("Plugin text.", ["Plugin text."]), (None, [])):
+                with self.subTest(text):
+                    self_review._run_repo_fix_agent(
+                        model=object(),
+                        repo_name="repo-a",
+                        repo_path=Path(tmp),
+                        thread_id="thread-1",
+                        knowledge_subpaths=(),
+                        brief="fix it",
+                        events=None,
+                        plugin_prompt=text,
+                    )
+                    middleware = init.call_args.kwargs["middleware"] or []
+                    self.assertEqual(
+                        [m.system_prompt for m in self._plugin_middleware(middleware)],
+                        expected,
+                    )
+
+    def test_follow_up_and_ci_agents_get_it_after_their_own_middleware(self) -> None:
         from harness.deepagents.agents import followup as agents
         from harness.deepagents.middleware.ci_rerun import WorkflowRunRef
         from harness.deepagents.middleware.reply import ReplyTarget

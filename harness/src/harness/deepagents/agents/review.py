@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from langchain.agents.structured_output import ProviderStrategy
 from langchain_core.language_models import BaseChatModel
@@ -290,6 +291,7 @@ class ReviewFixAgent(DeepAgentSession[RepoReviewFixOutput]):
         knowledge_subpaths: Sequence[str] = (),
         repo: str | None = None,
         durable: bool = True,
+        middleware: Sequence[Any] | None = None,
         events: RoundEvents | None,
     ) -> None:
         repo_name = repo or repo_path.name
@@ -305,6 +307,7 @@ class ReviewFixAgent(DeepAgentSession[RepoReviewFixOutput]):
                 knowledge_subpaths=knowledge_subpaths,
                 memory_stage="review-fix",
                 events=events,
+                extra=middleware,
             ),
             response_format=ProviderStrategy(RepoReviewFixOutput, strict=True),
             durable=durable,

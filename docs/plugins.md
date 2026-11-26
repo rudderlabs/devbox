@@ -143,19 +143,23 @@ def instructions(self, ctx: PluginContext, stage: str) -> str | None:
 |---|---|
 | `planning` | The planning agent of each repository. |
 | `implementation` | The implementation agent of each repository. |
-| `comment`, `review`, `ci_result` | The agent of that follow-up round. |
+| `review_fix` | The agent that fixes what the harness's own review of the change found, one per repository. |
+| `comment`, `review`, `ci_result` | The agent of that follow-up round. `review` is a person's review of the pull request. |
 
-Orientation, plan review, the harness's own review of the change and
+Orientation, plan review, the review's own agents that read the change, and
 distillation take no plugin text.
 
 - Return a string, a list of strings, or `None` for no text.
-- The harness adds the text after its own instructions, in a block that names
-  your plugin: `<plugin_instructions plugin="<name>">`.
+- The harness adds the text to the system prompt in a block that names your
+  plugin: `<plugin_instructions plugin="<name>">`. It comes after the stage's
+  own instructions, but it is not always the last thing in the prompt.
 - One plugin may add up to 8,000 characters per stage. Longer text is logged
   and dropped whole.
 - The hook runs once per stage, just before its agents start, and every agent
   of the stage gets the same text. In an assignment that is after
   `before_implementation`; in a follow-up round, after `followup_start`.
+  For `review_fix` it runs when the review begins, whether or not the review
+  then finds something to fix.
 - The text is not saved. After a restart the hook runs again, and a resumed
   agent gets what it returns then.
 - The hook has no plan argument. To make the text depend on the plan, save

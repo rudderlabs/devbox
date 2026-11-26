@@ -206,6 +206,7 @@ class TestReviewLoop(unittest.TestCase):
         run_id: str = "r1",
         forget_raises_when: Callable[[str, dict], bool] | None = None,
         events: Any = None,
+        plugin_prompt: str | None = None,
     ):
         """Invoke run_self_review_loop with stubbed DeepAgents workers.
 
@@ -263,6 +264,7 @@ class TestReviewLoop(unittest.TestCase):
         self.lens_calls: list[tuple[int, str, str, str, str]] = []
         self.agent_threading: list[Any] = []
         self.fix_calls: list[tuple[str, str, str]] = []
+        self.fix_plugin_prompts: list[str | None] = []
         self.forgotten: list[str] = []
         self.forget_phase: dict[str, tuple[str | None, int | None]] = {}
         self.failed_forgets: list[str] = []
@@ -377,8 +379,10 @@ class TestReviewLoop(unittest.TestCase):
             knowledge_subpaths,
             brief,
             events,
+            plugin_prompt=None,
         ):
             self.agent_threading.append(events)
+            self.fix_plugin_prompts.append(plugin_prompt)
             self.fix_calls.append((repo_name, thread_id, brief))
             idx = fix_pass_by_repo.get(repo_name, 0)
             fix_pass_by_repo[repo_name] = idx + 1
@@ -491,6 +495,7 @@ class TestReviewLoop(unittest.TestCase):
                 impl_data=impl_data or _impl_data(),
                 inbox_id=inbox_id,
                 events=events,
+                plugin_prompt=plugin_prompt,
             )
 
     # ------------------------------------------------------------------
@@ -672,6 +677,14 @@ class TestReviewLoop(unittest.TestCase):
         self.assertTrue(review_data["fix_iterations"][0]["tree_changed"])
         self.assertEqual(review_data["unresolved_findings"], [])
         self.assertNotIn("Auto-review unresolved", impl["repos"][0]["pr_body"])
+
+    def test_plugin_prompt_reaches_the_fix_agent(self) -> None:
+        self._run(
+            [[_medium_finding()], []],
+            fix_scripts=[{"config-backend": {}}],
+            plugin_prompt="Plugin text.",
+        )
+        self.assertEqual(self.fix_plugin_prompts, ["Plugin text."])
 
     def test_medium_finding_declined_ships_with_reason(self) -> None:
         """A declined medium finding ships as approved_with_warnings after a

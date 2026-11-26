@@ -956,6 +956,9 @@ def process_assignment(entry: dict[str, Any], state: DaemonState) -> None:
                         impl_data,
                         inbox_id=inbox_id,
                         events=events,
+                        plugin_prompt=plugins.prompt_fragments("review_fix")
+                        if plugins is not None
+                        else None,
                     )
 
                 # Distillation — promotes per-run memory into each repo's

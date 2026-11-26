@@ -66,6 +66,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.deepagents import retry as _retry
+from harness.deepagents.middleware.plugin_prompt import plugin_prompt_middleware
 from harness.env_flags import bool_env, int_env
 from harness.events import RoundEvents
 from harness.git import (
@@ -228,8 +229,11 @@ def _run_repo_fix_agent(
     knowledge_subpaths: tuple[str, ...],
     brief: str,
     events: RoundEvents | None,
+    plugin_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch one per-repo fix agent (thread scoped to this iteration).
+
+    ``plugin_prompt`` is the loaded plugins' text for its system prompt.
 
     `ReviewFixAgent` pins the review-fix persona and output contract; the
     thread is per (assignment, iteration, repo) — never the implementation
@@ -248,6 +252,7 @@ def _run_repo_fix_agent(
             thread_id=thread_id,
             knowledge_subpaths=knowledge_subpaths,
             repo=repo_name,
+            middleware=plugin_prompt_middleware(plugin_prompt),
         )
 
     output = _retry.run_agent_with_retries(
@@ -1582,8 +1587,12 @@ def run_self_review_loop(
     *,
     inbox_id: str,
     events: RoundEvents | None,
+    plugin_prompt: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Drive the bounded adversarial-review loop on DeepAgents.
+
+    ``plugin_prompt`` is the loaded plugins' text for the fix agents' system
+    prompt; the review's lens and merge agents do not get it.
 
     Returns (review_aggregate, post_fix_implementation_json). The harness
     persists the implementation.json mutation (fix summaries, recomputed
@@ -1619,6 +1628,7 @@ def run_self_review_loop(
             max_iters=max_iters,
             max_parallel=max_parallel,
             events=events,
+            plugin_prompt=plugin_prompt,
         )
 
 
@@ -1991,6 +2001,7 @@ def _run_review_stage(
     max_iters: int,
     max_parallel: int,
     events: RoundEvents | None,
+    plugin_prompt: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Everything `run_self_review_loop` does once review is enabled — kept
     separate so the stage timer brackets artifact cleanup, model construction
@@ -2040,6 +2051,7 @@ def _run_review_stage(
         max_parallel=max_parallel,
         resume=resume,
         events=events,
+        plugin_prompt=plugin_prompt,
     )
     # Only once the stage completed. An unwinding abort (SIGTERM's SystemExit,
     # a dispatch-time error) leaves review-state.json naming in-flight threads
@@ -2063,6 +2075,7 @@ def _run_review_iterations(
     max_parallel: int,
     events: RoundEvents | None,
     resume: dict[str, Any] | None = None,
+    plugin_prompt: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The review/fix iteration loop (see `run_self_review_loop`).
 
@@ -2494,6 +2507,7 @@ def _run_review_iterations(
                                 knowledge_subpaths=subpaths,
                                 brief=brief,
                                 events=events,
+                                plugin_prompt=plugin_prompt,
                             )
                         ] = name
                     for future in as_completed(futures):
