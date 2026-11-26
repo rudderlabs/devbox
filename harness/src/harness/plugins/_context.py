@@ -40,7 +40,9 @@ def _collect_finished() -> None:
     stays behind as a zombie or in the table."""
     for pid, proc in list(_spawned.items()):
         if proc.poll() is not None:
-            del _spawned[pid]
+            # pop, not del: a hook left running past its budget can be in
+            # spawn at the same time as the next hook.
+            _spawned.pop(pid, None)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -48,7 +50,7 @@ def _pid_alive(pid: int) -> bool:
     if proc is not None:
         if proc.poll() is None:
             return True
-        del _spawned[pid]
+        _spawned.pop(pid, None)
         return False
     try:
         os.kill(pid, 0)
