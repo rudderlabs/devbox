@@ -36,11 +36,6 @@ _NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 # HARNESS_PLUGINS value that turns every installed plugin off.
 _NONE = "none"
 
-# What a plugin's own code can do on the daemon's main thread while it loads:
-# raise, or call sys.exit(). Both leave that plugin out and nothing else.
-# KeyboardInterrupt is not here, so a real interrupt still stops the daemon.
-_PLUGIN_FAILURE = (Exception, SystemExit)
-
 _log = logging.getLogger("harness.plugins")
 
 
@@ -102,27 +97,34 @@ def _overlap_message(other: str) -> str:
     )
 
 
-def _positional_params(fn: Callable[..., Any]) -> list[str] | None:
-    """Names of the positional parameters of a bound method, or ``None`` when
-    it also takes ``*args`` and so fits any hook."""
-    names: list[str] = []
-    for param in inspect.signature(fn).parameters.values():
-        if param.kind is param.VAR_POSITIONAL:
-            return None
-        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD):
-            names.append(param.name)
-    return names
+def _hook_shape_error(fn: Callable[..., Any], params: tuple[str, ...]) -> str | None:
+    """Why the bound method ``fn`` cannot be called as a hook with ``params``,
+    or ``None`` when it can."""
+    target = inspect.unwrap(getattr(fn, "__func__", fn))
+    if (
+        inspect.iscoroutinefunction(target)
+        or inspect.isasyncgenfunction(target)
+        or inspect.isgeneratorfunction(target)
+    ):
+        # Calling one returns an object and runs none of its body.
+        return "must be a plain function, not async and not a generator"
+    try:
+        inspect.signature(fn).bind(*params)
+    except TypeError:
+        return f"must take ({', '.join(('self', *params))})"
+    return None
 
 
 def _build(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]:
     """Check one plugin class and create it. Returns it, or what is wrong.
 
     Never raises: whatever a plugin's own code raises while it is checked is
-    that plugin's problem, and the others still load.
+    that plugin's problem, and the others still load. Call it through
+    ``_load_on_thread``, which is what makes catching BaseException safe.
     """
     try:
         return _build_checked(name, obj)
-    except _PLUGIN_FAILURE as exc:
+    except BaseException as exc:
         return None, [f"could not be checked: {type(exc).__name__}: {exc}"]
 
 
@@ -158,7 +160,7 @@ def _build_checked(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]
         return None, errors
     try:
         instance = obj()
-    except _PLUGIN_FAILURE as exc:
+    except BaseException as exc:
         return None, [f"could not be created: {type(exc).__name__}: {exc}"]
 
     hooks: dict[str, Callable[..., Any]] = {}
@@ -171,15 +173,40 @@ def _build_checked(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]
         if hook_name in hooks:
             errors.append(f"hook {hook_name!r} has more than one handler")
             continue
-        params = _positional_params(member)
-        if params is not None and len(params) != len(spec.params):
-            expected = ", ".join(("self", *spec.params))
-            errors.append(f"{attr} must take ({expected}) for hook {hook_name!r}")
+        shape_error = _hook_shape_error(member, spec.params)
+        if shape_error is not None:
+            errors.append(f"{attr} {shape_error} for hook {hook_name!r}")
             continue
         hooks[hook_name] = member
     if errors:
         return None, errors
     return LoadedPlugin(name=name, instance=instance, hooks=hooks), []
+
+
+def _load_on_thread(
+    name: str, load: Callable[[], Any]
+) -> tuple[LoadedPlugin | None, list[str]]:
+    """Import, create and check one plugin on a thread of its own.
+
+    A plugin's code may raise or call ``sys.exit()`` while it loads. On its
+    own thread, either is that plugin's problem and nothing else's. Signal
+    handlers run on the main thread only, so a SystemExit that reaches the
+    caller while it waits here is a real shutdown, and it passes through.
+    """
+    result: list[tuple[LoadedPlugin | None, list[str]]] = []
+
+    def body() -> None:
+        try:
+            obj = load()
+        except BaseException as exc:
+            result.append((None, [f"import failed: {type(exc).__name__}: {exc}"]))
+            return
+        result.append(_build(name, obj))
+
+    thread = threading.Thread(target=body, name=f"plugin-{name}-load", daemon=True)
+    thread.start()
+    thread.join()
+    return result[0]
 
 
 def _call(
@@ -346,14 +373,7 @@ def load_plugins(
             )
             continue
         entry_point = by_name[name]
-        try:
-            obj = entry_point.load()
-        except _PLUGIN_FAILURE as exc:
-            registry.problems.append(
-                PluginProblem(name, f"import failed: {type(exc).__name__}: {exc}")
-            )
-            continue
-        plugin, errors = _build(name, obj)
+        plugin, errors = _load_on_thread(name, entry_point.load)
         registry.problems.extend(PluginProblem(name, error) for error in errors)
         if plugin is not None:
             registry.plugins.append(
