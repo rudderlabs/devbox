@@ -5,7 +5,7 @@ inbox entry. Each method runs one hook on every plugin that handles it and
 returns the stage's artifact with the plugins' results merged in.
 
 A hook that saves its result is called once per assignment. Its result is
-written under the plugin's state directory, keyed by inbox id, before it is
+written beside the plugins' state directories, keyed by inbox id, before it is
 merged; on a restart the saved result is merged again and the hook is not
 called. A hook that raised or overran its budget saved nothing, so a restart
 calls it again. Merging is idempotent, so an artifact that already carries the
@@ -32,6 +32,9 @@ if TYPE_CHECKING:
 # The key in plan.json and implementation.json that holds plugin data, one
 # entry per plugin name.
 EXTENSIONS_KEY = "extensions"
+# Where saved hook results live under the plugins' state root. A plugin name
+# starts with a letter, so no plugin's directory can have this name.
+RESULTS_DIR = "_results"
 
 _log = logging.getLogger("harness.plugins")
 
@@ -124,10 +127,12 @@ class RoundPlugins:
 
     def _result_path(self, plugin: LoadedPlugin, hook_name: str) -> Path:
         inbox = safe_marker_fragment(self.task.inbox_id)
+        # Beside the plugins' own directories, not inside one: a plugin owns
+        # everything under its state_dir and may name a file anything.
         return (
             self.registry.state_root
+            / RESULTS_DIR
             / plugin.name
-            / "results"
             / f"{hook_name}-{inbox}.json"
         )
 

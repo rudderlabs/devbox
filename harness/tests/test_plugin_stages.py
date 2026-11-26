@@ -206,6 +206,22 @@ class TestAfterPlanning(StageTestCase):
         self.assertIn("after_planning failed", logs.output[0])
         self.assertEqual(merged["extensions"], {"second": {"from": "second"}})
 
+    def test_a_plugins_own_files_cannot_block_its_saved_results(self) -> None:
+        # Everything under state_dir is the plugin's, a file named "results"
+        # included, as ctx.spawn(..., log="results") would leave.
+        state_dir = self.root / "state" / "recorder"
+        state_dir.mkdir(parents=True)
+        (state_dir / "results").write_text("a log\n", encoding="utf-8")
+        Recorder.planning_result = {"n": 1}
+        merged = self.round().after_planning(_plan())
+        self.assertEqual(merged["extensions"]["recorder"], {"n": 1})
+        self.round().after_planning(_plan())
+        self.assertEqual(self.called("after_planning"), 1)
+        saved = self.root / "state" / "_results" / "recorder"
+        self.assertEqual(
+            [p.name for p in saved.iterdir()], ["after_planning-inbox-1.json"]
+        )
+
     def test_results_a_hook_may_not_return_are_dropped(self) -> None:
         bad = {
             "not json": {"when": object()},
