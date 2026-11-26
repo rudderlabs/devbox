@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,29 +24,36 @@ def plugin_settings(name: str, env: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-# Processes this daemon started, by pid. Holding them lets the exit of each be
-# collected, and tells a finished one from a live one: a finished child that
-# nobody has collected still answers a signal.
+# Live processes this daemon started, by pid, and the pids of those that have
+# exited. Each child has a thread that waits for it, so its exit is collected
+# whether or not anything is spawned again; a finished child that nobody has
+# collected stays behind as a zombie and still answers a signal.
 _spawned: dict[int, subprocess.Popen[bytes]] = {}
+_exited: set[int] = set()
+# Held from reading a ``once`` marker to writing it, so two hooks running at
+# the same time cannot both start the same work. A hook left running past its
+# budget overlaps the next one.
+_lock = threading.Lock()
 
 
-def _collect_finished() -> None:
-    """Collect the exit of every started process that has finished, so none
-    stays behind as a zombie or in the table."""
-    for pid, proc in list(_spawned.items()):
-        if proc.poll() is not None:
-            # pop, not del: a hook left running past its budget can be in
-            # spawn at the same time as the next hook.
-            _spawned.pop(pid, None)
+def _reap(proc: subprocess.Popen[bytes]) -> None:
+    """Thread body: wait for one child, then record that it has exited."""
+    proc.wait()
+    with _lock:
+        _spawned.pop(proc.pid, None)
+        _exited.add(proc.pid)
 
 
 def _pid_alive(pid: int) -> bool:
+    """Whether the process a ``once`` marker names is still running. Call it
+    with ``_lock`` held."""
     proc = _spawned.get(pid)
     if proc is not None:
-        if proc.poll() is None:
-            return True
-        _spawned.pop(pid, None)
+        return proc.poll() is None
+    if pid in _exited:
+        # Ours, and gone. The pid may since belong to another process.
         return False
+    # Not started by this daemon process: ask the system.
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -95,29 +103,33 @@ class PluginContext:
         if not _KEY.match(log) or (once is not None and not _KEY.match(once)):
             raise ValueError("spawn: log and once must be plain file names")
 
-        _collect_finished()
-        marker = None
-        if once is not None:
-            marker = self.runtime_dir / f"{once}.pid"
-            try:
-                if _pid_alive(int(marker.read_text(encoding="utf-8").strip())):
-                    return None
-            except (OSError, ValueError):
-                pass
+        with _lock:
+            marker = None
+            if once is not None:
+                marker = self.runtime_dir / f"{once}.pid"
+                try:
+                    if _pid_alive(int(marker.read_text(encoding="utf-8").strip())):
+                        return None
+                except (OSError, ValueError):
+                    pass
 
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        with (self.state_dir / log).open("ab") as out:
-            proc = subprocess.Popen(
-                list(argv),
-                cwd=str(cwd) if cwd is not None else None,
-                env={**os.environ, **env} if env is not None else None,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-        _spawned[proc.pid] = proc
-        if marker is not None:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(f"{proc.pid}\n", encoding="utf-8")
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            with (self.state_dir / log).open("ab") as out:
+                proc = subprocess.Popen(
+                    list(argv),
+                    cwd=str(cwd) if cwd is not None else None,
+                    env={**os.environ, **env} if env is not None else None,
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            _spawned[proc.pid] = proc
+            _exited.discard(proc.pid)
+            if marker is not None:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(f"{proc.pid}\n", encoding="utf-8")
+        threading.Thread(
+            target=_reap, args=(proc,), name=f"plugin-reap-{proc.pid}", daemon=True
+        ).start()
         return proc.pid
