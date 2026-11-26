@@ -63,7 +63,8 @@ HOOKS: dict[str, HookSpec] = {
         budget_seconds=1800.0,
         summary=(
             "Once per assignment, after every repository's implementation is "
-            "complete and before the review."
+            "complete. Before the review, unless a first try failed and the "
+            "daemon restarted later."
         ),
         saves_result=True,
         pr_sections=True,

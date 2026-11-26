@@ -75,7 +75,7 @@ class Recorder(Plugin):
     def planned(self, ctx: PluginContext, plan: dict[str, Any]) -> Any:
         Recorder.calls.append(("after_planning", ctx.task))
         plan["repos"].append("changed by the plugin")
-        if isinstance(Recorder.planning_result, Exception):
+        if isinstance(Recorder.planning_result, BaseException):
             raise Recorder.planning_result
         return Recorder.planning_result
 
@@ -198,6 +198,13 @@ class TestAfterPlanning(StageTestCase):
         merged = self.round().after_planning(merged)
         self.assertEqual(self.called("after_planning"), 2)
         self.assertEqual(merged["extensions"]["recorder"], {"n": 1})
+
+    def test_a_hook_that_exits_fails_only_itself(self) -> None:
+        Recorder.planning_result = SystemExit(3)
+        with self.assertLogs("harness.plugins", level="ERROR") as logs:
+            merged = self.round().after_planning(_plan())
+        self.assertIn("after_planning failed", logs.output[0])
+        self.assertEqual(merged["extensions"], {"second": {"from": "second"}})
 
     def test_results_a_hook_may_not_return_are_dropped(self) -> None:
         bad = {
