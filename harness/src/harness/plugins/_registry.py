@@ -67,10 +67,34 @@ def enabled_names(env: Mapping[str, str]) -> list[str] | None:
     raw = (env.get("HARNESS_PLUGINS") or "").strip()
     if not raw:
         return None
-    names = [part for part in re.split(r"[,\s]+", raw) if part]
-    if [name.lower() for name in names] == [_NONE]:
+    # Plugin names are lowercase, so the list is read without regard to case.
+    names = [part.lower() for part in re.split(r"[,\s]+", raw) if part]
+    if names == [_NONE]:
         return []
     return list(dict.fromkeys(names))
+
+
+def settings_overlaps(names: Iterable[str]) -> dict[str, str]:
+    """Names whose settings another name would also read: name -> that other.
+
+    Settings are ``HARNESS_PLUGIN_<NAME>_<KEY>``, so plugin ``foo`` would read
+    every setting of a plugin ``foo_bar`` as its own ``bar_<key>``. The longer
+    name is the one reported.
+    """
+    names = list(names)
+    return {
+        name: other
+        for name in names
+        for other in names
+        if name != other and name.startswith(f"{other}_")
+    }
+
+
+def _overlap_message(other: str) -> str:
+    return (
+        f"its name starts with the name of plugin {other!r} and an underscore, "
+        "so that plugin would read its settings; rename one of them"
+    )
 
 
 def _positional_params(fn: Callable[..., Any]) -> list[str] | None:
@@ -86,7 +110,32 @@ def _positional_params(fn: Callable[..., Any]) -> list[str] | None:
 
 
 def _build(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]:
-    """Check one plugin class and create it. Returns it, or what is wrong."""
+    """Check one plugin class and create it. Returns it, or what is wrong.
+
+    Never raises: whatever a plugin's own code raises while it is checked is
+    that plugin's problem, and the others still load.
+    """
+    try:
+        return _build_checked(name, obj)
+    except Exception as exc:
+        return None, [f"could not be checked: {type(exc).__name__}: {exc}"]
+
+
+def _hook_methods(instance: Plugin) -> list[tuple[str, str]]:
+    """(attribute, hook name) of each method marked with ``hook``.
+
+    Reads the class without evaluating anything on it, so a property is never
+    run while the plugin loads.
+    """
+    marked: list[tuple[str, str]] = []
+    for attr in dir(type(instance)):
+        hook_name = hook_name_of(inspect.getattr_static(type(instance), attr, None))
+        if hook_name is not None:
+            marked.append((attr, hook_name))
+    return marked
+
+
+def _build_checked(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]:
     if not (inspect.isclass(obj) and issubclass(obj, Plugin)):
         return None, ["its entry point is not a harness.plugins.Plugin subclass"]
     errors: list[str] = []
@@ -105,10 +154,8 @@ def _build(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]:
         return None, [f"could not be created: {type(exc).__name__}: {exc}"]
 
     hooks: dict[str, Callable[..., Any]] = {}
-    for attr, member in inspect.getmembers(instance, callable):
-        hook_name = hook_name_of(member)
-        if hook_name is None:
-            continue
+    for attr, hook_name in _hook_methods(instance):
+        member = getattr(instance, attr)
         spec = HOOKS.get(hook_name)
         if spec is None:
             errors.append(f"{attr} handles unknown hook {hook_name!r}")
@@ -132,10 +179,14 @@ def _call(
     args: tuple[Any, ...],
     outcome: list[tuple[bool, Any]],
 ) -> None:
-    """Thread body of one hook call: (True, value) or (False, exception)."""
+    """Thread body of one hook call: (True, value) or (False, exception).
+
+    BaseException, so a hook that calls ``sys.exit`` is a failed hook like any
+    other and not a thread that ends without a word.
+    """
     try:
         outcome.append((True, handler(*args)))
-    except Exception as exc:
+    except BaseException as exc:
         outcome.append((False, exc))
 
 
@@ -200,6 +251,11 @@ class PluginRegistry:
                 hook_name,
                 spec.budget_seconds,
             )
+            return False, None
+        if not outcome:
+            # Cannot happen while _call records every way a hook can end, but
+            # a hook must never be able to raise out of here.
+            _log.error("plugin %s: %s ended without a result", plugin.name, hook_name)
             return False, None
         ok, value = outcome[0]
         if not ok:
@@ -274,7 +330,13 @@ def load_plugins(
             if name not in by_name
         )
 
+    overlaps = settings_overlaps(order)
     for name in order:
+        if name in overlaps:
+            registry.problems.append(
+                PluginProblem(name, _overlap_message(overlaps[name]))
+            )
+            continue
         entry_point = by_name[name]
         try:
             obj = entry_point.load()

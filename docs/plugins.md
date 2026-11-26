@@ -38,7 +38,9 @@ hello = "devbox_hello_plugin:Hello"
 ```
 
 - `name` is the plugin's name: lowercase letters, digits and underscores,
-  starting with a letter. It must equal the entry point name.
+  starting with a letter. It must equal the entry point name. It must not be
+  another loaded plugin's name followed by an underscore: with `foo` loaded,
+  `foo_bar` is not, because `foo` would read its settings.
 - `requires_api` is the plugin API version the plugin was written for. This
   harness supports version 1.
 - The harness creates the class once per daemon process, with no arguments.
@@ -53,7 +55,7 @@ plugin as a complete package.
 | `daemon_start` | `ctx` | 10 seconds | Once per daemon process, after the harness has set itself up and before it reads its first inbox file. A sandbox recreated from its volume starts a new daemon, so the hook runs again there. |
 | `after_planning` | `ctx`, `plan` | 5 minutes | Once per assignment, after the plan is written. |
 | `before_implementation` | `ctx`, `plan` | 30 seconds | Each time the daemon is about to run or resume an assignment's implementation. A restart in the middle of implementation runs it again. It does not run once the implementation is complete. |
-| `after_implementation` | `ctx`, `plan`, `implementation` | 30 minutes | Once per assignment, after every repository's implementation is complete and before the review. |
+| `after_implementation` | `ctx`, `plan`, `implementation` | 30 minutes | Once per assignment, after every repository's implementation is complete. Before the review, except after a failed first try ([Restarts](#restarts)). |
 | `followup_start` | `ctx`, `kind` | 30 seconds | Each time the daemon is about to run or resume a follow-up round, before its agent runs. `kind` is the round's inbox kind: `comment`, `review` or `ci_result`. It does not run for a round whose agent has already finished. |
 
 Every hook follows the same rules:
@@ -130,6 +132,14 @@ return a result:
 - A hook that raised or ran out of budget saved nothing. A restart calls it
   again.
 - A task that is assigned again is a new assignment, and its hooks run again.
+- `after_implementation` normally runs before the review. When it raised or
+  ran out of budget and the daemon then restarts, it is called again wherever
+  the assignment has got to, which can be after the review or after the pull
+  request is open. Data it returns then is still kept. A pull request section
+  it returns then may not reach a pull request that is already open.
+- Saved results stay on the task's volume, under
+  `.harness/plugins/<name>/results/`. They are small and the harness does not
+  remove them.
 
 So a result-returning hook runs at most once per assignment when it
 succeeds. Make anything it does outside its return value safe to repeat.
@@ -189,7 +199,8 @@ hooks.
 
 ## Choose which plugins run
 
-`HARNESS_PLUGINS` is a comma-separated list of plugin names.
+`HARNESS_PLUGINS` is a comma-separated list of plugin names. Upper and lower
+case are the same.
 
 - Unset or empty: every installed plugin runs, ordered by name.
 - A list: only those plugins run, in that order. A listed name that is not

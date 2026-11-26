@@ -35,6 +35,14 @@ def plugin_settings(name: str, env: Mapping[str, str]) -> dict[str, str]:
 _spawned: dict[int, subprocess.Popen[bytes]] = {}
 
 
+def _collect_finished() -> None:
+    """Collect the exit of every started process that has finished, so none
+    stays behind as a zombie or in the table."""
+    for pid, proc in list(_spawned.items()):
+        if proc.poll() is not None:
+            del _spawned[pid]
+
+
 def _pid_alive(pid: int) -> bool:
     proc = _spawned.get(pid)
     if proc is not None:
@@ -110,6 +118,7 @@ class PluginContext:
         if not _KEY.match(log) or (once is not None and not _KEY.match(once)):
             raise ValueError("spawn: log and once must be plain file names")
 
+        _collect_finished()
         marker = None
         if once is not None:
             marker = self.runtime_dir / f"{once}.pid"

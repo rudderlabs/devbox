@@ -60,6 +60,50 @@ class Raises(Plugin):
         raise RuntimeError("boom")
 
 
+class Exits(Plugin):
+    name = "exits"
+    requires_api = 1
+
+    @hook("daemon_start")
+    def start(self, ctx: PluginContext) -> None:
+        sys.exit(3)
+
+
+class RaisingProperty(Plugin):
+    name = "raisingproperty"
+    requires_api = 1
+    reads: ClassVar[int] = 0
+
+    @property
+    def expensive(self) -> str:
+        RaisingProperty.reads += 1
+        raise RuntimeError("read while loading")
+
+    @hook("daemon_start")
+    def start(self, ctx: PluginContext) -> None:
+        Alpha.calls.append("raisingproperty")
+
+
+class RaisingLookup(Plugin):
+    """Raises from the attribute lookup the loader does on a marked method."""
+
+    name = "raisinglookup"
+    requires_api = 1
+
+    @hook("daemon_start")
+    def start(self, ctx: PluginContext) -> None: ...
+
+    def __getattribute__(self, attr: str):
+        if attr == "start":
+            raise RuntimeError("no start for you")
+        return super().__getattribute__(attr)
+
+
+class AlphaTwo(Plugin):
+    name = "alpha_two"
+    requires_api = 1
+
+
 class Slow(Plugin):
     name = "slow"
     requires_api = 1
@@ -180,6 +224,17 @@ class TestLoading(PluginTestCase):
         self.assertIsNone(enabled_names({"HARNESS_PLUGINS": "  "}))
         self.assertEqual(enabled_names({"HARNESS_PLUGINS": "None"}), [])
         self.assertEqual(enabled_names({"HARNESS_PLUGINS": "b a,b"}), ["b", "a"])
+        self.assertEqual(
+            enabled_names({"HARNESS_PLUGINS": "Beta,ALPHA"}), ["beta", "alpha"]
+        )
+
+    def test_harness_plugins_is_read_without_regard_to_case(self) -> None:
+        registry = self.load(
+            [_entry_point("alpha", Alpha), _entry_point("beta", Beta)],
+            {"HARNESS_PLUGINS": "Beta, Alpha"},
+        )
+        self.assertEqual([p.name for p in registry.plugins], ["beta", "alpha"])
+        self.assertEqual(registry.problems, [])
 
     def test_listed_but_not_installed_is_a_problem(self) -> None:
         registry = self.load(
@@ -199,6 +254,7 @@ class TestLoading(PluginTestCase):
             "wrongsignature": (WrongSignature, "must take (self, ctx)"),
             "twohandlers": (TwoHandlers, "more than one handler"),
             "needsargument": (NeedsArgument, "could not be created"),
+            "raisinglookup": (RaisingLookup, "could not be checked"),
             "missing": ("no_such_module_for_plugins:Thing", "import failed"),
             "notaplugin": (f"{__name__}:PluginTestCase", "not a harness.plugins"),
         }
@@ -224,6 +280,41 @@ class TestLoading(PluginTestCase):
             sorted(p.plugin for p in registry.problems), ["Bad-Name", "alpha"]
         )
 
+    def test_a_property_is_not_read_while_loading(self) -> None:
+        RaisingProperty.reads = 0
+        registry = self.load([
+            _entry_point("raisingproperty", RaisingProperty),
+            _entry_point("alpha", Alpha),
+        ])
+        self.assertEqual(registry.problems, [])
+        self.assertEqual(
+            [p.name for p in registry.plugins], ["alpha", "raisingproperty"]
+        )
+        self.assertEqual(list(registry.plugins[1].hooks), ["daemon_start"])
+        self.assertEqual(RaisingProperty.reads, 0)
+
+    def test_a_name_that_would_share_settings_is_left_out(self) -> None:
+        # alpha would read HARNESS_PLUGIN_ALPHA_TWO_<KEY> as its own two_<key>.
+        registry = self.load([
+            _entry_point("alpha_two", AlphaTwo),
+            _entry_point("alpha", Alpha),
+            _entry_point("alphabet", NoHooks),
+        ])
+        self.assertEqual([p.name for p in registry.plugins], ["alpha"])
+        problems = {p.plugin: p.message for p in registry.problems}
+        self.assertIn("plugin 'alpha' and an underscore", problems["alpha_two"])
+        # "alphabet" shares letters, not a settings prefix; it fails on its
+        # class name only.
+        self.assertIn("differs from its entry point name", problems["alphabet"])
+
+    def test_an_overlapping_name_is_fine_when_the_other_is_not_enabled(self) -> None:
+        registry = self.load(
+            [_entry_point("alpha_two", AlphaTwo), _entry_point("alpha", Alpha)],
+            {"HARNESS_PLUGINS": "alpha_two"},
+        )
+        self.assertEqual([p.name for p in registry.plugins], ["alpha_two"])
+        self.assertEqual(registry.problems, [])
+
     def test_a_plugin_without_hooks_loads(self) -> None:
         registry = self.load([_entry_point("nohooks", NoHooks)])
         self.assertEqual(registry.problems, [])
@@ -247,6 +338,14 @@ class TestHooks(PluginTestCase):
         self.assertIn("plugin raises: daemon_start failed", logs.output[0])
         self.assertIn("RuntimeError: boom", logs.output[0])
 
+    def test_a_hook_that_exits_is_a_failed_hook(self) -> None:
+        registry = registry_for([Exits, Beta], root=self.root)
+        with self.assertLogs("harness.plugins", level="ERROR") as logs:
+            registry.run("daemon_start")
+        self.assertEqual(Alpha.calls, ["beta"])
+        self.assertIn("plugin exits: daemon_start failed", logs.output[0])
+        self.assertIn("SystemExit: 3", logs.output[0])
+
     def test_a_hook_over_budget_is_left_behind(self) -> None:
         registry = registry_for([Slow, Beta], root=self.root)
         short = HookSpec(params=("ctx",), budget_seconds=0.05, summary="")
@@ -263,6 +362,8 @@ class TestHooks(PluginTestCase):
     def test_registry_for_raises_on_a_plugin_that_would_not_load(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires_api"):
             registry_for([OldApi], root=self.root)
+        with self.assertRaisesRegex(ValueError, "alpha_two: its name starts with"):
+            registry_for([Alpha, AlphaTwo], root=self.root)
 
 
 class TestContext(PluginTestCase):
@@ -341,6 +442,14 @@ class TestContext(PluginTestCase):
             (ctx.runtime_dir / "server.pid").read_text(encoding="utf-8").strip(),
             str(pid),
         )
+
+    def test_spawn_collects_processes_that_have_finished(self) -> None:
+        ctx = self.context()
+        first = ctx.spawn([sys.executable, "-c", "pass"], log="a.log")
+        assert first is not None
+        context_module._spawned[first].wait()
+        second = ctx.spawn([sys.executable, "-c", "pass"], log="a.log")
+        self.assertEqual(list(context_module._spawned), [second])
 
     def test_spawn_rejects_paths_as_names(self) -> None:
         ctx = self.context()
