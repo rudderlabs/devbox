@@ -170,7 +170,7 @@ must hold in your own code.
 The harness restarts an assignment where it stopped. For the two hooks that
 return a result:
 
-- The result is saved under the plugin's state directory before it is used,
+- The result is saved on the task's volume before it is used,
   keyed by the assignment's inbox id. After a restart the saved result is used
   again and the hook is not called.
 - A hook that raised or ran out of budget saved nothing. A restart calls it
@@ -183,7 +183,8 @@ return a result:
   it returns then does not reach a pull request that is already open: the
   harness reuses an open pull request without changing its body.
 - Saved results stay on the task's volume, under
-  `.harness/plugins/<name>/results/`. They are small and the harness does not
+  `.harness/plugins/_results/<name>/`, outside the plugin's own directory.
+  They are small and the harness does not
   remove them.
 
 So a result-returning hook runs at most once per assignment when it
