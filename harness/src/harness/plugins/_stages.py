@@ -24,7 +24,11 @@ from typing import TYPE_CHECKING, Any
 
 from harness.plugins._api import HOOKS, HookResult, PrSection, TaskInfo
 from harness.plugins._registry import LoadedPlugin, PluginRegistry
-from harness.util import safe_marker_fragment, write_json
+from harness.util import (
+    close_unterminated_markdown,
+    safe_marker_fragment,
+    write_json,
+)
 
 if TYPE_CHECKING:
     from harness.events import RoundEvents
@@ -57,8 +61,19 @@ def _normalize(hook_name: str, value: Any) -> HookResult:
             text = getattr(section, name)
             if not isinstance(text, str) or not text.strip():
                 raise TypeError(f"PrSection.{name} must be a non-empty string")
-    data = None if result.data is None else json.loads(json.dumps(result.data))
+    data = (
+        None
+        if result.data is None
+        else json.loads(json.dumps(result.data, default=_plain_mapping))
+    )
     return HookResult(data=data, pr_sections=sections)
+
+
+def _plain_mapping(value: Any) -> dict[str, Any]:
+    """json.dumps fallback: any Mapping is data, not only a dict."""
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"{type(value).__name__} is not JSON")
 
 
 def _to_json(result: HookResult) -> dict[str, Any]:
@@ -79,7 +94,10 @@ def _from_json(raw: Any) -> HookResult:
 
 
 def _render(section: PrSection) -> str:
-    return f"## {section.title.strip()}\n\n{section.body.strip()}\n"
+    # Only the line ends around the body go: leading spaces are Markdown, an
+    # indented code block for one.
+    body = section.body.strip("\r\n")
+    return f"## {section.title.strip()}\n\n{body}\n"
 
 
 @dataclass(frozen=True)
@@ -218,7 +236,10 @@ def _append_pr_section(
             body = repo.get("pr_body")
             body = body if isinstance(body, str) else ""
             if rendered not in body:
-                repo["pr_body"] = f"{body.rstrip()}\n\n{rendered}".lstrip()
+                # An unclosed comment or code fence above would swallow the
+                # section on the code host.
+                body = close_unterminated_markdown(body)
+                repo["pr_body"] = f"{body}\n\n{rendered}".lstrip("\r\n")
             return
     _log.warning(
         "plugin %s: pull request section %r names repository %r, "
