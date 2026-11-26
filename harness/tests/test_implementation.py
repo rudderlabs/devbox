@@ -633,7 +633,8 @@ class TestRunImplementation(unittest.TestCase):
             events=None,
         )
 
-        self.assertNotIn("middleware", mock_agent.call_args.kwargs)
+        # No plugin text either, so the runner adds no middleware of its own.
+        self.assertEqual(mock_agent.call_args.kwargs["middleware"], [])
 
     @patch("harness.implementation.write_json")
     @patch("harness.implementation.build_model")

@@ -519,7 +519,7 @@ def _run_round(
     primary_target: str,
     source: str,
     pr: Mapping[str, Any] | None,
-    build: Callable[[], DeepAgentSession[Any]],
+    build: Callable[[str | None], DeepAgentSession[Any]],
     brief: Callable[[], str],
     targets: Sequence[str],
     optional_targets: frozenset[str],
@@ -527,7 +527,8 @@ def _run_round(
 ) -> None:
     """The shared round frame: distillation, tracing, timing, runner.
 
-    ``brief`` is the runner's factory (see ``run_followup_round``).
+    ``build`` takes the loaded plugins' text for the agent's system prompt,
+    or None. ``brief`` is the runner's factory (see ``run_followup_round``).
     """
     run_id = new_run_id()
     with post_code_round_distillation(
@@ -552,8 +553,10 @@ def _run_round(
             if is_live_channel(source)
             else None,
         )
+        plugin_prompt = None
         if plugins is not None:
             plugins.followup_start(_INBOX_KIND[stage])
+            plugin_prompt = plugins.prompt_fragments(_INBOX_KIND[stage])
         try:
             with (
                 init_trace(
@@ -571,7 +574,7 @@ def _run_round(
                 timed_stage(stage, run_id=run_id, task_key=task_key),
             ):
                 run_followup_round(
-                    build,
+                    lambda: build(plugin_prompt),
                     state=state,
                     inbox_id=inbox_id,
                     brief=brief,
@@ -618,8 +621,12 @@ def run_followup_comment(entry: dict[str, Any], state: DaemonState) -> None:
         event_target_id=target_id,
     )
 
-    def build() -> FollowUpAgent:
-        return FollowUpAgent(**shared, targets=[ReplyTarget(target_id, "the comment")])
+    def build(plugin_prompt: str | None) -> FollowUpAgent:
+        return FollowUpAgent(
+            **shared,
+            targets=[ReplyTarget(target_id, "the comment")],
+            plugin_prompt=plugin_prompt,
+        )
 
     _run_round(
         state=state,
@@ -670,8 +677,8 @@ def run_followup_review(entry: dict[str, Any], state: DaemonState) -> None:
         event_target_id=summary_id,
     )
 
-    def build() -> FollowUpAgent:
-        return FollowUpAgent(**shared, targets=targets)
+    def build(plugin_prompt: str | None) -> FollowUpAgent:
+        return FollowUpAgent(**shared, targets=targets, plugin_prompt=plugin_prompt)
 
     _run_round(
         state=state,
@@ -718,8 +725,8 @@ def run_followup_ci(
         event_target_id=target_id,
     )
 
-    def build() -> CiAgent:
-        return CiAgent(**shared, run=run)
+    def build(plugin_prompt: str | None) -> CiAgent:
+        return CiAgent(**shared, run=run, plugin_prompt=plugin_prompt)
 
     _run_round(
         state=state,

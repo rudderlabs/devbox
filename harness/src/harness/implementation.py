@@ -10,6 +10,7 @@ from typing import Any
 from harness.deepagents import retry as _retry
 from harness.deepagents.agents.implementation import ImplementationAgent
 from harness.deepagents.checkpointer import checkpoint_exists
+from harness.deepagents.middleware.plugin_prompt import plugin_prompt_middleware
 from harness.deepagents.model import (
     ModelStage,
     build_model,
@@ -114,6 +115,7 @@ def _run_one_repo_with_retries(
     markers_dir: Path,
     max_retries: int,
     events: RoundEvents | None,
+    plugin_prompt: str | None = None,
 ) -> ImplementationRepo:
     repo_path = repo_checkout_path(repo.name, workspace=WORKSPACE)
     marker = _marker_path(markers_dir, inbox_id, repo.name)
@@ -148,6 +150,7 @@ def _run_one_repo_with_retries(
             knowledge_subpaths=knowledge_subpaths,
             repo=repo.name,
             stage="implementation",
+            middleware=plugin_prompt_middleware(plugin_prompt),
         )
 
     # A durable thread with prior state is a crashed run: resume it rather
@@ -183,8 +186,13 @@ def run_implementation(
     inbox_id: str,
     impl_out: Path = IMPLEMENTATION_JSON,
     events: RoundEvents | None,
+    plugin_prompt: str | None = None,
 ) -> Implementation:
-    """Run one implementation worker per unique planned repository."""
+    """Run one implementation worker per unique planned repository.
+
+    ``plugin_prompt`` is the loaded plugins' text for each worker's system
+    prompt.
+    """
     choice = resolve_model(ModelStage.IMPLEMENTATION)
     model = build_model(model=choice.model, reasoning_effort=choice.reasoning_effort)
     repos = unique_plan_repos(plan)
@@ -203,6 +211,7 @@ def run_implementation(
                 markers_dir=markers_dir,
                 max_retries=max_retries,
                 events=events,
+                plugin_prompt=plugin_prompt,
             ): repo
             for repo in repos
         }

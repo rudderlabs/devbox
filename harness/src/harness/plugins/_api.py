@@ -69,6 +69,15 @@ HOOKS: dict[str, HookSpec] = {
         saves_result=True,
         pr_sections=True,
     ),
+    "prompt_fragments": HookSpec(
+        params=("ctx", "stage"),
+        budget_seconds=10.0,
+        summary=(
+            "Each time the daemon is about to start a stage's agents. Returns "
+            "text for their system prompt. stage is planning, implementation, "
+            "comment, review or ci_result."
+        ),
+    ),
     "followup_start": HookSpec(
         params=("ctx", "kind"),
         budget_seconds=30.0,
@@ -79,6 +88,12 @@ HOOKS: dict[str, HookSpec] = {
         ),
     ),
 }
+
+
+# The stages whose agents take plugin text in their system prompt, as the
+# prompt_fragments hook is told them. The last three are the follow-up rounds,
+# named by inbox kind like followup_start's ``kind``.
+PROMPT_STAGES = ("planning", "implementation", "comment", "review", "ci_result")
 
 
 @dataclass(frozen=True)

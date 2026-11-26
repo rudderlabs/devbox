@@ -17,12 +17,18 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from harness.plugins._api import HOOKS, HookResult, PrSection, TaskInfo
+from harness.plugins._api import (
+    HOOKS,
+    PROMPT_STAGES,
+    HookResult,
+    PrSection,
+    TaskInfo,
+)
 from harness.plugins._registry import LoadedPlugin, PluginRegistry
 from harness.util import safe_marker_fragment, write_json
 
@@ -33,7 +39,32 @@ if TYPE_CHECKING:
 # entry per plugin name.
 EXTENSIONS_KEY = "extensions"
 
+# The most text one plugin may add to one stage's system prompt. Longer text
+# is dropped whole: half an instruction is worse than none.
+MAX_PROMPT_FRAGMENT_CHARS = 8000
+
 _log = logging.getLogger("harness.plugins")
+
+
+def _fragment_text(value: Any) -> str:
+    """What prompt_fragments returned, as one text. Raises on a value it may
+    not return."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        parts: Sequence[Any] = [value]
+    elif isinstance(value, Sequence):
+        parts = value
+    else:
+        raise TypeError("must return a string, a list of strings or None")
+    if not all(isinstance(part, str) for part in parts):
+        raise TypeError("must return a string, a list of strings or None")
+    text = "\n\n".join(part.strip() for part in parts if part.strip())
+    if len(text) > MAX_PROMPT_FRAGMENT_CHARS:
+        raise ValueError(
+            f"text is {len(text)} characters; the limit is {MAX_PROMPT_FRAGMENT_CHARS}"
+        )
+    return text
 
 
 def _normalize(hook_name: str, value: Any) -> HookResult:
@@ -103,6 +134,41 @@ class RoundPlugins:
     def followup_start(self, kind: str) -> None:
         for plugin in self._handlers("followup_start"):
             self.registry.invoke(plugin, "followup_start", self._context(plugin), kind)
+
+    def prompt_fragments(self, stage: str) -> str | None:
+        """Run prompt_fragments. Returns the text to add to the system prompt
+        of the stage's agents, or None when no plugin has any.
+
+        Each plugin's text is wrapped in a block that names the plugin. The
+        result is not saved: a restart asks again.
+        """
+        if stage not in PROMPT_STAGES:
+            raise ValueError(f"unknown prompt stage {stage!r}")
+        blocks: list[str] = []
+        for plugin in self._handlers("prompt_fragments"):
+            ok, value = self.registry.invoke(
+                plugin, "prompt_fragments", self._context(plugin), stage
+            )
+            if not ok:
+                continue
+            try:
+                text = _fragment_text(value)
+            except Exception as exc:
+                _log.error(
+                    "plugin %s: prompt_fragments text for %s dropped: %s: %s",
+                    plugin.name,
+                    stage,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
+            if text:
+                blocks.append(
+                    f'<plugin_instructions plugin="{plugin.name}">\n'
+                    f"{text}\n"
+                    "</plugin_instructions>"
+                )
+        return "\n\n".join(blocks) or None
 
     def after_implementation(
         self, plan: Mapping[str, Any], implementation: Mapping[str, Any]

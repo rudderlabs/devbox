@@ -712,7 +712,8 @@ class TestRunPlanning(unittest.TestCase):
         self.assertEqual(
             planning_agent.call_args.kwargs["knowledge_subpaths"], ["services/api"]
         )
-        self.assertNotIn("middleware", planning_agent.call_args.kwargs)
+        # No plugin text, so no middleware beyond the preset's own.
+        self.assertEqual(planning_agent.call_args.kwargs["middleware"], [])
         session.close.assert_called_once()
         self.assertEqual(build_model.call_count, 2)  # planning + review models
 
@@ -866,6 +867,53 @@ class TestRunPlanning(unittest.TestCase):
             self.assertEqual(planning_agent.call_count, 2)
             assert_agent_wired(self, planning_agent, events)
             assert_agent_wired(self, review_agent, events)
+
+    @patch("harness.planning.build_model")
+    @patch("harness.planning.PlanReviewAgent")
+    @patch("harness.planning.PlanningAgent")
+    def test_plugin_prompt_reaches_both_planning_agent_sites_only(
+        self,
+        planning_agent: MagicMock,
+        review_agent: MagicMock,
+        _build_model: MagicMock,
+    ) -> None:
+        from harness import planning
+        from harness.deepagents.middleware.plugin_prompt import PluginPromptMiddleware
+
+        repo_a = MagicMock()
+        repo_a.run.return_value = _repo_output("repo a")
+        repo_b = MagicMock()
+        repo_b.run.return_value = _repo_output("repo b")
+        planning_agent.side_effect = [repo_a, repo_b]
+        reviewer = review_agent.return_value
+        reviewer.has_prior_state = False
+        reviewer.run.return_value = PlanReviewOutput(
+            status="needs_revision",
+            review_notes="repo b is missing",
+            issues=[{"repo": "repo-b", "summary": "repo b owns the interface"}],
+        )
+        orientation = OrientationOutput(
+            repos=[{"name": "repo-a", "confidence": "high"}],
+        )
+
+        with (
+            patch.object(planning, "WORKSPACE", self.workspace),
+            patch.object(planning, "_run_full_orientation", return_value=orientation),
+        ):
+            planning.run_planning(
+                task="do work",
+                task_key="ABC-1",
+                run_id="run-plugin-prompt",
+                events=None,
+                plugin_prompt="Plugin text.",
+            )
+
+        self.assertEqual(planning_agent.call_count, 2)
+        for call in planning_agent.call_args_list:
+            (middleware,) = call.kwargs["middleware"]
+            self.assertIsInstance(middleware, PluginPromptMiddleware)
+            self.assertEqual(middleware.system_prompt, "Plugin text.")
+        self.assertNotIn("middleware", review_agent.call_args.kwargs)
 
     @patch("harness.planning.build_model")
     @patch("harness.planning.PlanReviewAgent")

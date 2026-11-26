@@ -21,6 +21,7 @@ from harness.deepagents.middleware.memory_writing import (
     MemoryWritingMiddleware,
     RepoScope,
 )
+from harness.deepagents.middleware.plugin_prompt import plugin_prompt_middleware
 from harness.deepagents.middleware.pull_request import (
     PullRequestMiddleware,
     PullRequestRef,
@@ -300,22 +301,25 @@ class FollowUpAgent(DeepAgentSession[Any]):
         memory_repos: Sequence[RepoScope],
         memory: MemoryStore,
         github: CodeHost,
+        plugin_prompt: str | None = None,
     ) -> None:
+        middleware = _round_middleware(
+            events=events,
+            targets=targets,
+            prs=prs,
+            memory_repos=memory_repos,
+            memory=memory,
+            github=github,
+            memory_stage="review",
+        )
+        middleware.extend(plugin_prompt_middleware(plugin_prompt))
         super().__init__(
             events=events,
             model=model,
             thread_id=thread_id,
             workspace_dir=WORKSPACE,
             system_prompt=FOLLOWUP_SYSTEM_PROMPT,
-            middleware=_round_middleware(
-                events=events,
-                targets=targets,
-                prs=prs,
-                memory_repos=memory_repos,
-                memory=memory,
-                github=github,
-                memory_stage="review",
-            ),
+            middleware=middleware,
             durable=True,
             # Emit progress on every round, GitHub included; the control plane
             # currently drops GitHub progress events.
@@ -337,6 +341,7 @@ class CiAgent(DeepAgentSession[Any]):
         memory: MemoryStore,
         github: CodeHost,
         run: WorkflowRunRef,
+        plugin_prompt: str | None = None,
     ) -> None:
         middleware = _round_middleware(
             events=events,
@@ -348,6 +353,7 @@ class CiAgent(DeepAgentSession[Any]):
             memory_stage="ci",
         )
         middleware.append(CiRerunMiddleware(github=github, run=run))
+        middleware.extend(plugin_prompt_middleware(plugin_prompt))
         super().__init__(
             events=events,
             model=model,

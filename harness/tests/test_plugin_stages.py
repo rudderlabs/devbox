@@ -461,7 +461,7 @@ class TestFollowUpStart(unittest.TestCase):
                 primary_target="target-9",
                 source=source,
                 pr=None,
-                build=lambda: None,
+                build=lambda _plugin_prompt: None,
                 brief=lambda: "",
                 targets=["target-9"],
                 optional_targets=frozenset(),
