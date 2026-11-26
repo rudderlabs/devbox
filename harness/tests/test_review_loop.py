@@ -679,9 +679,10 @@ class TestReviewLoop(unittest.TestCase):
         self.assertNotIn("Auto-review unresolved", impl["repos"][0]["pr_body"])
 
     def test_plugin_prompt_reaches_the_fix_agent(self) -> None:
+        repo = _impl_data()["repos"][0]["name"]
         self._run(
             [[_medium_finding()], []],
-            fix_scripts=[{"config-backend": {}}],
+            fix_scripts=[{repo: {}}],
             plugin_prompt="Plugin text.",
         )
         self.assertEqual(self.fix_plugin_prompts, ["Plugin text."])

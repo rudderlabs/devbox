@@ -162,10 +162,13 @@ distillation take no plugin text.
 - One plugin may add up to 8,000 characters per stage. Longer text is logged
   and dropped whole.
 - The hook runs once per stage, just before its agents start, and every agent
-  of the stage gets the same text. In an assignment that is after
-  `before_implementation`; in a follow-up round, after `followup_start`.
-  For `review_fix` it runs when the review begins, whether or not the review
-  then finds something to fix.
+  of the stage gets the same text. When that is depends on the stage:
+  - `planning`: before planning starts. No plan exists yet, and neither
+    `after_planning` nor `before_implementation` has run.
+  - `implementation`: after `before_implementation`.
+  - `review_fix`: when the review begins, whether or not the review then
+    finds something to fix.
+  - `comment`, `review`, `ci_result`: after `followup_start`.
 - The text is not saved. After a restart the hook runs again, and a resumed
   agent gets what it returns then.
 - The hook has no plan argument. To make the text depend on the plan, save
