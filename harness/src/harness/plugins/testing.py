@@ -14,7 +14,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from harness.plugins._api import Plugin
-from harness.plugins._registry import PluginProblem, PluginRegistry, _build
+from harness.plugins._registry import (
+    PluginProblem,
+    PluginRegistry,
+    _build,
+    _overlap_message,
+    settings_overlaps,
+)
 
 
 def registry_for(
@@ -39,6 +45,8 @@ def registry_for(
         registry.problems.extend(PluginProblem(cls.name, error) for error in errors)
         if plugin is not None:
             registry.plugins.append(plugin)
+    for name, other in settings_overlaps(cls.name for cls in plugin_classes).items():
+        registry.problems.append(PluginProblem(name, _overlap_message(other)))
     if registry.problems:
         raise ValueError("; ".join(str(problem) for problem in registry.problems))
     return registry
