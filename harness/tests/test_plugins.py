@@ -99,6 +99,45 @@ class RaisingLookup(Plugin):
         return super().__getattribute__(attr)
 
 
+class ExitsOnCreate(Plugin):
+    name = "exitsoncreate"
+    requires_api = 1
+
+    def __init__(self) -> None:
+        sys.exit(4)
+
+
+class WrappedHooks(Plugin):
+    """Marks a static method; the marker is under the wrapper."""
+
+    name = "wrappedhooks"
+    requires_api = 1
+
+    @staticmethod
+    @hook("daemon_start")
+    def start(ctx: PluginContext) -> None:
+        Alpha.calls.append(f"static:{ctx.name}")
+
+
+class ClassHook(Plugin):
+    name = "classhook"
+    requires_api = 1
+
+    @classmethod
+    @hook("daemon_start")
+    def start(cls, ctx: PluginContext) -> None:
+        Alpha.calls.append(f"class:{cls.name}")
+
+
+class StaticWrongSignature(Plugin):
+    name = "staticwrongsignature"
+    requires_api = 1
+
+    @staticmethod
+    @hook("daemon_start")
+    def start() -> None: ...
+
+
 class AlphaTwo(Plugin):
     name = "alpha_two"
     requires_api = 1
@@ -255,6 +294,8 @@ class TestLoading(PluginTestCase):
             "twohandlers": (TwoHandlers, "more than one handler"),
             "needsargument": (NeedsArgument, "could not be created"),
             "raisinglookup": (RaisingLookup, "could not be checked"),
+            "exitsoncreate": (ExitsOnCreate, "could not be created: SystemExit: 4"),
+            "staticwrongsignature": (StaticWrongSignature, "must take (self, ctx)"),
             "missing": ("no_such_module_for_plugins:Thing", "import failed"),
             "notaplugin": (f"{__name__}:PluginTestCase", "not a harness.plugins"),
         }
@@ -278,6 +319,21 @@ class TestLoading(PluginTestCase):
         self.assertEqual([p.name for p in registry.plugins], ["alpha"])
         self.assertEqual(
             sorted(p.plugin for p in registry.problems), ["Bad-Name", "alpha"]
+        )
+
+    def test_a_module_that_exits_on_import_is_left_out(self) -> None:
+        module = "harness_test_plugin_that_exits"
+        (self.root / f"{module}.py").write_text("import sys\nsys.exit(5)\n", "utf-8")
+        with patch.object(sys, "path", [str(self.root), *sys.path]):
+            registry = self.load([
+                _entry_point("exitsonimport", f"{module}:Thing"),
+                _entry_point("alpha", Alpha),
+            ])
+        self.addCleanup(sys.modules.pop, module, None)
+        self.assertEqual([p.name for p in registry.plugins], ["alpha"])
+        self.assertEqual(
+            [str(p) for p in registry.problems],
+            ["exitsonimport: import failed: SystemExit: 5"],
         )
 
     def test_a_property_is_not_read_while_loading(self) -> None:
@@ -345,6 +401,13 @@ class TestHooks(PluginTestCase):
         self.assertEqual(Alpha.calls, ["beta"])
         self.assertIn("plugin exits: daemon_start failed", logs.output[0])
         self.assertIn("SystemExit: 3", logs.output[0])
+
+    def test_static_and_class_method_hooks_are_found_and_called(self) -> None:
+        registry = registry_for([WrappedHooks, ClassHook], root=self.root)
+        for plugin in registry.plugins:
+            self.assertEqual(list(plugin.hooks), ["daemon_start"])
+        registry.run("daemon_start")
+        self.assertEqual(Alpha.calls, ["static:wrappedhooks", "class:classhook"])
 
     def test_a_hook_over_budget_is_left_behind(self) -> None:
         registry = registry_for([Slow, Beta], root=self.root)

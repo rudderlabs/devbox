@@ -32,6 +32,11 @@ _NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 # HARNESS_PLUGINS value that turns every installed plugin off.
 _NONE = "none"
 
+# What a plugin's own code can do on the daemon's main thread while it loads:
+# raise, or call sys.exit(). Both leave that plugin out and nothing else.
+# KeyboardInterrupt is not here, so a real interrupt still stops the daemon.
+_PLUGIN_FAILURE = (Exception, SystemExit)
+
 _log = logging.getLogger("harness.plugins")
 
 
@@ -113,7 +118,7 @@ def _build(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]:
     """
     try:
         return _build_checked(name, obj)
-    except Exception as exc:
+    except _PLUGIN_FAILURE as exc:
         return None, [f"could not be checked: {type(exc).__name__}: {exc}"]
 
 
@@ -125,7 +130,10 @@ def _hook_methods(instance: Plugin) -> list[tuple[str, str]]:
     """
     marked: list[tuple[str, str]] = []
     for attr in dir(type(instance)):
-        hook_name = hook_name_of(inspect.getattr_static(type(instance), attr, None))
+        raw = inspect.getattr_static(type(instance), attr, None)
+        # The marker is on the function. Under @staticmethod or @classmethod
+        # the class holds a wrapper, with the function behind __func__.
+        hook_name = hook_name_of(raw) or hook_name_of(getattr(raw, "__func__", None))
         if hook_name is not None:
             marked.append((attr, hook_name))
     return marked
@@ -146,7 +154,7 @@ def _build_checked(name: str, obj: Any) -> tuple[LoadedPlugin | None, list[str]]
         return None, errors
     try:
         instance = obj()
-    except Exception as exc:
+    except _PLUGIN_FAILURE as exc:
         return None, [f"could not be created: {type(exc).__name__}: {exc}"]
 
     hooks: dict[str, Callable[..., Any]] = {}
@@ -312,7 +320,7 @@ def load_plugins(
         entry_point = by_name[name]
         try:
             obj = entry_point.load()
-        except Exception as exc:
+        except _PLUGIN_FAILURE as exc:
             registry.problems.append(
                 PluginProblem(name, f"import failed: {type(exc).__name__}: {exc}")
             )
