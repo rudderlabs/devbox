@@ -95,7 +95,11 @@ def _normalize(hook_name: str, value: Any) -> HookResult:
     data = (
         None
         if result.data is None
-        else json.loads(json.dumps(result.data, default=_plain_mapping))
+        else json.loads(
+            # NaN and the infinities are not JSON; a strict reader of the
+            # stage's file would reject them.
+            json.dumps(result.data, default=_plain_mapping, allow_nan=False)
+        )
     )
     return HookResult(data=data, pr_sections=sections)
 

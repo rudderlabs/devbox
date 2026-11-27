@@ -226,6 +226,8 @@ class TestAfterPlanning(StageTestCase):
         bad = {
             "not json": {"when": object()},
             "not a mapping": ["a", "list"],
+            "nan": {"rate": float("nan")},
+            "infinity": {"nested": [{"rate": float("-inf")}]},
             "pr sections here": HookResult(
                 pr_sections=[PrSection(repo="repo-a", title="T", body="b")]
             ),
@@ -416,6 +418,65 @@ class TestAssignmentWiring(StageTestCase):
         self.assertEqual(impl["extensions"], {"acme.recorder": {"passed": True}})
         self.assertIn("## Checked", impl["repos"][0]["pr_body"])
         self.assertEqual(json.loads(self.impl_json.read_text()), impl)
+
+    def test_a_plan_that_cannot_be_kept_with_plugin_data_is_used_as_it_was(
+        self,
+    ) -> None:
+        Recorder.planning_result = {"services": ["api"]}
+        on_disk = json.dumps(_plan())
+        failures = {
+            "write": patch.object(
+                assignment_module, "write_json", side_effect=OSError("disk full")
+            ),
+            "validate": patch.object(
+                assignment_module, "validate_plan", side_effect=ValueError("bad plan")
+            ),
+            "merge": patch.object(
+                RoundPlugins, "after_planning", side_effect=RuntimeError("boom")
+            ),
+        }
+        for label, failure in failures.items():
+            with self.subTest(label):
+                self.plan_json.write_text(on_disk, encoding="utf-8")
+                with failure, self.assertLogs("harness.plugins", "ERROR") as logs:
+                    plan = assignment_module._with_plan_plugins(
+                        _plan(), self.round(label)
+                    )
+                self.assertEqual(plan, _plan())
+                self.assertEqual(self.plan_json.read_text(encoding="utf-8"), on_disk)
+                self.assertIn("after_planning results not kept", logs.output[-1])
+
+    def test_an_implementation_that_cannot_be_kept_with_plugin_data_is_used_as_it_was(
+        self,
+    ) -> None:
+        Recorder.implementation_result = HookResult(
+            data={"passed": True},
+            pr_sections=[PrSection(repo="repo-a", title="Checked", body="It works.")],
+        )
+        on_disk = json.dumps(_impl())
+        failures = {
+            "write": patch.object(
+                assignment_module, "write_json", side_effect=OSError("disk full")
+            ),
+            "validate": patch.object(
+                assignment_module,
+                "validate_implementation",
+                side_effect=ValueError("bad implementation"),
+            ),
+            "merge": patch.object(
+                RoundPlugins, "after_implementation", side_effect=RuntimeError("boom")
+            ),
+        }
+        for label, failure in failures.items():
+            with self.subTest(label):
+                self.impl_json.write_text(on_disk, encoding="utf-8")
+                with failure, self.assertLogs("harness.plugins", "ERROR") as logs:
+                    impl = assignment_module._with_implementation_plugins(
+                        "inbox-1", _plan(), _impl(), self.round(label)
+                    )
+                self.assertEqual(impl, _impl())
+                self.assertEqual(self.impl_json.read_text(encoding="utf-8"), on_disk)
+                self.assertIn("after_implementation results not kept", logs.output[-1])
 
     def _process(self, impl_reusable: bool) -> None:
         inbox = self.root / "inbox"

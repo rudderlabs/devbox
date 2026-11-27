@@ -29,7 +29,8 @@ def plugins_main(argv: list[str]) -> int:
     sub.add_parser("list", help="show the plugins the daemon would load")
     sub.add_parser(
         "check",
-        help="load every plugin and exit non-zero if any cannot be loaded",
+        help="load every installed plugin, enabled or not, and exit non-zero "
+        "if any cannot be loaded",
     )
     try:
         args = parser.parse_args(argv)
@@ -37,13 +38,17 @@ def plugins_main(argv: list[str]) -> int:
         code = exc.code
         return code if isinstance(code, int) else (0 if code is None else 2)
 
-    registry = load_plugins()
     if args.action == "list":
+        registry = load_plugins()
         _print_plugins(registry)
         for problem in registry.problems:
             print(f"problem: {problem}", file=sys.stderr)
         return 0
 
+    # Every installed plugin, whatever HARNESS_PLUGINS_ENABLED and
+    # HARNESS_PLUGINS say: one that is off in this image must not be broken
+    # when someone turns it on.
+    registry = load_plugins(every=True)
     for problem in registry.problems:
         print(f"harness plugins check: {problem}", file=sys.stderr)
     if registry.problems:
