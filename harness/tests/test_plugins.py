@@ -29,14 +29,19 @@ from harness.plugins import (
 from harness.plugins import _context as context_module
 from harness.plugins import cli as plugins_cli
 from harness.plugins._context import plugin_settings
-from harness.plugins._registry import enabled_names
+from harness.plugins._registry import (
+    NAME_RULE,
+    enabled_names,
+    name_error,
+    settings_overlaps,
+)
 from harness.plugins.testing import registry_for
 
 EXAMPLE_SRC = Path(__file__).resolve().parents[1] / "examples/plugins/hello/src"
 
 
 class Alpha(Plugin):
-    name = "alpha"
+    name = "acme.alpha"
     requires_api = 1
     calls: ClassVar[list[str]] = []
 
@@ -46,16 +51,16 @@ class Alpha(Plugin):
 
 
 class Beta(Plugin):
-    name = "beta"
+    name = "acme.beta"
     requires_api = 1
 
     @hook("daemon_start")
     def start(self, ctx: PluginContext) -> None:
-        Alpha.calls.append("beta")
+        Alpha.calls.append("acme.beta")
 
 
 class Raises(Plugin):
-    name = "raises"
+    name = "acme.raises"
     requires_api = 1
 
     @hook("daemon_start")
@@ -64,7 +69,7 @@ class Raises(Plugin):
 
 
 class Exits(Plugin):
-    name = "exits"
+    name = "acme.exits"
     requires_api = 1
 
     @hook("daemon_start")
@@ -73,7 +78,7 @@ class Exits(Plugin):
 
 
 class RaisingProperty(Plugin):
-    name = "raisingproperty"
+    name = "acme.raisingproperty"
     requires_api = 1
     reads: ClassVar[int] = 0
 
@@ -84,13 +89,13 @@ class RaisingProperty(Plugin):
 
     @hook("daemon_start")
     def start(self, ctx: PluginContext) -> None:
-        Alpha.calls.append("raisingproperty")
+        Alpha.calls.append("acme.raisingproperty")
 
 
 class RaisingLookup(Plugin):
     """Raises from the attribute lookup the loader does on a marked method."""
 
-    name = "raisinglookup"
+    name = "acme.raisinglookup"
     requires_api = 1
 
     @hook("daemon_start")
@@ -103,7 +108,7 @@ class RaisingLookup(Plugin):
 
 
 class ExitsOnCreate(Plugin):
-    name = "exitsoncreate"
+    name = "acme.exitsoncreate"
     requires_api = 1
 
     def __init__(self) -> None:
@@ -113,7 +118,7 @@ class ExitsOnCreate(Plugin):
 class WrappedHooks(Plugin):
     """Marks a static method; the marker is under the wrapper."""
 
-    name = "wrappedhooks"
+    name = "acme.wrappedhooks"
     requires_api = 1
 
     @staticmethod
@@ -123,7 +128,7 @@ class WrappedHooks(Plugin):
 
 
 class ClassHook(Plugin):
-    name = "classhook"
+    name = "acme.classhook"
     requires_api = 1
 
     @classmethod
@@ -133,7 +138,7 @@ class ClassHook(Plugin):
 
 
 class StaticWrongSignature(Plugin):
-    name = "staticwrongsignature"
+    name = "acme.staticwrongsignature"
     requires_api = 1
 
     @staticmethod
@@ -142,7 +147,7 @@ class StaticWrongSignature(Plugin):
 
 
 class KeywordOnly(Plugin):
-    name = "keywordonly"
+    name = "acme.keywordonly"
     requires_api = 1
 
     @hook("daemon_start")
@@ -150,7 +155,7 @@ class KeywordOnly(Plugin):
 
 
 class ExtraBeforeStar(Plugin):
-    name = "extrabeforestar"
+    name = "acme.extrabeforestar"
     requires_api = 1
 
     @hook("daemon_start")
@@ -158,7 +163,7 @@ class ExtraBeforeStar(Plugin):
 
 
 class AsyncHook(Plugin):
-    name = "asynchook"
+    name = "acme.asynchook"
     requires_api = 1
 
     @hook("daemon_start")
@@ -166,7 +171,7 @@ class AsyncHook(Plugin):
 
 
 class GeneratorHook(Plugin):
-    name = "generatorhook"
+    name = "acme.generatorhook"
     requires_api = 1
 
     @hook("daemon_start")
@@ -175,18 +180,18 @@ class GeneratorHook(Plugin):
 
 
 class TakesAnything(Plugin):
-    name = "takesanything"
+    name = "acme.takesanything"
     requires_api = 1
 
     @hook("daemon_start")
     def start(self, *args: object, **kwargs: object) -> None:
-        Alpha.calls.append("takesanything")
+        Alpha.calls.append("acme.takesanything")
 
 
 class SignalsOnCreate(Plugin):
     """Stands in for a shutdown signal that arrives while a plugin loads."""
 
-    name = "signalsoncreate"
+    name = "acme.signalsoncreate"
     requires_api = 1
 
     def __init__(self) -> None:
@@ -195,7 +200,7 @@ class SignalsOnCreate(Plugin):
 
 
 class SignalsInHook(Plugin):
-    name = "signalsinhook"
+    name = "acme.signalsinhook"
     requires_api = 1
 
     @hook("daemon_start")
@@ -205,12 +210,22 @@ class SignalsInHook(Plugin):
 
 
 class AlphaTwo(Plugin):
-    name = "alpha_two"
+    name = "acme.alpha_two"
+    requires_api = 1
+
+
+class OtherAlpha(Plugin):
+    name = "other.alpha"
+    requires_api = 1
+
+
+class Bare(Plugin):
+    name = "bare"
     requires_api = 1
 
 
 class Slow(Plugin):
-    name = "slow"
+    name = "acme.slow"
     requires_api = 1
 
     @hook("daemon_start")
@@ -219,22 +234,22 @@ class Slow(Plugin):
 
 
 class NoHooks(Plugin):
-    name = "nohooks"
+    name = "acme.nohooks"
     requires_api = 1
 
 
 class OldApi(Plugin):
-    name = "oldapi"
+    name = "acme.oldapi"
     requires_api = 0
 
 
 class WrongName(Plugin):
-    name = "something_else"
+    name = "acme.something_else"
     requires_api = 1
 
 
 class UnknownHook(Plugin):
-    name = "unknownhook"
+    name = "acme.unknownhook"
     requires_api = 1
 
     @hook("no_such_hook")
@@ -242,7 +257,7 @@ class UnknownHook(Plugin):
 
 
 class WrongSignature(Plugin):
-    name = "wrongsignature"
+    name = "acme.wrongsignature"
     requires_api = 1
 
     @hook("daemon_start")
@@ -250,7 +265,7 @@ class WrongSignature(Plugin):
 
 
 class TwoHandlers(Plugin):
-    name = "twohandlers"
+    name = "acme.twohandlers"
     requires_api = 1
 
     @hook("daemon_start")
@@ -261,7 +276,7 @@ class TwoHandlers(Plugin):
 
 
 class NeedsArgument(Plugin):
-    name = "needsargument"
+    name = "acme.needsargument"
     requires_api = 1
 
     def __init__(self, required: str) -> None:
@@ -307,20 +322,30 @@ class TestLoading(PluginTestCase):
         registry.run("daemon_start")
 
     def test_loads_in_name_order_when_unset(self) -> None:
-        registry = self.load([_entry_point("beta", Beta), _entry_point("alpha", Alpha)])
-        self.assertEqual([p.name for p in registry.plugins], ["alpha", "beta"])
+        registry = self.load([
+            _entry_point("acme.beta", Beta),
+            _entry_point("acme.alpha", Alpha),
+        ])
+        self.assertEqual(
+            [p.name for p in registry.plugins], ["acme.alpha", "acme.beta"]
+        )
         self.assertEqual(registry.problems, [])
 
     def test_harness_plugins_selects_and_orders(self) -> None:
-        entry_points = [_entry_point("alpha", Alpha), _entry_point("beta", Beta)]
-        registry = self.load(entry_points, {"HARNESS_PLUGINS": "beta, alpha"})
-        self.assertEqual([p.name for p in registry.plugins], ["beta", "alpha"])
-        registry = self.load(entry_points, {"HARNESS_PLUGINS": "beta"})
-        self.assertEqual([p.name for p in registry.plugins], ["beta"])
+        entry_points = [
+            _entry_point("acme.alpha", Alpha),
+            _entry_point("acme.beta", Beta),
+        ]
+        registry = self.load(entry_points, {"HARNESS_PLUGINS": "acme.beta, acme.alpha"})
+        self.assertEqual(
+            [p.name for p in registry.plugins], ["acme.beta", "acme.alpha"]
+        )
+        registry = self.load(entry_points, {"HARNESS_PLUGINS": "acme.beta"})
+        self.assertEqual([p.name for p in registry.plugins], ["acme.beta"])
 
     def test_harness_plugins_none_turns_all_off(self) -> None:
         registry = self.load(
-            [_entry_point("alpha", Alpha)], {"HARNESS_PLUGINS": "none"}
+            [_entry_point("acme.alpha", Alpha)], {"HARNESS_PLUGINS": "none"}
         )
         self.assertEqual(registry.plugins, [])
         self.assertEqual(registry.problems, [])
@@ -331,52 +356,62 @@ class TestLoading(PluginTestCase):
         self.assertEqual(enabled_names({"HARNESS_PLUGINS": "None"}), [])
         self.assertEqual(enabled_names({"HARNESS_PLUGINS": "b a,b"}), ["b", "a"])
         self.assertEqual(
-            enabled_names({"HARNESS_PLUGINS": "Beta,ALPHA"}), ["beta", "alpha"]
+            enabled_names({"HARNESS_PLUGINS": "Acme.Beta,ACME.ALPHA"}),
+            ["acme.beta", "acme.alpha"],
         )
 
     def test_harness_plugins_is_read_without_regard_to_case(self) -> None:
         registry = self.load(
-            [_entry_point("alpha", Alpha), _entry_point("beta", Beta)],
-            {"HARNESS_PLUGINS": "Beta, Alpha"},
+            [_entry_point("acme.alpha", Alpha), _entry_point("acme.beta", Beta)],
+            {"HARNESS_PLUGINS": "Acme.Beta, ACME.Alpha"},
         )
-        self.assertEqual([p.name for p in registry.plugins], ["beta", "alpha"])
+        self.assertEqual(
+            [p.name for p in registry.plugins], ["acme.beta", "acme.alpha"]
+        )
         self.assertEqual(registry.problems, [])
 
     def test_listed_but_not_installed_is_a_problem(self) -> None:
         registry = self.load(
-            [_entry_point("alpha", Alpha)], {"HARNESS_PLUGINS": "alpha,ghost"}
+            [_entry_point("acme.alpha", Alpha)],
+            {"HARNESS_PLUGINS": "acme.alpha,acme.ghost"},
         )
-        self.assertEqual([p.name for p in registry.plugins], ["alpha"])
+        self.assertEqual([p.name for p in registry.plugins], ["acme.alpha"])
         self.assertEqual(
             [str(p) for p in registry.problems],
-            ["ghost: listed in HARNESS_PLUGINS but not installed"],
+            ["acme.ghost: listed in HARNESS_PLUGINS but not installed"],
         )
 
     def test_a_bad_plugin_is_left_out_and_the_rest_load(self) -> None:
         cases = {
-            "oldapi": (OldApi, "requires_api is 0"),
-            "wrongname": (WrongName, "differs from its entry point name"),
-            "unknownhook": (UnknownHook, "unknown hook 'no_such_hook'"),
-            "wrongsignature": (WrongSignature, "must take (self, ctx)"),
-            "twohandlers": (TwoHandlers, "more than one handler"),
-            "needsargument": (NeedsArgument, "could not be created"),
-            "raisinglookup": (RaisingLookup, "could not be checked"),
-            "exitsoncreate": (ExitsOnCreate, "could not be created: SystemExit: 4"),
-            "staticwrongsignature": (StaticWrongSignature, "must take (self, ctx)"),
-            "keywordonly": (KeywordOnly, "must take (self, ctx)"),
-            "extrabeforestar": (ExtraBeforeStar, "must take (self, ctx)"),
-            "asynchook": (AsyncHook, "must be a plain function"),
-            "generatorhook": (GeneratorHook, "must be a plain function"),
-            "missing": ("no_such_module_for_plugins:Thing", "import failed"),
-            "notaplugin": (f"{__name__}:PluginTestCase", "not a harness.plugins"),
+            "acme.oldapi": (OldApi, "requires_api is 0"),
+            "acme.wrongname": (WrongName, "differs from its entry point name"),
+            "acme.unknownhook": (UnknownHook, "unknown hook 'no_such_hook'"),
+            "acme.wrongsignature": (WrongSignature, "must take (self, ctx)"),
+            "acme.twohandlers": (TwoHandlers, "more than one handler"),
+            "acme.needsargument": (NeedsArgument, "could not be created"),
+            "acme.raisinglookup": (RaisingLookup, "could not be checked"),
+            "acme.exitsoncreate": (
+                ExitsOnCreate,
+                "could not be created: SystemExit: 4",
+            ),
+            "acme.staticwrongsignature": (
+                StaticWrongSignature,
+                "must take (self, ctx)",
+            ),
+            "acme.keywordonly": (KeywordOnly, "must take (self, ctx)"),
+            "acme.extrabeforestar": (ExtraBeforeStar, "must take (self, ctx)"),
+            "acme.asynchook": (AsyncHook, "must be a plain function"),
+            "acme.generatorhook": (GeneratorHook, "must be a plain function"),
+            "acme.missing": ("no_such_module_for_plugins:Thing", "import failed"),
+            "acme.notaplugin": (f"{__name__}:PluginTestCase", "not a harness.plugins"),
         }
         for name, (target, message) in cases.items():
             with self.subTest(name):
                 registry = self.load([
                     _entry_point(name, target),
-                    _entry_point("alpha", Alpha),
+                    _entry_point("acme.alpha", Alpha),
                 ])
-                self.assertEqual([p.name for p in registry.plugins], ["alpha"])
+                self.assertEqual([p.name for p in registry.plugins], ["acme.alpha"])
                 self.assertEqual(len(registry.problems), 1)
                 self.assertEqual(registry.problems[0].plugin, name)
                 self.assertIn(message, registry.problems[0].message)
@@ -384,62 +419,114 @@ class TestLoading(PluginTestCase):
     def test_invalid_and_duplicate_names_are_problems(self) -> None:
         registry = self.load([
             _entry_point("Bad-Name", Alpha),
-            _entry_point("alpha", Alpha),
-            _entry_point("alpha", Alpha),
+            _entry_point("acme.alpha", Alpha),
+            _entry_point("acme.alpha", Alpha),
         ])
-        self.assertEqual([p.name for p in registry.plugins], ["alpha"])
+        self.assertEqual([p.name for p in registry.plugins], ["acme.alpha"])
         self.assertEqual(
-            sorted(p.plugin for p in registry.problems), ["Bad-Name", "alpha"]
+            sorted(p.plugin for p in registry.problems), ["Bad-Name", "acme.alpha"]
         )
+
+    def test_a_name_needs_a_namespace(self) -> None:
+        bad = [
+            "alpha",
+            "acme/alpha",
+            "acme.alpha.extra",
+            ".alpha",
+            "acme.",
+            "acme.1alpha",
+            "1acme.alpha",
+            "acme-co.alpha",
+        ]
+        for name in bad:
+            with self.subTest(name):
+                self.assertIsNotNone(name_error(name))
+                registry = self.load([_entry_point(name, Alpha)])
+                self.assertEqual(registry.plugins, [])
+                self.assertEqual(
+                    [str(p) for p in registry.problems], [f"{name}: {NAME_RULE}"]
+                )
+        self.assertIsNone(name_error("acme_co.alpha_2"))
+        self.assertIsNotNone(name_error(None))
+
+    def test_the_same_short_name_in_two_namespaces_loads(self) -> None:
+        registry = self.load([
+            _entry_point("acme.alpha", Alpha),
+            _entry_point("other.alpha", OtherAlpha),
+        ])
+        self.assertEqual(registry.problems, [])
+        self.assertEqual(
+            [p.name for p in registry.plugins], ["acme.alpha", "other.alpha"]
+        )
+        env = {
+            "HARNESS_PLUGIN_ACME_ALPHA_GREETING": "one",
+            "HARNESS_PLUGIN_OTHER_ALPHA_GREETING": "two",
+        }
+        self.assertEqual(plugin_settings("acme.alpha", env), {"greeting": "one"})
+        self.assertEqual(plugin_settings("other.alpha", env), {"greeting": "two"})
+
+    def test_settings_overlap_is_judged_on_the_variable_name(self) -> None:
+        # The dot is an underscore in a variable name, so these read the same
+        # settings or one reads the other's.
+        self.assertEqual(settings_overlaps(["a.b_c", "a_b.c"]), {"a_b.c": "a.b_c"})
+        self.assertEqual(
+            settings_overlaps(["acme.alpha", "acme_alpha.two"]),
+            {"acme_alpha.two": "acme.alpha"},
+        )
+        self.assertEqual(settings_overlaps(["acme.alpha", "other.alpha"]), {})
+        self.assertEqual(settings_overlaps(["acme.alpha", "acme.alphabet"]), {})
 
     def test_a_module_that_exits_on_import_is_left_out(self) -> None:
         module = "harness_test_plugin_that_exits"
         (self.root / f"{module}.py").write_text("import sys\nsys.exit(5)\n", "utf-8")
         with patch.object(sys, "path", [str(self.root), *sys.path]):
             registry = self.load([
-                _entry_point("exitsonimport", f"{module}:Thing"),
-                _entry_point("alpha", Alpha),
+                _entry_point("acme.exitsonimport", f"{module}:Thing"),
+                _entry_point("acme.alpha", Alpha),
             ])
         self.addCleanup(sys.modules.pop, module, None)
-        self.assertEqual([p.name for p in registry.plugins], ["alpha"])
+        self.assertEqual([p.name for p in registry.plugins], ["acme.alpha"])
         self.assertEqual(
             [str(p) for p in registry.problems],
-            ["exitsonimport: import failed: SystemExit: 5"],
+            ["acme.exitsonimport: import failed: SystemExit: 5"],
         )
 
     def test_a_property_is_not_read_while_loading(self) -> None:
         RaisingProperty.reads = 0
         registry = self.load([
-            _entry_point("raisingproperty", RaisingProperty),
-            _entry_point("alpha", Alpha),
+            _entry_point("acme.raisingproperty", RaisingProperty),
+            _entry_point("acme.alpha", Alpha),
         ])
         self.assertEqual(registry.problems, [])
         self.assertEqual(
-            [p.name for p in registry.plugins], ["alpha", "raisingproperty"]
+            [p.name for p in registry.plugins], ["acme.alpha", "acme.raisingproperty"]
         )
         self.assertEqual(list(registry.plugins[1].hooks), ["daemon_start"])
         self.assertEqual(RaisingProperty.reads, 0)
 
     def test_a_name_that_would_share_settings_is_left_out(self) -> None:
-        # alpha would read HARNESS_PLUGIN_ALPHA_TWO_<KEY> as its own two_<key>.
+        # acme.alpha would read HARNESS_PLUGIN_ACME_ALPHA_TWO_<KEY> as its own two_<key>.
         registry = self.load([
-            _entry_point("alpha_two", AlphaTwo),
-            _entry_point("alpha", Alpha),
-            _entry_point("alphabet", NoHooks),
+            _entry_point("acme.alpha_two", AlphaTwo),
+            _entry_point("acme.alpha", Alpha),
+            _entry_point("acme.alphabet", NoHooks),
         ])
-        self.assertEqual([p.name for p in registry.plugins], ["alpha"])
+        self.assertEqual([p.name for p in registry.plugins], ["acme.alpha"])
         problems = {p.plugin: p.message for p in registry.problems}
-        self.assertIn("plugin 'alpha' and an underscore", problems["alpha_two"])
-        # "alphabet" shares letters, not a settings prefix; it fails on its
-        # class name only.
-        self.assertIn("differs from its entry point name", problems["alphabet"])
+        self.assertIn("that of plugin 'acme.alpha'", problems["acme.alpha_two"])
+        # "acme.alphabet" shares letters, not a settings prefix; it fails on
+        # its class name only.
+        self.assertIn("differs from its entry point name", problems["acme.alphabet"])
 
     def test_an_overlapping_name_is_fine_when_the_other_is_not_enabled(self) -> None:
         registry = self.load(
-            [_entry_point("alpha_two", AlphaTwo), _entry_point("alpha", Alpha)],
-            {"HARNESS_PLUGINS": "alpha_two"},
+            [
+                _entry_point("acme.alpha_two", AlphaTwo),
+                _entry_point("acme.alpha", Alpha),
+            ],
+            {"HARNESS_PLUGINS": "acme.alpha_two"},
         )
-        self.assertEqual([p.name for p in registry.plugins], ["alpha_two"])
+        self.assertEqual([p.name for p in registry.plugins], ["acme.alpha_two"])
         self.assertEqual(registry.problems, [])
 
     def test_a_shutdown_signal_while_loading_is_not_a_plugin_problem(self) -> None:
@@ -447,10 +534,10 @@ class TestLoading(PluginTestCase):
         previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         self.addCleanup(signal.signal, signal.SIGTERM, previous)
         with self.assertRaises(SystemExit):
-            self.load([_entry_point("signalsoncreate", SignalsOnCreate)])
+            self.load([_entry_point("acme.signalsoncreate", SignalsOnCreate)])
 
     def test_a_plugin_without_hooks_loads(self) -> None:
-        registry = self.load([_entry_point("nohooks", NoHooks)])
+        registry = self.load([_entry_point("acme.nohooks", NoHooks)])
         self.assertEqual(registry.problems, [])
         self.assertEqual(dict(registry.plugins[0].hooks), {})
 
@@ -462,22 +549,22 @@ class TestHooks(PluginTestCase):
     def test_runs_each_plugin_in_order(self) -> None:
         registry = registry_for([Alpha, Beta], root=self.root)
         registry.run("daemon_start")
-        self.assertEqual(Alpha.calls, ["alpha:alpha", "beta"])
+        self.assertEqual(Alpha.calls, ["alpha:acme.alpha", "acme.beta"])
 
     def test_a_raising_hook_is_logged_and_the_next_plugin_runs(self) -> None:
         registry = registry_for([Raises, Beta], root=self.root)
         with self.assertLogs("harness.plugins", level="ERROR") as logs:
             registry.run("daemon_start")
-        self.assertEqual(Alpha.calls, ["beta"])
-        self.assertIn("plugin raises: daemon_start failed", logs.output[0])
+        self.assertEqual(Alpha.calls, ["acme.beta"])
+        self.assertIn("plugin acme.raises: daemon_start failed", logs.output[0])
         self.assertIn("RuntimeError: boom", logs.output[0])
 
     def test_a_hook_that_exits_is_a_failed_hook(self) -> None:
         registry = registry_for([Exits, Beta], root=self.root)
         with self.assertLogs("harness.plugins", level="ERROR") as logs:
             registry.run("daemon_start")
-        self.assertEqual(Alpha.calls, ["beta"])
-        self.assertIn("plugin exits: daemon_start failed", logs.output[0])
+        self.assertEqual(Alpha.calls, ["acme.beta"])
+        self.assertIn("plugin acme.exits: daemon_start failed", logs.output[0])
         self.assertIn("SystemExit: 3", logs.output[0])
 
     def test_static_and_class_method_hooks_are_found_and_called(self) -> None:
@@ -485,7 +572,9 @@ class TestHooks(PluginTestCase):
         for plugin in registry.plugins:
             self.assertEqual(list(plugin.hooks), ["daemon_start"])
         registry.run("daemon_start")
-        self.assertEqual(Alpha.calls, ["static:wrappedhooks", "class:classhook"])
+        self.assertEqual(
+            Alpha.calls, ["static:acme.wrappedhooks", "class:acme.classhook"]
+        )
 
     def test_a_shutdown_signal_during_a_hook_stops_the_run(self) -> None:
         previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -498,7 +587,7 @@ class TestHooks(PluginTestCase):
     def test_a_hook_that_takes_anything_fits(self) -> None:
         registry = registry_for([TakesAnything], root=self.root)
         registry.run("daemon_start")
-        self.assertEqual(Alpha.calls, ["takesanything"])
+        self.assertEqual(Alpha.calls, ["acme.takesanything"])
 
     def test_a_hook_over_budget_is_left_behind(self) -> None:
         registry = registry_for([Slow, Beta], root=self.root)
@@ -510,14 +599,16 @@ class TestHooks(PluginTestCase):
         ):
             registry.run("daemon_start")
         self.assertLess(time.monotonic() - started, 2)
-        self.assertEqual(Alpha.calls, ["beta"])
+        self.assertEqual(Alpha.calls, ["acme.beta"])
         self.assertIn("still running", logs.output[0])
 
     def test_registry_for_raises_on_a_plugin_that_would_not_load(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires_api"):
             registry_for([OldApi], root=self.root)
-        with self.assertRaisesRegex(ValueError, "alpha_two: its name starts with"):
+        with self.assertRaisesRegex(ValueError, "alpha_two: its settings prefix"):
             registry_for([Alpha, AlphaTwo], root=self.root)
+        with self.assertRaisesRegex(ValueError, "bare: name must be <namespace>"):
+            registry_for([Bare], root=self.root)
 
 
 class TestContext(PluginTestCase):
@@ -527,21 +618,21 @@ class TestContext(PluginTestCase):
 
     def test_settings_come_only_from_the_plugins_prefix(self) -> None:
         env = {
-            "HARNESS_PLUGIN_ALPHA_GREETING": "hi",
-            "HARNESS_PLUGIN_ALPHA_MAX_ITEMS": "3",
-            "HARNESS_PLUGIN_ALPHA_": "empty key",
-            "HARNESS_PLUGIN_BETA_GREETING": "other plugin",
+            "HARNESS_PLUGIN_ACME_ALPHA_GREETING": "hi",
+            "HARNESS_PLUGIN_ACME_ALPHA_MAX_ITEMS": "3",
+            "HARNESS_PLUGIN_ACME_ALPHA_": "empty key",
+            "HARNESS_PLUGIN_ACME_BETA_GREETING": "other plugin",
             "HARNESS_MODEL": "core setting",
         }
         self.assertEqual(
-            plugin_settings("alpha", env), {"greeting": "hi", "max_items": "3"}
+            plugin_settings("acme.alpha", env), {"greeting": "hi", "max_items": "3"}
         )
         self.assertEqual(self.context(env).settings["greeting"], "hi")
 
     def test_directories_are_per_plugin(self) -> None:
         ctx = self.context()
-        self.assertEqual(ctx.state_dir, self.root / "state" / "alpha")
-        self.assertEqual(ctx.runtime_dir, self.root / "runtime" / "alpha")
+        self.assertEqual(ctx.state_dir, self.root / "state" / "acme.alpha")
+        self.assertEqual(ctx.runtime_dir, self.root / "runtime" / "acme.alpha")
         self.assertEqual(ctx.workspace, self.root / "workspace")
 
     def _wait_for(self, path: Path, text: str) -> None:
@@ -638,12 +729,14 @@ class TestExamplePlugin(PluginTestCase):
         self.addCleanup(sys.path.remove, str(EXAMPLE_SRC))
         self.addCleanup(sys.modules.pop, "devbox_hello_plugin", None)
         registry = self.load(
-            [_entry_point("hello", "devbox_hello_plugin:Hello")],
-            {"HARNESS_PLUGIN_HELLO_GREETING": "good morning"},
+            [_entry_point("example.hello", "devbox_hello_plugin:Hello")],
+            {"HARNESS_PLUGIN_EXAMPLE_HELLO_GREETING": "good morning"},
         )
         self.assertEqual(registry.problems, [])
         registry.run("daemon_start")
-        log = (self.root / "state" / "hello" / "starts.log").read_text(encoding="utf-8")
+        log = (self.root / "state" / "example.hello" / "starts.log").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("good morning", log)
 
 
@@ -666,26 +759,28 @@ class TestCli(PluginTestCase):
         self.assertEqual(err, "")
 
     def test_check_lists_plugins_and_passes(self) -> None:
-        rc, out, _err = self.run_cli(["check"], [_entry_point("alpha", Alpha)])
+        rc, out, _err = self.run_cli(["check"], [_entry_point("acme.alpha", Alpha)])
         self.assertEqual(rc, 0)
-        self.assertIn("alpha  daemon_start", out)
+        self.assertIn("acme.alpha  daemon_start", out)
         self.assertIn(f"ok (plugin API {API_VERSION})", out)
 
     def test_check_fails_on_any_problem(self) -> None:
         rc, out, err = self.run_cli(
-            ["check"], [_entry_point("alpha", Alpha), _entry_point("oldapi", OldApi)]
+            ["check"],
+            [_entry_point("acme.alpha", Alpha), _entry_point("acme.oldapi", OldApi)],
         )
         self.assertEqual(rc, 1)
         self.assertEqual(out, "")
-        self.assertIn("harness plugins check: oldapi: requires_api", err)
+        self.assertIn("harness plugins check: acme.oldapi: requires_api", err)
 
     def test_list_shows_problems_but_exits_zero(self) -> None:
         rc, out, err = self.run_cli(
-            ["list"], [_entry_point("alpha", Alpha), _entry_point("oldapi", OldApi)]
+            ["list"],
+            [_entry_point("acme.alpha", Alpha), _entry_point("acme.oldapi", OldApi)],
         )
         self.assertEqual(rc, 0)
-        self.assertIn("alpha", out)
-        self.assertIn("problem: oldapi", err)
+        self.assertIn("acme.alpha", out)
+        self.assertIn("problem: acme.oldapi", err)
 
     def test_an_action_is_required(self) -> None:
         rc, _out, _err = self.run_cli([], [])

@@ -2456,13 +2456,15 @@ class TestRunDaemonStartPlugins(unittest.TestCase):
         from harness.plugins import LoadedPlugin, Plugin, PluginProblem
 
         registry = MagicMock()
-        registry.plugins = [LoadedPlugin(name="alpha", instance=Plugin(), hooks={})]
-        registry.problems = [PluginProblem("beta", "import failed")]
+        registry.plugins = [
+            LoadedPlugin(name="acme.alpha", instance=Plugin(), hooks={})
+        ]
+        registry.problems = [PluginProblem("acme.beta", "import failed")]
         with patch("harness.plugins.load_plugins", return_value=registry):
             out, err = self._run()
         registry.run.assert_called_once_with("daemon_start")
-        self.assertIn("daemon: plugins loaded: alpha", out)
-        self.assertIn("daemon: plugin not loaded: beta: import failed", err)
+        self.assertIn("daemon: plugins loaded: acme.alpha", out)
+        self.assertIn("daemon: plugin not loaded: acme.beta: import failed", err)
 
     def test_says_nothing_without_plugins(self) -> None:
         with patch("harness.plugins._registry.metadata.entry_points", return_value=[]):

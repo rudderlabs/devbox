@@ -14,9 +14,19 @@ from pathlib import Path
 _KEY = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 
 
+def settings_stem(name: str) -> str:
+    """The plugin name as it appears in a setting's variable name.
+
+    An environment variable name cannot hold a dot, so the one between the
+    namespace and the name is an underscore there.
+    """
+    return name.upper().replace(".", "_")
+
+
 def plugin_settings(name: str, env: Mapping[str, str]) -> dict[str, str]:
-    """The plugin's settings: ``HARNESS_PLUGIN_<NAME>_<KEY>`` as ``<key>``."""
-    prefix = f"HARNESS_PLUGIN_{name.upper()}_"
+    """The plugin's settings: ``HARNESS_PLUGIN_<NAMESPACE>_<NAME>_<KEY>`` as
+    ``<key>``."""
+    prefix = f"HARNESS_PLUGIN_{settings_stem(name)}_"
     return {
         key[len(prefix) :].lower(): value
         for key, value in env.items()
@@ -68,7 +78,7 @@ class PluginContext:
     """One plugin's view of the sandbox. Built fresh for every hook call."""
 
     name: str
-    # HARNESS_PLUGIN_<NAME>_<KEY> from the environment, keyed by lowercased KEY.
+    # HARNESS_PLUGIN_<NAMESPACE>_<NAME>_<KEY> from the environment, keyed by lowercased KEY.
     settings: Mapping[str, str]
     # The plugin's own directory on the task volume. It survives a sandbox
     # restart. Created on first use by ``spawn``; create it yourself otherwise.

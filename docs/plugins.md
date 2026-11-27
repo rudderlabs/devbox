@@ -20,7 +20,7 @@ from harness.plugins import Plugin, PluginContext, hook
 
 
 class Hello(Plugin):
-    name = "hello"
+    name = "example.hello"
     requires_api = 1
 
     @hook("daemon_start")
@@ -33,13 +33,17 @@ Its `pyproject.toml` names the class in the `devbox.plugins` entry point group:
 
 ```toml
 [project.entry-points."devbox.plugins"]
-hello = "devbox_hello_plugin:Hello"
+"example.hello" = "devbox_hello_plugin:Hello"
 ```
 
-- `name` is the plugin's name: lowercase letters, digits and underscores,
-  starting with a letter. It must equal the entry point name. It must not be
-  another loaded plugin's name followed by an underscore: with `foo` loaded,
-  `foo_bar` is not, because `foo` would read its settings.
+- `name` is the plugin's name, written `<namespace>.<name>`. The namespace
+  says whose plugin it is: use your organization or project, so your `warmup`
+  and someone else's can be installed side by side. Each part is lowercase
+  letters, digits and underscores, starting with a letter. The name must equal
+  the entry point name, which TOML needs in quotes because of the dot.
+- Two loaded plugins must not share settings. A setting's variable name has
+  an underscore where the plugin name has its dot, so with `acme.foo` loaded,
+  `acme.foo_bar` is not, because `acme.foo` would read its settings.
 - `requires_api` is the plugin API version the plugin was written for. This
   harness supports version 1.
 - The harness creates the class once per daemon process, with no arguments.
@@ -76,17 +80,19 @@ Each hook gets a `PluginContext`, built for that call:
 |---|---|
 | `ctx.name` | The plugin's name. |
 | `ctx.settings` | The plugin's settings (below). |
-| `ctx.state_dir` | The plugin's own directory on the task's volume, `.harness/plugins/<name>/`. It survives a sandbox restart. Create it before writing to it. |
+| `ctx.state_dir` | The plugin's own directory on the task's volume, `.harness/plugins/<namespace>.<name>/`. It survives a sandbox restart. Create it before writing to it. |
 | `ctx.runtime_dir` | The plugin's own directory off the volume. A restart empties it. |
 | `ctx.workspace` | The workspace root, with each repo below it. |
-| `ctx.log` | A `logging.Logger` named `harness.plugins.<name>`. |
+| `ctx.log` | A `logging.Logger` named `harness.plugins.<namespace>.<name>`. |
 | `ctx.spawn(argv, log=..., once=...)` | Starts a detached process and returns its pid without waiting. Its output is appended to `state_dir/<log>`. With `once`, a second call under the same name starts nothing while the first process is alive, and returns `None`. Use `once` for anything that must not run twice, such as a server on a fixed port. |
 
 ## Settings
 
 A plugin reads its settings from environment variables named
-`HARNESS_PLUGIN_<NAME>_<KEY>`. `HARNESS_PLUGIN_HELLO_GREETING=hi` is
-`ctx.settings["greeting"]` in the `hello` plugin.
+`HARNESS_PLUGIN_<NAMESPACE>_<NAME>_<KEY>`: the plugin's name in upper case
+with its dot as an underscore, then the key.
+`HARNESS_PLUGIN_EXAMPLE_HELLO_GREETING=hi` is `ctx.settings["greeting"]` in
+the `example.hello` plugin.
 
 Set them with `ENV` in your image. The control plane does not forward
 `HARNESS_PLUGIN_*` variables to sandboxes: it forwards only the names in its
@@ -111,8 +117,8 @@ RUN uv pip install --python /opt/harness/.venv/bin/python /opt/plugins/my-plugin
 ```
 
 `harness plugins check` loads every installed plugin the way the daemon does
-and exits non-zero when one cannot be loaded: an import error, a name that
-differs from its entry point or would share another plugin's settings, an
+and exits non-zero when one cannot be loaded: an import error, a name without a namespace, a
+name that differs from its entry point or would share another plugin's settings, an
 unsupported `requires_api`, an unknown hook, two methods for one hook, or a
 hook that is `async` or has the wrong arguments. Keep it as the last step, so a broken
 plugin fails the image build and never reaches a sandbox.
@@ -122,8 +128,8 @@ hooks.
 
 ## Choose which plugins run
 
-`HARNESS_PLUGINS` is a comma-separated list of plugin names. Upper and lower
-case are the same.
+`HARNESS_PLUGINS` is a comma-separated list of plugin names, each with its
+namespace: `acme.warmup,acme.verify`. Upper and lower case are the same.
 
 - Unset or empty: every installed plugin runs, ordered by name.
 - A list: only those plugins run, in that order. A listed name that is not
@@ -148,12 +154,13 @@ loader does, and raises on one that would not load:
 ```python
 from harness.plugins.testing import registry_for
 
-registry = registry_for([Hello], root=tmp_path, env={"HARNESS_PLUGIN_HELLO_GREETING": "hi"})
+registry = registry_for([Hello], root=tmp_path, env={"HARNESS_PLUGIN_EXAMPLE_HELLO_GREETING": "hi"})
 registry.run("daemon_start")
 ```
 
 Everything the plugin may write goes under `root`: its state in
-`root/state/<name>`, its runtime files in `root/runtime/<name>`, and the
+`root/state/<namespace>.<name>`, its runtime files in
+`root/runtime/<namespace>.<name>`, and the
 workspace at `root/workspace`.
 
 ## Versions
