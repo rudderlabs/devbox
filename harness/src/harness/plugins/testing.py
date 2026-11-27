@@ -49,8 +49,8 @@ def registry_for(
         registry.problems.extend(PluginProblem(cls.name, error) for error in errors)
         if plugin is not None:
             registry.plugins.append(plugin)
-    named = [cls.name for cls in plugin_classes if name_error(cls.name) is None]
-    for name, other in settings_overlaps(named).items():
+    overlaps = settings_overlaps(plugin.name for plugin in registry.plugins)
+    for name, other in overlaps.items():
         registry.problems.append(PluginProblem(name, _overlap_message(other)))
     if registry.problems:
         raise ValueError("; ".join(str(problem) for problem in registry.problems))

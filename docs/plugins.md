@@ -150,7 +150,9 @@ one plugin or all of them off with `extraEnv`, without building a new image.
 ## What happens when a plugin is broken
 
 The daemon never fails because of a plugin. A plugin that cannot be loaded is
-logged (`daemon: plugin not loaded: …`) and left out, and the others run. The
+logged (`daemon: plugin not loaded: …`) and left out, and the others run.
+That includes a plugin that takes more than 30 seconds to import and create:
+the daemon goes on without it. The
 build-time check is what keeps a broken plugin out.
 
 ## Test a plugin

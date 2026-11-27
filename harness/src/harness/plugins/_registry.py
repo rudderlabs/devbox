@@ -32,6 +32,9 @@ from harness.plugins._context import PluginContext, plugin_settings, settings_st
 # ``<namespace>.<name>``: the namespace says whose plugin it is, so two
 # authors' plugins can share the short name.
 _NAME = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+# How long one plugin may take to import, be created and be checked. Past
+# that the daemon goes on without it.
+LOAD_BUDGET_SECONDS = 30.0
 NAME_RULE = (
     "name must be <namespace>.<name>, each part lowercase letters, digits and "
     "underscores, starting with a letter"
@@ -220,7 +223,11 @@ def _load_on_thread(
 
     thread = threading.Thread(target=body, name=f"plugin-{name}-load", daemon=True)
     thread.start()
-    thread.join()
+    thread.join(LOAD_BUDGET_SECONDS)
+    if not result:
+        # Left behind like a hook over its budget: the daemon must reach its
+        # inbox whatever a plugin does while it loads.
+        return None, [f"still loading after {LOAD_BUDGET_SECONDS:g}s; left out"]
     return result[0]
 
 
@@ -358,18 +365,13 @@ def load_plugins(
             if name not in by_name
         )
 
-    overlaps = settings_overlaps(order)
+    loaded: list[LoadedPlugin] = []
     for name in order:
-        if name in overlaps:
-            registry.problems.append(
-                PluginProblem(name, _overlap_message(overlaps[name]))
-            )
-            continue
         entry_point = by_name[name]
         plugin, errors = _load_on_thread(name, entry_point.load)
         registry.problems.extend(PluginProblem(name, error) for error in errors)
         if plugin is not None:
-            registry.plugins.append(
+            loaded.append(
                 LoadedPlugin(
                     name=plugin.name,
                     instance=plugin.instance,
@@ -377,4 +379,14 @@ def load_plugins(
                     source=_source(entry_point),
                 )
             )
+    # Among the plugins that did load: one that failed reads no settings, so
+    # it must not cost another plugin its place.
+    overlaps = settings_overlaps(plugin.name for plugin in loaded)
+    for plugin in loaded:
+        if plugin.name in overlaps:
+            registry.problems.append(
+                PluginProblem(plugin.name, _overlap_message(overlaps[plugin.name]))
+            )
+        else:
+            registry.plugins.append(plugin)
     return registry
