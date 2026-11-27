@@ -161,7 +161,7 @@ distillation take no plugin text.
 
 - Return a string, a list of strings, or `None` for no text.
 - The harness adds the text to the system prompt in a block that names your
-  plugin: `<plugin_instructions plugin="<name>">`. It comes after the stage's
+  plugin: `<plugin_instructions plugin="<namespace>.<name>">`. It comes after the stage's
   own instructions, but it is not always the last thing in the prompt.
 - One plugin may add up to 8,000 characters per stage. Longer text is logged
   and dropped whole.

@@ -31,7 +31,7 @@ from harness.stages import Stage
 
 
 class Stack(Plugin):
-    name = "stack"
+    name = "acme.stack"
     requires_api = 1
     calls: ClassVar[list[tuple[str, Any]]] = []
     result: ClassVar[Any] = None
@@ -45,7 +45,7 @@ class Stack(Plugin):
 
 
 class Search(Plugin):
-    name = "search"
+    name = "acme.search"
     requires_api = 1
 
     @hook("prompt_fragments")
@@ -56,7 +56,7 @@ class Search(Plugin):
 class Quiet(Plugin):
     """Handles another hook only."""
 
-    name = "quiet"
+    name = "acme.quiet"
     requires_api = 1
 
     @hook("followup_start")
@@ -92,10 +92,10 @@ class TestPromptFragments(FragmentTestCase):
         Stack.result = "  The stack is starting.  "
         self.assertEqual(
             self.round().prompt_fragments("planning"),
-            '<plugin_instructions plugin="stack">\n'
+            '<plugin_instructions plugin="acme.stack">\n'
             "The stack is starting.\n"
             "</plugin_instructions>\n\n"
-            '<plugin_instructions plugin="search">\n'
+            '<plugin_instructions plugin="acme.search">\n'
             "Use `websearch` to search the web.\n"
             "</plugin_instructions>",
         )
@@ -116,7 +116,7 @@ class TestPromptFragments(FragmentTestCase):
         Stack.result = ["First.", "", "Second."]
         self.assertEqual(
             self.round().prompt_fragments("implementation"),
-            '<plugin_instructions plugin="stack">\nFirst.\n\nSecond.\n'
+            '<plugin_instructions plugin="acme.stack">\nFirst.\n\nSecond.\n'
             "</plugin_instructions>",
         )
 
@@ -142,8 +142,8 @@ class TestPromptFragments(FragmentTestCase):
                     text = self.round().prompt_fragments("planning")
                 # The other plugin's text is still there.
                 assert text is not None
-                self.assertNotIn('plugin="stack"', text)
-                self.assertIn('plugin="search"', text)
+                self.assertNotIn('plugin="acme.stack"', text)
+                self.assertIn('plugin="acme.search"', text)
                 self.assertIn(
                     "prompt_fragments text for planning dropped", logs.output[0]
                 )
@@ -157,8 +157,8 @@ class TestPromptFragments(FragmentTestCase):
         with self.assertLogs("harness.plugins", level="ERROR"):
             text = self.round().prompt_fragments("planning")
         assert text is not None
-        self.assertNotIn('plugin="stack"', text)
-        self.assertIn('plugin="search"', text)
+        self.assertNotIn('plugin="acme.stack"', text)
+        self.assertIn('plugin="acme.search"', text)
 
     def test_an_unknown_stage_is_a_harness_bug(self) -> None:
         with self.assertRaises(ValueError):
