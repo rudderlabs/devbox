@@ -102,4 +102,4 @@ Say so instead of looking for a way around it:
   web UI.
 - A task can't be stopped from Linear, Jira or ClickUp yet. A ClickUp
   automation never starts work.
-- No stable extension interface ([docs/extending.md](../../docs/extending.md)).
+- One stable extension interface, harness plugins ([docs/plugins.md](../../docs/plugins.md)); the rest is internal ([docs/extending.md](../../docs/extending.md)).

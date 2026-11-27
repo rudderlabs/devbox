@@ -54,6 +54,12 @@ sandbox:
 Run the installer again, or apply the chart with GitOps. New sandboxes use the
 image; running ones keep theirs until they stop.
 
+## Add your own code
+
+Tools are not the only thing an image can add. A [harness plugin](../plugins.md)
+is a Python package the image installs next to the harness; the harness calls
+it when its daemon starts.
+
 ## The compatibility contract
 
 An image works as a harness image if it keeps what the base image provides:

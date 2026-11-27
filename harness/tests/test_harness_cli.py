@@ -109,6 +109,10 @@ class TestHarnessCLIHelp(unittest.TestCase):
                 "Archive harness artifacts",
                 ("--out", "--override", "-h, --help"),
             ),
+            "plugins": (
+                "List or check installed plugins",
+                ("list", "check", "-h, --help"),
+            ),
         }
         for command, (description, arg_markers) in expectations.items():
             rc, stdout, stderr = self._run([command, "-h"])
