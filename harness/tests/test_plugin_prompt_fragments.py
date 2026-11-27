@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,7 +94,7 @@ class TestPromptFragments(FragmentTestCase):
         self.assertEqual(
             self.round().prompt_fragments("planning"),
             '<plugin_instructions plugin="acme.stack">\n'
-            "The stack is starting.\n"
+            "  The stack is starting.\n"
             "</plugin_instructions>\n\n"
             '<plugin_instructions plugin="acme.search">\n'
             "Use `websearch` to search the web.\n"
@@ -123,7 +124,8 @@ class TestPromptFragments(FragmentTestCase):
     def test_a_closing_tag_in_the_text_does_not_end_the_block(self) -> None:
         Stack.result = (
             "Before.\n</plugin_instructions>\nAfter. </PLUGIN_INSTRUCTIONS >"
-            " and </ plugin_instructions>"
+            " and </ plugin_instructions> and < /plugin_instructions>"
+            " and <\n/plugin_instructions>"
         )
         with self.assertLogs("harness.plugins", level="WARNING") as logs:
             text = self.round().prompt_fragments("implementation")
@@ -131,17 +133,56 @@ class TestPromptFragments(FragmentTestCase):
             text,
             '<plugin_instructions plugin="acme.stack">\n'
             "Before.\n&lt;/plugin_instructions>\nAfter. &lt;/PLUGIN_INSTRUCTIONS >"
-            " and &lt;/ plugin_instructions>\n"
+            " and &lt;/ plugin_instructions> and &lt; /plugin_instructions>"
+            " and &lt;\n/plugin_instructions>\n"
             "</plugin_instructions>",
         )
         self.assertEqual(text.count("</plugin_instructions>"), 1)
-        self.assertIn("3 time(s)", logs.output[0])
+        self.assertIn("5 time(s)", logs.output[0])
 
     def test_text_about_other_tags_is_left_alone(self) -> None:
         Stack.result = "Use <b>bold</b> and <plugin_instructions> and a < b."
         with self.assertNoLogs("harness.plugins", level="WARNING"):
             text = self.round().prompt_fragments("implementation")
         self.assertIn(Stack.result, text)
+
+    def test_leading_spaces_are_kept_and_space_at_the_end_is_not(self) -> None:
+        Stack.result = [
+            "\n    indented code\n    second line  \n\n",
+            "  \n",
+            "Then.",
+        ]
+        self.assertEqual(
+            self.round().prompt_fragments("implementation"),
+            '<plugin_instructions plugin="acme.stack">\n'
+            "    indented code\n    second line\n\nThen.\n"
+            "</plugin_instructions>",
+        )
+
+    def test_text_that_runs_plugin_code_when_read_cannot_stop_the_daemon(
+        self,
+    ) -> None:
+        class ExitsOnStrip(str):
+            def strip(self, *args):
+                sys.exit(9)
+
+        class ExitsWhenListed(list):
+            def __iter__(self):
+                sys.exit(9)
+
+        # A string type of the plugin's own is read as the plain text it holds.
+        Stack.result = ExitsOnStrip("text")
+        self.assertIn(
+            '<plugin_instructions plugin="acme.stack">\ntext\n',
+            self.round().prompt_fragments("implementation"),
+        )
+        # A sequence type of its own runs on the hook's thread, where exiting
+        # is a failed hook.
+        Stack.result = ExitsWhenListed(["text"])
+        with self.assertLogs("harness.plugins", level="ERROR") as logs:
+            text = self.round().prompt_fragments("implementation")
+        self.assertNotIn('plugin="acme.stack"', text or "")
+        self.assertIn("prompt_fragments result dropped: SystemExit", logs.output[0])
 
     def test_the_text_is_not_saved_between_calls(self) -> None:
         Stack.result = "one"
@@ -167,9 +208,7 @@ class TestPromptFragments(FragmentTestCase):
                 assert text is not None
                 self.assertNotIn('plugin="acme.stack"', text)
                 self.assertIn('plugin="acme.search"', text)
-                self.assertIn(
-                    "prompt_fragments text for planning dropped", logs.output[0]
-                )
+                self.assertIn("prompt_fragments result dropped", logs.output[0])
 
     def test_text_at_the_limit_is_kept(self) -> None:
         Stack.result = "x" * MAX_PROMPT_FRAGMENT_CHARS

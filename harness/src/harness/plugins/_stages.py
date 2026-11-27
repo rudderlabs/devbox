@@ -56,7 +56,7 @@ _log = logging.getLogger("harness.plugins")
 
 # The tag that ends a plugin's block in a system prompt, as an agent would
 # read it: any case, with or without spaces.
-_BLOCK_END = re.compile(r"<(/\s*plugin_instructions\s*>)", re.IGNORECASE)
+_BLOCK_END = re.compile(r"<(\s*/\s*plugin_instructions\s*>)", re.IGNORECASE)
 
 
 def _keep_in_block(text: str) -> tuple[str, int]:
@@ -70,8 +70,8 @@ def _keep_in_block(text: str) -> tuple[str, int]:
 
 
 def _fragment_text(value: Any) -> str:
-    """What prompt_fragments returned, as one text. Raises on a value it may
-    not return."""
+    """What prompt_fragments returned, as one plain text. Raises on a value
+    it may not return. Like ``_normalize``, it runs on the hook's thread."""
     if value is None:
         return ""
     if isinstance(value, str):
@@ -82,7 +82,9 @@ def _fragment_text(value: Any) -> str:
         raise TypeError("must return a string, a list of strings or None")
     if not all(isinstance(part, str) for part in parts):
         raise TypeError("must return a string, a list of strings or None")
-    text = "\n\n".join(part.strip() for part in parts if part.strip())
+    # Leading spaces stay: an indented first line is a Markdown code block.
+    kept = [str.__str__(part) for part in parts]
+    text = "\n\n".join(part.lstrip("\r\n").rstrip() for part in kept if part.strip())
     if len(text) > MAX_PROMPT_FRAGMENT_CHARS:
         raise ValueError(
             f"text is {len(text)} characters; the limit is {MAX_PROMPT_FRAGMENT_CHARS}"
@@ -214,21 +216,14 @@ class RoundPlugins:
             raise ValueError(f"unknown prompt stage {stage!r}")
         blocks: list[str] = []
         for plugin in self._handlers("prompt_fragments"):
-            ok, value = self.registry.invoke(
-                plugin, "prompt_fragments", self._context(plugin), stage
+            ok, text = self.registry.invoke(
+                plugin,
+                "prompt_fragments",
+                self._context(plugin),
+                stage,
+                finish=_fragment_text,
             )
             if not ok:
-                continue
-            try:
-                text = _fragment_text(value)
-            except Exception as exc:
-                _log.error(
-                    "plugin %s: prompt_fragments text for %s dropped: %s: %s",
-                    plugin.name,
-                    stage,
-                    type(exc).__name__,
-                    exc,
-                )
                 continue
             text, ends = _keep_in_block(text)
             if ends:

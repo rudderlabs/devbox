@@ -179,6 +179,8 @@ distillation take no plugin text.
   own instructions, but it is not always the last thing in the prompt.
 - One plugin may add up to 8,000 characters per stage. Longer text is logged
   and dropped whole.
+- Leading spaces in the text are kept, so an indented code block stays
+  one. Blank lines around it and space at its end are removed.
 - Text that holds the block's own closing tag, `</plugin_instructions>`, is
   kept, with that tag written as `&lt;/plugin_instructions>` so it does not end
   the block. The harness logs it. Text built from a file or a command's
