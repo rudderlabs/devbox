@@ -143,7 +143,8 @@ class Plugin:
     """Base class of every plugin.
 
     The harness creates one instance per daemon process, with no arguments.
-    ``name`` must equal the plugin's entry point name.
+    ``name`` is ``<namespace>.<name>`` and must equal the plugin's entry point
+    name.
     """
 
     name: ClassVar[str] = ""

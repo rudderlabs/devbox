@@ -12,7 +12,7 @@ requires-python = ">=3.13"
 dependencies = []
 
 [project.entry-points."devbox.plugins"]
-hello = "devbox_hello_plugin:Hello"
+"example.hello" = "devbox_hello_plugin:Hello"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/devbox_hello_plugin"]

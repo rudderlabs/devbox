@@ -65,7 +65,7 @@ def _impl() -> dict[str, Any]:
 class Recorder(Plugin):
     """Handles every stage hook and records each call."""
 
-    name = "recorder"
+    name = "acme.recorder"
     requires_api = 1
     calls: ClassVar[list[tuple[str, Any]]] = []
     planning_result: ClassVar[Any] = None
@@ -93,7 +93,7 @@ class Recorder(Plugin):
 
 
 class FollowUps(Plugin):
-    name = "followups"
+    name = "acme.followups"
     requires_api = 1
     calls: ClassVar[list[tuple[str, Any]]] = []
 
@@ -104,7 +104,7 @@ class FollowUps(Plugin):
 
 
 class Second(Plugin):
-    name = "second"
+    name = "acme.second"
     requires_api = 1
 
     @hook("after_planning")
@@ -146,7 +146,7 @@ class TestAfterPlanning(StageTestCase):
         merged = self.round().after_planning(plan)
         self.assertEqual(
             merged["extensions"],
-            {"recorder": {"services": ["api"]}, "second": {"from": "second"}},
+            {"acme.recorder": {"services": ["api"]}, "acme.second": {"from": "second"}},
         )
         # The hook changed its copy; the harness's plan is untouched.
         self.assertEqual(plan, _plan())
@@ -174,7 +174,7 @@ class TestAfterPlanning(StageTestCase):
         self.registry = registry_for([Recorder, Second], root=self.root)
         second = self.round().after_planning(first)
         self.assertEqual(self.called("after_planning"), 1)
-        self.assertEqual(second["extensions"]["recorder"], {"n": 1})
+        self.assertEqual(second["extensions"]["acme.recorder"], {"n": 1})
         self.assertEqual(second, first)
 
     def test_a_none_result_is_saved_too(self) -> None:
@@ -193,31 +193,31 @@ class TestAfterPlanning(StageTestCase):
         with self.assertLogs("harness.plugins", level="ERROR"):
             merged = self.round().after_planning(_plan())
         # The other plugin's data is still there.
-        self.assertEqual(merged["extensions"], {"second": {"from": "second"}})
+        self.assertEqual(merged["extensions"], {"acme.second": {"from": "second"}})
         Recorder.planning_result = {"n": 1}
         merged = self.round().after_planning(merged)
         self.assertEqual(self.called("after_planning"), 2)
-        self.assertEqual(merged["extensions"]["recorder"], {"n": 1})
+        self.assertEqual(merged["extensions"]["acme.recorder"], {"n": 1})
 
     def test_a_hook_that_exits_fails_only_itself(self) -> None:
         Recorder.planning_result = SystemExit(3)
         with self.assertLogs("harness.plugins", level="ERROR") as logs:
             merged = self.round().after_planning(_plan())
         self.assertIn("after_planning failed", logs.output[0])
-        self.assertEqual(merged["extensions"], {"second": {"from": "second"}})
+        self.assertEqual(merged["extensions"], {"acme.second": {"from": "second"}})
 
     def test_a_plugins_own_files_cannot_block_its_saved_results(self) -> None:
         # Everything under state_dir is the plugin's, a file named "results"
         # included, as ctx.spawn(..., log="results") would leave.
-        state_dir = self.root / "state" / "recorder"
+        state_dir = self.root / "state" / "acme.recorder"
         state_dir.mkdir(parents=True)
         (state_dir / "results").write_text("a log\n", encoding="utf-8")
         Recorder.planning_result = {"n": 1}
         merged = self.round().after_planning(_plan())
-        self.assertEqual(merged["extensions"]["recorder"], {"n": 1})
+        self.assertEqual(merged["extensions"]["acme.recorder"], {"n": 1})
         self.round().after_planning(_plan())
         self.assertEqual(self.called("after_planning"), 1)
-        saved = self.root / "state" / "_results" / "recorder"
+        saved = self.root / "state" / "_results" / "acme.recorder"
         self.assertEqual(
             [p.name for p in saved.iterdir()], ["after_planning-inbox-1.json"]
         )
@@ -235,7 +235,7 @@ class TestAfterPlanning(StageTestCase):
                 Recorder.planning_result = value
                 with self.assertLogs("harness.plugins", level="ERROR") as logs:
                     merged = self.round(label).after_planning(_plan())
-                self.assertNotIn("recorder", merged["extensions"])
+                self.assertNotIn("acme.recorder", merged["extensions"])
                 self.assertIn("after_planning result dropped", logs.output[0])
 
     def test_a_saved_result_of_another_inbox_id_is_not_reused(self) -> None:
@@ -248,12 +248,12 @@ class TestAfterPlanning(StageTestCase):
 
 class TestImplementationHooks(StageTestCase):
     def test_before_implementation_sees_the_plans_extensions_every_time(self) -> None:
-        plan = {**_plan(), "extensions": {"recorder": {"services": ["api"]}}}
+        plan = {**_plan(), "extensions": {"acme.recorder": {"services": ["api"]}}}
         self.round().before_implementation(plan)
         self.round().before_implementation(plan)
         self.assertEqual(
             Recorder.calls,
-            [("before_implementation", {"recorder": {"services": ["api"]}})] * 2,
+            [("before_implementation", {"acme.recorder": {"services": ["api"]}})] * 2,
         )
 
     def test_data_and_a_pr_section_are_merged(self) -> None:
@@ -264,7 +264,7 @@ class TestImplementationHooks(StageTestCase):
             ],
         )
         merged = self.round().after_implementation(_plan(), _impl())
-        self.assertEqual(merged["extensions"], {"recorder": {"passed": True}})
+        self.assertEqual(merged["extensions"], {"acme.recorder": {"passed": True}})
         self.assertEqual(
             merged["repos"][0]["pr_body"],
             "Body of the change.\n\n## Checked\n\nIt works.\n",
@@ -309,7 +309,7 @@ class TestImplementationHooks(StageTestCase):
         })
         merged = self.round().after_implementation(_plan(), _impl())
         self.assertEqual(
-            merged["extensions"]["recorder"], {"passed": True, "nested": {"n": 1}}
+            merged["extensions"]["acme.recorder"], {"passed": True, "nested": {"n": 1}}
         )
 
     def test_merging_twice_adds_the_section_once(self) -> None:
@@ -392,7 +392,7 @@ class TestAssignmentWiring(StageTestCase):
             events=None,
             plugins=self.round(),
         )
-        self.assertEqual(plan["extensions"]["recorder"], {"services": ["api"]})
+        self.assertEqual(plan["extensions"]["acme.recorder"], {"services": ["api"]})
         self.assertEqual(json.loads(self.plan_json.read_text()), plan)
 
     def test_a_reused_plan_without_plugins_is_not_rewritten(self) -> None:
@@ -413,7 +413,7 @@ class TestAssignmentWiring(StageTestCase):
         impl = assignment_module._run_implementation_stage(
             "ABC-1", "run-1", "inbox-1", _plan(), events=None, plugins=self.round()
         )
-        self.assertEqual(impl["extensions"], {"recorder": {"passed": True}})
+        self.assertEqual(impl["extensions"], {"acme.recorder": {"passed": True}})
         self.assertIn("## Checked", impl["repos"][0]["pr_body"])
         self.assertEqual(json.loads(self.impl_json.read_text()), impl)
 
