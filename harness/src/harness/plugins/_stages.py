@@ -44,23 +44,33 @@ _log = logging.getLogger("harness.plugins")
 
 
 def _normalize(hook_name: str, value: Any) -> HookResult:
-    """A hook's return value as a HookResult. Raises on one it may not return."""
+    """A hook's return value as a HookResult. Raises on one it may not return.
+
+    What it returns holds only plain values the harness built: reading a
+    plugin's own mapping, sequence or string type runs the plugin's code, so
+    all of that happens here, on the hook's thread, and none of it later.
+    """
     spec = HOOKS[hook_name]
     if value is None:
         return HookResult()
     result = value if isinstance(value, HookResult) else HookResult(data=value)
     if result.data is not None and not isinstance(result.data, Mapping):
         raise TypeError("data must be a mapping or None")
-    sections = tuple(result.pr_sections)
-    if sections and not spec.pr_sections:
+    given = tuple(result.pr_sections)
+    if given and not spec.pr_sections:
         raise TypeError(f"{hook_name} may not return pull request sections")
-    for section in sections:
+    sections: list[PrSection] = []
+    for section in given:
         if not isinstance(section, PrSection):
             raise TypeError("pr_sections must hold PrSection values")
+        fields: dict[str, str] = {}
         for name in ("repo", "title", "body"):
             text = getattr(section, name)
             if not isinstance(text, str) or not text.strip():
                 raise TypeError(f"PrSection.{name} must be a non-empty string")
+            # A plain str, whatever subclass the plugin used.
+            fields[name] = str.__str__(text)
+        sections.append(PrSection(**fields))
     data = (
         None
         if result.data is None
@@ -70,7 +80,7 @@ def _normalize(hook_name: str, value: Any) -> HookResult:
             json.dumps(result.data, default=_plain_mapping, allow_nan=False)
         )
     )
-    return HookResult(data=data, pr_sections=sections)
+    return HookResult(data=data, pr_sections=tuple(sections))
 
 
 def _plain_mapping(value: Any) -> dict[str, Any]:
@@ -98,10 +108,27 @@ def _from_json(raw: Any) -> HookResult:
 
 
 def _render(section: PrSection) -> str:
-    # Only the line ends around the body go: leading spaces are Markdown, an
-    # indented code block for one.
-    body = section.body.strip("\r\n")
+    # Leading spaces stay: they are Markdown, an indented code block for one.
+    # Space at the end means nothing, and appending anything after the section
+    # removes it, so it goes now and the section reads the same later.
+    body = section.body.lstrip("\r\n").rstrip()
     return f"## {section.title.strip()}\n\n{body}\n"
+
+
+def _has_section(body: str, rendered: str) -> bool:
+    """Whether ``rendered`` is already in the pull request body.
+
+    The body's end is trimmed by whatever is appended after it, so the
+    section's own last line end may be gone. Its text must still end a line.
+    """
+    text = rendered.rstrip()
+    start = body.find(text)
+    while start != -1:
+        after = body[start + len(text) : start + len(text) + 1]
+        if after in ("", "\n", "\r"):
+            return True
+        start = body.find(text, start + 1)
+    return False
 
 
 @dataclass(frozen=True)
@@ -187,13 +214,16 @@ class RoundPlugins:
                 # Each plugin gets its own copy, so none can change what the
                 # harness or the next plugin sees.
                 args = [copy.deepcopy(dict(artifact)) for artifact in artifacts]
-                ok, value = self.registry.invoke(
-                    plugin, hook_name, self._context(plugin), *args
+                ok, result = self.registry.invoke(
+                    plugin,
+                    hook_name,
+                    self._context(plugin),
+                    *args,
+                    finish=lambda value: _normalize(hook_name, value),
                 )
                 if not ok:
                     continue
                 try:
-                    result = _normalize(hook_name, value)
                     path = self._result_path(plugin, hook_name)
                     path.parent.mkdir(parents=True, exist_ok=True)
                     write_json(
@@ -239,7 +269,7 @@ def _append_pr_section(
         if isinstance(repo, dict) and repo.get("name") == section.repo:
             body = repo.get("pr_body")
             body = body if isinstance(body, str) else ""
-            if rendered not in body:
+            if not _has_section(body, rendered):
                 # An unclosed comment or code fence above would swallow the
                 # section on the code host.
                 body = close_unterminated_markdown(body)

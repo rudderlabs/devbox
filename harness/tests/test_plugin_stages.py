@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
+import threading
+import time
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -13,7 +17,9 @@ import harness.handlers.assignment as assignment_module
 from harness.daemon import DaemonState, process_one_inbox_file
 from harness.events import RoundEvents
 from harness.plugins import (
+    HOOKS,
     HookResult,
+    HookSpec,
     Plugin,
     PluginContext,
     PrSection,
@@ -239,6 +245,112 @@ class TestAfterPlanning(StageTestCase):
                     merged = self.round(label).after_planning(_plan())
                 self.assertNotIn("acme.recorder", merged["extensions"])
                 self.assertIn("after_planning result dropped", logs.output[0])
+
+    def test_a_result_that_runs_plugin_code_when_read_cannot_stop_the_daemon(
+        self,
+    ) -> None:
+        class Exits(Mapping):
+            def __getitem__(self, key):
+                sys.exit(9)
+
+            def __iter__(self):
+                return iter(["a"])
+
+            def __len__(self):
+                return 1
+
+        class ExitsOnStrip(str):
+            def strip(self, *args):
+                sys.exit(9)
+
+        def exits_while_listing():
+            sys.exit(9)
+            yield
+
+        bad = {
+            "mapping": (Exits(), "after_planning"),
+            "sections": (
+                HookResult(pr_sections=exits_while_listing()),
+                "after_implementation",
+            ),
+            "text": (
+                HookResult(
+                    pr_sections=[
+                        PrSection(repo="repo-a", title="T", body=ExitsOnStrip("b"))
+                    ]
+                ),
+                "after_implementation",
+            ),
+        }
+        for label, (value, hook_name) in bad.items():
+            with self.subTest(label):
+                Recorder.planning_result = Recorder.implementation_result = value
+                with self.assertLogs("harness.plugins", level="ERROR") as logs:
+                    if hook_name == "after_planning":
+                        merged = self.round(label).after_planning(_plan())
+                    else:
+                        merged = self.round(label).after_implementation(
+                            _plan(), _impl()
+                        )
+                self.assertNotIn("acme.recorder", merged.get("extensions", {}))
+                self.assertIn(f"{hook_name} result dropped: SystemExit", logs.output[0])
+
+    def test_reading_a_result_counts_against_the_hooks_budget(self) -> None:
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def slow_sections():
+            release.wait(30)
+            yield PrSection(repo="repo-a", title="T", body="b")
+
+        Recorder.implementation_result = HookResult(pr_sections=slow_sections())
+        short = HookSpec(
+            params=("ctx", "plan", "implementation"),
+            budget_seconds=0.05,
+            summary="",
+            saves_result=True,
+            pr_sections=True,
+        )
+        started = time.monotonic()
+        with (
+            patch.dict(HOOKS, {"after_implementation": short}),
+            self.assertLogs("harness.plugins", level="WARNING") as logs,
+        ):
+            merged = self.round().after_implementation(_plan(), _impl())
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(merged, _impl())
+        self.assertIn("still running", logs.output[0])
+
+    def test_a_section_is_appended_once_however_often_results_are_replayed(
+        self,
+    ) -> None:
+        Recorder.implementation_result = HookResult(
+            pr_sections=[
+                PrSection(repo="repo-a", title="First", body="Ends in spaces.   \n"),
+                PrSection(repo="repo-a", title="Second", body="    indented\n\n"),
+            ]
+        )
+        impl = _impl()
+        for _ in range(3):
+            impl = self.round().after_implementation(_plan(), impl)
+            # What the review's annotation does to the body it adds to.
+            impl["repos"][0]["pr_body"] = impl["repos"][0]["pr_body"].rstrip()
+        body = impl["repos"][0]["pr_body"]
+        self.assertEqual(body.count("## First"), 1)
+        self.assertEqual(body.count("## Second"), 1)
+        self.assertIn("## Second\n\n    indented", body)
+
+    def test_a_section_that_only_starts_like_another_is_still_appended(self) -> None:
+        Recorder.implementation_result = HookResult(
+            pr_sections=[
+                PrSection(repo="repo-a", title="Checks", body="All passed, mostly."),
+                PrSection(repo="repo-a", title="Checks", body="All passed"),
+            ]
+        )
+        body = self.round().after_implementation(_plan(), _impl())["repos"][0][
+            "pr_body"
+        ]
+        self.assertEqual(body.count("## Checks"), 2)
 
     def test_a_saved_result_of_another_inbox_id_is_not_reused(self) -> None:
         # "a/b" and "a-b" share a file name; the stored id tells them apart.

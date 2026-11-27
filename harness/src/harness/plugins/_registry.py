@@ -235,20 +235,39 @@ def _load_on_thread(
     return result[0]
 
 
+class _BadResult(Exception):
+    """The hook returned, and ``finish`` could not take what it returned."""
+
+
 def _call(
     handler: Callable[..., Any],
     args: tuple[Any, ...],
     outcome: list[tuple[bool, Any]],
+    finish: Callable[[Any], Any] | None = None,
 ) -> None:
     """Thread body of one hook call: (True, value) or (False, exception).
 
     BaseException, so a hook that calls ``sys.exit`` is a failed hook like any
     other and not a thread that ends without a word.
+
+    ``finish`` turns the hook's return value into what the harness keeps. It
+    runs here because reading a plugin's own mapping or sequence runs the
+    plugin's code, which belongs inside this thread's guard and budget.
     """
     try:
-        outcome.append((True, handler(*args)))
+        value = handler(*args)
     except BaseException as exc:
         outcome.append((False, exc))
+        return
+    if finish is None:
+        outcome.append((True, value))
+        return
+    try:
+        outcome.append((True, finish(value)))
+    except BaseException as exc:
+        bad = _BadResult(f"{type(exc).__name__}: {exc}")
+        bad.__cause__ = exc
+        outcome.append((False, bad))
 
 
 def _source(entry_point: metadata.EntryPoint) -> str:
@@ -286,10 +305,19 @@ class PluginRegistry:
         )
 
     def invoke(
-        self, plugin: LoadedPlugin, hook_name: str, ctx: PluginContext, *args: Any
+        self,
+        plugin: LoadedPlugin,
+        hook_name: str,
+        ctx: PluginContext,
+        *args: Any,
+        finish: Callable[[Any], Any] | None = None,
     ) -> tuple[bool, Any]:
         """Call one plugin's hook. Returns (finished without raising, its
         return value).
+
+        With ``finish``, the value returned is ``finish(return value)``,
+        worked out on the hook's thread and within its budget. A ``finish``
+        that raises is logged as a dropped result.
 
         Never raises. A hook that raises is logged. A hook still running after
         its budget is logged and left behind: it keeps running on its own
@@ -299,7 +327,7 @@ class PluginRegistry:
         outcome: list[tuple[bool, Any]] = []
         thread = threading.Thread(
             target=_call,
-            args=(plugin.hooks[hook_name], (ctx, *args), outcome),
+            args=(plugin.hooks[hook_name], (ctx, *args), outcome, finish),
             name=f"plugin-{plugin.name}-{hook_name}",
             daemon=True,
         )
@@ -319,6 +347,11 @@ class PluginRegistry:
             _log.error("plugin %s: %s ended without a result", plugin.name, hook_name)
             return False, None
         ok, value = outcome[0]
+        if isinstance(value, _BadResult) and not ok:
+            _log.error(
+                "plugin %s: %s result dropped: %s", plugin.name, hook_name, value
+            )
+            return False, None
         if not ok:
             _log.error(
                 "plugin %s: %s failed (ignored): %s: %s",
