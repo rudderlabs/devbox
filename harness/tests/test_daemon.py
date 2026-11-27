@@ -2034,6 +2034,7 @@ class TestStageDriverSelfSkip(unittest.TestCase):
             task_key="ABC-1",
             run_id="run-1",
             events=None,
+            plugin_prompt=None,
         )
         timed_stage.assert_called_once_with(
             assignment_module.Stage.PLANNING, run_id="run-1", task_key="ABC-1"

@@ -8,9 +8,10 @@ Plugins are the supported way to extend the harness. `harness.plugins` is the
 only part of the harness with a stable interface; the rest can change in any
 release ([Extending devbox](extending.md)).
 
-There are five hooks: one when the daemon starts, three around the planning
-and implementation stages of an assignment, and one at the start of each
-follow-up round (a comment, a review or a CI result).
+There are six hooks: one when the daemon starts, three around the planning
+and implementation stages of an assignment, one at the start of each
+follow-up round (a comment, a review or a CI result), and one that adds text
+to an agent's system prompt.
 
 ## Write a plugin
 
@@ -66,6 +67,7 @@ plugin as a complete package.
 | `before_implementation` | `ctx`, `plan` | 30 seconds | Each time the daemon is about to run or resume an assignment's implementation. A restart in the middle of implementation runs it again. It does not run once the implementation is complete. |
 | `after_implementation` | `ctx`, `plan`, `implementation` | 30 minutes | Once per assignment, after every repository's implementation is complete. Before the review, except after a failed first try ([Restarts](#restarts)). |
 | `followup_start` | `ctx`, `kind` | 30 seconds | Each time the daemon is about to run or resume a follow-up round, before its agent runs. `kind` is the round's inbox kind: `comment`, `review` or `ci_result`. It does not run for a round whose agent has already finished. |
+| `prompt_fragments` | `ctx`, `stage` | 10 seconds | Each time the daemon is about to start the agents of a stage. Returns text for their system prompt ([below](#add-text-to-an-agents-system-prompt)). |
 
 Every hook follows the same rules:
 
@@ -144,6 +146,62 @@ not JSON, so data that holds one is dropped too.
 If the harness cannot keep the plugins' results, for example because the
 stage's file cannot be written again, it logs that and the task goes on with
 the stage's file as it was before the hooks ran.
+
+### Add text to an agent's system prompt
+
+`prompt_fragments` tells an agent something the harness cannot know: a command
+your image adds, a service your plugin has started, a rule of your
+organization.
+
+```python
+@hook("prompt_fragments")
+def instructions(self, ctx: PluginContext, stage: str) -> str | None:
+    if stage == "implementation":
+        return "Run `stack status` before you test against the local stack."
+    return None
+```
+
+`stage` names the agents that get the text:
+
+| `stage` | Agents |
+|---|---|
+| `planning` | The planning agent of each repository. |
+| `implementation` | The implementation agent of each repository. |
+| `review_fix` | The agent that fixes what the harness's own review of the change found, one per repository. |
+| `comment`, `review`, `ci_result` | The agent of that follow-up round. `review` is a person's review of the pull request. |
+
+Orientation, plan review, the review's own agents that read the change, and
+distillation take no plugin text.
+
+- Return a string, a list of strings, or `None` for no text.
+- The harness adds the text to the system prompt in a block that names your
+  plugin: `<plugin_instructions plugin="<namespace>.<name>">`. It comes after the stage's
+  own instructions, but it is not always the last thing in the prompt.
+- One plugin may add up to 8,000 characters per stage. Longer text is logged
+  and dropped whole.
+- Leading spaces in the text are kept, so an indented code block stays
+  one. Blank lines around it and space at its end are removed.
+- Text that holds the block's own closing tag, `</plugin_instructions>`, is
+  kept, with that tag written as `&lt;/plugin_instructions>` so it does not end
+  the block. The harness logs it. Text built from a file or a command's
+  output is where this happens.
+- The hook runs once per stage, just before its agents start, and every agent
+  of the stage gets the same text. When that is depends on the stage:
+  - `planning`: before planning starts. No plan exists yet, and neither
+    `after_planning` nor `before_implementation` has run.
+  - `implementation`: after `before_implementation`.
+  - `review_fix`: when the review begins, whether or not the review then
+    finds something to fix. Not at all when review is off
+    (`HARNESS_REVIEW_ENABLED=false`).
+  - `comment`, `review`, `ci_result`: after `followup_start`.
+- The text is not saved. After a restart the hook runs again, and a resumed
+  agent gets what it returns then.
+- The hook has no plan argument. To make the text depend on the plan, save
+  what you need under `ctx.state_dir` in `after_planning`, keyed by
+  `ctx.task.inbox_id`.
+
+The text is an instruction to a model, not a control. Enforce anything that
+must hold in your own code.
 
 ### Restarts
 

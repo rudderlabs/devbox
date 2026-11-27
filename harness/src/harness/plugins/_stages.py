@@ -17,12 +17,19 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from harness.plugins._api import HOOKS, HookResult, PrSection, TaskInfo
+from harness.plugins._api import (
+    HOOKS,
+    PROMPT_STAGES,
+    HookResult,
+    PrSection,
+    TaskInfo,
+)
 from harness.plugins._registry import LoadedPlugin, PluginRegistry
 from harness.util import (
     close_unterminated_markdown,
@@ -40,7 +47,49 @@ EXTENSIONS_KEY = "extensions"
 # starts with a letter, so no plugin's directory can have this name.
 RESULTS_DIR = "_results"
 
+# The most text one plugin may add to one stage's system prompt. Longer text
+# is dropped whole: half an instruction is worse than none.
+MAX_PROMPT_FRAGMENT_CHARS = 8000
+
 _log = logging.getLogger("harness.plugins")
+
+
+# The tag that ends a plugin's block in a system prompt, as an agent would
+# read it: any case, with or without spaces.
+_BLOCK_END = re.compile(r"<(\s*/\s*plugin_instructions\s*>)", re.IGNORECASE)
+
+
+def _keep_in_block(text: str) -> tuple[str, int]:
+    """``text`` with each tag that would end its block written so that it does
+    not, and how many there were.
+
+    Text a plugin builds from a file or a command's output can hold the tag.
+    The rest of it would then read as the harness's own instructions.
+    """
+    return _BLOCK_END.subn(r"&lt;\1", text)
+
+
+def _fragment_text(value: Any) -> str:
+    """What prompt_fragments returned, as one plain text. Raises on a value
+    it may not return. Like ``_normalize``, it runs on the hook's thread."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        parts: Sequence[Any] = [value]
+    elif isinstance(value, Sequence):
+        parts = value
+    else:
+        raise TypeError("must return a string, a list of strings or None")
+    if not all(isinstance(part, str) for part in parts):
+        raise TypeError("must return a string, a list of strings or None")
+    # Leading spaces stay: an indented first line is a Markdown code block.
+    kept = [str.__str__(part) for part in parts]
+    text = "\n\n".join(part.lstrip("\r\n").rstrip() for part in kept if part.strip())
+    if len(text) > MAX_PROMPT_FRAGMENT_CHARS:
+        raise ValueError(
+            f"text is {len(text)} characters; the limit is {MAX_PROMPT_FRAGMENT_CHARS}"
+        )
+    return text
 
 
 def _normalize(hook_name: str, value: Any) -> HookResult:
@@ -155,6 +204,44 @@ class RoundPlugins:
     def followup_start(self, kind: str) -> None:
         for plugin in self._handlers("followup_start"):
             self.registry.invoke(plugin, "followup_start", self._context(plugin), kind)
+
+    def prompt_fragments(self, stage: str) -> str | None:
+        """Run prompt_fragments. Returns the text to add to the system prompt
+        of the stage's agents, or None when no plugin has any.
+
+        Each plugin's text is wrapped in a block that names the plugin. The
+        result is not saved: a restart asks again.
+        """
+        if stage not in PROMPT_STAGES:
+            raise ValueError(f"unknown prompt stage {stage!r}")
+        blocks: list[str] = []
+        for plugin in self._handlers("prompt_fragments"):
+            ok, text = self.registry.invoke(
+                plugin,
+                "prompt_fragments",
+                self._context(plugin),
+                stage,
+                finish=_fragment_text,
+            )
+            if not ok:
+                continue
+            text, ends = _keep_in_block(text)
+            if ends:
+                _log.warning(
+                    "plugin %s: prompt_fragments text for %s holds the tag that "
+                    "ends its block %d time(s); each is written with &lt; so the "
+                    "text stays inside the block",
+                    plugin.name,
+                    stage,
+                    ends,
+                )
+            if text:
+                blocks.append(
+                    f'<plugin_instructions plugin="{plugin.name}">\n'
+                    f"{text}\n"
+                    "</plugin_instructions>"
+                )
+        return "\n\n".join(blocks) or None
 
     def after_implementation(
         self, plan: Mapping[str, Any], implementation: Mapping[str, Any]

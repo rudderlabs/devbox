@@ -190,7 +190,8 @@ class TestEntryPoints(unittest.TestCase):
         agent_cls.assert_called_once_with(
             **self._preset_kwargs(
                 "followup:XYZ-1", targets=[ReplyTarget("555", "the comment")]
-            )
+            ),
+            plugin_prompt=None,
         )
 
     def test_linear_comment_has_no_discussion(self) -> None:
@@ -307,7 +308,8 @@ class TestEntryPoints(unittest.TestCase):
         agent_cls.assert_called_once_with(
             **self._preset_kwargs(
                 "followup:XYZ-1", targets=fu.review_targets(review_body, inlines)
-            )
+            ),
+            plugin_prompt=None,
         )
 
     def test_ci(self) -> None:
@@ -370,7 +372,8 @@ class TestEntryPoints(unittest.TestCase):
         agent_cls.assert_called_once_with(
             **self._preset_kwargs(
                 "ci:XYZ-1", run=WorkflowRunRef("acme", "acme-server", 42)
-            )
+            ),
+            plugin_prompt=None,
         )
 
     def test_finished_round_skips_trace_and_timing_but_distills(self) -> None:

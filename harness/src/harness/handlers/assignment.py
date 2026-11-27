@@ -538,6 +538,7 @@ def _run_planning_stage(
 
     from harness.planning import run_planning
 
+    plugin_prompt = plugins.prompt_fragments("planning") if plugins else None
     with timed_stage(Stage.PLANNING, run_id=run_id, task_key=task_key):
         with trace_span(
             "agent-exec",
@@ -550,6 +551,7 @@ def _run_planning_stage(
                 task_key=task_key,
                 run_id=run_id,
                 events=events,
+                plugin_prompt=plugin_prompt,
             )
         plan_data = plan.model_dump(mode="json", exclude_none=True)
         validate_plan(plan_data)
@@ -637,6 +639,7 @@ def _run_implementation_stage(
     from harness.implementation import run_implementation
     from harness.schemas import Plan
 
+    plugin_prompt = plugins.prompt_fragments("implementation") if plugins else None
     # The workers' implementation.json is final: the harness validates and
     # stamps it, with no coordinator pass afterwards.
     with timed_stage(Stage.IMPLEMENTATION, run_id=run_id, task_key=task_key):
@@ -645,6 +648,7 @@ def _run_implementation_stage(
             inbox_id=inbox_id,
             impl_out=IMPLEMENTATION_JSON,
             events=events,
+            plugin_prompt=plugin_prompt,
         )
         impl_data = _finalize_implementation_artifact(
             inbox_id, load_json_file(IMPLEMENTATION_JSON)
@@ -976,6 +980,13 @@ def process_assignment(entry: dict[str, Any], state: DaemonState) -> None:
                         impl_data,
                         inbox_id=inbox_id,
                         events=events,
+                        # Asked for inside the loop, once it knows a review
+                        # is starting.
+                        plugin_prompt=(
+                            (lambda: plugins.prompt_fragments("review_fix"))
+                            if plugins is not None
+                            else None
+                        ),
                     )
 
                 # Distillation — promotes per-run memory into each repo's

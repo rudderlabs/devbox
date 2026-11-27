@@ -14,6 +14,7 @@ from harness.deepagents import retry as _retry
 from harness.deepagents.agents.orientation import OrientationAgent
 from harness.deepagents.agents.plan_review import PlanReviewAgent
 from harness.deepagents.agents.planning import PlanningAgent
+from harness.deepagents.middleware.plugin_prompt import plugin_prompt_middleware
 from harness.deepagents.model import (
     ModelStage,
     build_model,
@@ -527,8 +528,12 @@ def run_planning(
     task_key: str,
     run_id: str,
     events: RoundEvents | None,
+    plugin_prompt: str | None = None,
 ) -> Plan:
     """Run the DeepAgents planning pipeline and return plan data.
+
+    ``plugin_prompt`` is the loaded plugins' text for the system prompt of the
+    per-repository planning agents; orientation and plan review do not get it.
 
     This orchestrator is pure with respect to harness artifacts: it does not write
     plan.json or plan.md. The assignment handler owns artifact reuse, validation,
@@ -561,6 +566,7 @@ def run_planning(
                 repo_path=repo_path,
                 thread_id=f"planning:{run_id}:{repo.name}:{repo_path.resolve()}",
                 knowledge_subpaths=_knowledge_subpaths(repo),
+                middleware=plugin_prompt_middleware(plugin_prompt),
             )
 
         with ThreadPoolExecutor(max_workers=max(1, len(sessions))) as executor:
@@ -681,6 +687,7 @@ def run_planning(
                 repo_path=repo_path,
                 thread_id=f"planning:{run_id}:{repo_name}:{repo_path.resolve()}",
                 knowledge_subpaths=[],
+                middleware=plugin_prompt_middleware(plugin_prompt),
             )
             output = _run_repo_prompt_with_retries(
                 agent=sessions[repo_name],
