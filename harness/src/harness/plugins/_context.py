@@ -54,7 +54,39 @@ def _reap(proc: subprocess.Popen[bytes]) -> None:
         _exited.add(proc.pid)
 
 
-def _pid_alive(pid: int) -> bool:
+_PROC = Path("/proc")
+
+
+def _start_time(pid: int, proc_root: Path | None = None) -> str | None:
+    """When process ``pid`` started, in the kernel's clock ticks since boot,
+    or ``None`` where the system does not say (no ``/proc``, or no such
+    process).
+
+    A pid and its start time together name one process: the system gives a
+    pid to another process once the first is gone, but not the start time.
+    """
+    try:
+        stat = (
+            ((proc_root or _PROC) / str(pid) / "stat")
+            .read_bytes()
+            .decode("utf-8", "replace")
+        )
+    except OSError:
+        return None
+    # "pid (command) state ...": the command may hold spaces and brackets, so
+    # the fields are counted from its last closing bracket. The start time is
+    # field 22 of the line, the 20th after the command.
+    fields = stat.rpartition(")")[2].split()
+    return fields[19] if len(fields) > 19 else None
+
+
+def _read_marker(marker: Path) -> tuple[int, str | None]:
+    """A ``once`` marker's pid and start time. Raises on one it cannot read."""
+    parts = marker.read_text(encoding="utf-8").split()
+    return int(parts[0]), parts[1] if len(parts) > 1 else None
+
+
+def _pid_alive(pid: int, started: str | None = None) -> bool:
     """Whether the process a ``once`` marker names is still running. Call it
     with ``_lock`` held."""
     proc = _spawned.get(pid)
@@ -69,8 +101,12 @@ def _pid_alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
-    return True
+        pass
+    # A daemon that restarted in the same sandbox finds the marker of the one
+    # before it. The pid is alive, but it is the marked process only if it
+    # started when that one did.
+    now = _start_time(pid) if started is not None else None
+    return now is None or now == started
 
 
 @dataclass(frozen=True)
@@ -118,9 +154,9 @@ class PluginContext:
             if once is not None:
                 marker = self.runtime_dir / f"{once}.pid"
                 try:
-                    if _pid_alive(int(marker.read_text(encoding="utf-8").strip())):
+                    if _pid_alive(*_read_marker(marker)):
                         return None
-                except (OSError, ValueError):
+                except (OSError, ValueError, IndexError):
                     pass
 
             self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -138,7 +174,11 @@ class PluginContext:
             _exited.discard(proc.pid)
             if marker is not None:
                 marker.parent.mkdir(parents=True, exist_ok=True)
-                marker.write_text(f"{proc.pid}\n", encoding="utf-8")
+                started = _start_time(proc.pid)
+                marker.write_text(
+                    f"{proc.pid} {started}\n" if started else f"{proc.pid}\n",
+                    encoding="utf-8",
+                )
         threading.Thread(
             target=_reap, args=(proc,), name=f"plugin-reap-{proc.pid}", daemon=True
         ).start()

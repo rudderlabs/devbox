@@ -84,7 +84,7 @@ Each hook gets a `PluginContext`, built for that call:
 | `ctx.runtime_dir` | The plugin's own directory off the volume. A restart empties it. |
 | `ctx.workspace` | The workspace root, with each repo below it. |
 | `ctx.log` | A `logging.Logger` named `harness.plugins.<namespace>.<name>`. |
-| `ctx.spawn(argv, log=..., once=...)` | Starts a detached process and returns its pid without waiting. Its output is appended to `state_dir/<log>`. With `once`, a second call under the same name starts nothing while the first process is alive, and returns `None`. Use `once` for anything that must not run twice, such as a server on a fixed port. |
+| `ctx.spawn(argv, log=..., once=...)` | Starts a detached process and returns its pid without waiting. Its output is appended to `state_dir/<log>`. With `once`, a second call under the same name starts nothing while the first process is alive, and returns `None`. A daemon that restarts in the same sandbox still finds that process, and tells it from an unrelated one that has since been given its pid. Use `once` for anything that must not run twice, such as a server on a fixed port. |
 
 ## Settings
 
@@ -117,27 +117,35 @@ RUN uv pip install --python /opt/harness/.venv/bin/python /opt/plugins/my-plugin
 ```
 
 `harness plugins check` loads every installed plugin the way the daemon does
-and exits non-zero when one cannot be loaded: an import error, a name without a namespace, a
-name that differs from its entry point or would share another plugin's settings, an
-unsupported `requires_api`, an unknown hook, two methods for one hook, or a
-hook that is `async` or has the wrong arguments. Keep it as the last step, so a broken
-plugin fails the image build and never reaches a sandbox.
+and exits non-zero when one cannot be loaded: an import error, a name without
+a namespace, a name that differs from its entry point or would share another
+plugin's settings, an unsupported `requires_api`, an unknown hook, two methods
+for one hook, or a hook that is `async` or has the wrong arguments. Keep it as
+the last step, so a broken plugin fails the image build and never reaches a
+sandbox.
+
+The check ignores `HARNESS_PLUGINS_ENABLED` and `HARNESS_PLUGINS`. A plugin
+that the image turns off is checked too, so it is not broken on the day
+someone turns it on. For the same reason, two installed plugins that would
+share settings fail the check even when only one of them is enabled.
 
 `harness plugins list` shows the plugins the daemon would load and their
 hooks.
 
 ## Choose which plugins run
 
-`HARNESS_PLUGINS` is a comma-separated list of plugin names, each with its
-namespace: `acme.warmup,acme.verify`. Upper and lower case are the same.
+Two settings decide it:
 
-- Unset or empty: every installed plugin runs, ordered by name.
-- A list: only those plugins run, in that order. A listed name that is not
-  installed is logged.
-- `none`: no plugin runs.
+- `HARNESS_PLUGINS_ENABLED` turns plugins on or off as a whole. It is on by
+  default. `false` runs no plugin, whatever `HARNESS_PLUGINS` says.
+- `HARNESS_PLUGINS` is a comma-separated list of plugin names, each with its
+  namespace: `acme.warmup,acme.verify`. Upper and lower case are the same.
+  - Unset or empty: every installed plugin runs, ordered by name.
+  - A list: only those plugins run, in that order. A listed name that is not
+    installed is logged.
 
-The control plane forwards it to sandboxes, so on Kubernetes you can turn a
-plugin off with `extraEnv`, without building a new image.
+The control plane forwards both to sandboxes, so on Kubernetes you can turn
+one plugin or all of them off with `extraEnv`, without building a new image.
 
 ## What happens when a plugin is broken
 

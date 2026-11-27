@@ -7,6 +7,7 @@ site inlining its own ``{"1","true","yes","on"}`` check.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -75,7 +76,12 @@ def bool_env(name: str, *, default: bool = False) -> bool:
 
     Unset (or empty) → *default*. Case- and whitespace-insensitive.
     """
-    raw = os.environ.get(name)
+    return bool_from(os.environ, name, default=default)
+
+
+def bool_from(env: Mapping[str, str], name: str, *, default: bool = False) -> bool:
+    """``bool_env`` for a mapping that is not the process environment."""
+    raw = env.get(name)
     if raw is None:
         return default
     value = raw.strip().lower()
