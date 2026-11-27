@@ -18,6 +18,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from harness.env_flags import bool_from
 from harness.paths import HARNESS_DIR, RUNTIME_DIR, WORKSPACE
 from harness.plugins._api import (
     ENTRY_POINT_GROUP,
@@ -39,8 +40,6 @@ NAME_RULE = (
     "name must be <namespace>.<name>, each part lowercase letters, digits and "
     "underscores, starting with a letter"
 )
-# HARNESS_PLUGINS value that turns every installed plugin off.
-_NONE = "none"
 
 _log = logging.getLogger("harness.plugins")
 
@@ -68,15 +67,14 @@ def enabled_names(env: Mapping[str, str]) -> list[str] | None:
     """The names in ``HARNESS_PLUGINS``, in order. ``None``: every installed one.
 
     Unset or empty means every installed plugin, like other harness flags.
-    ``none`` turns them all off.
+    It is a list of names and nothing else: ``HARNESS_PLUGINS_ENABLED`` is
+    what turns plugins off.
     """
     raw = (env.get("HARNESS_PLUGINS") or "").strip()
     if not raw:
         return None
     # Plugin names are lowercase, so the list is read without regard to case.
     names = [part.lower() for part in re.split(r"[,\s]+", raw) if part]
-    if names == [_NONE]:
-        return []
     return list(dict.fromkeys(names))
 
 
@@ -338,15 +336,22 @@ def load_plugins(
     *,
     env: Mapping[str, str] | None = None,
     entry_points: Iterable[metadata.EntryPoint] | None = None,
+    every: bool = False,
     **registry_fields: Any,
 ) -> PluginRegistry:
-    """Load the installed plugins that ``HARNESS_PLUGINS`` allows.
+    """Load the installed plugins the environment allows.
 
-    Hooks run in ``HARNESS_PLUGINS`` order, or by name when it is unset.
+    None when ``HARNESS_PLUGINS_ENABLED`` is false; otherwise those in
+    ``HARNESS_PLUGINS``, in that order, or every installed one by name when it
+    is unset. ``every`` ignores both settings and loads every installed
+    plugin: the build-time check uses it, so a plugin that is off in the image
+    is still checked before someone turns it on.
     ``entry_points`` and ``registry_fields`` are for tests.
     """
     env = os.environ if env is None else env
     registry = PluginRegistry(env=env, **registry_fields)
+    if not every and not bool_from(env, "HARNESS_PLUGINS_ENABLED", default=True):
+        return registry
     try:
         found = (
             list(metadata.entry_points(group=ENTRY_POINT_GROUP))
@@ -370,7 +375,7 @@ def load_plugins(
         else:
             by_name[entry_point.name] = entry_point
 
-    wanted = enabled_names(env)
+    wanted = None if every else enabled_names(env)
     if wanted is None:
         order = sorted(by_name)
     else:

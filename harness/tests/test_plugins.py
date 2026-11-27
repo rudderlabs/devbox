@@ -304,8 +304,9 @@ class PluginTestCase(unittest.TestCase):
         context_module._exited.clear()
         self._tmp.cleanup()
 
-    def load(self, entry_points: list[metadata.EntryPoint], env=None):
+    def load(self, entry_points: list[metadata.EntryPoint], env=None, **fields):
         return load_plugins(
+            **fields,
             env=env or {},
             entry_points=entry_points,
             state_root=self.root / "state",
@@ -343,17 +344,61 @@ class TestLoading(PluginTestCase):
         registry = self.load(entry_points, {"HARNESS_PLUGINS": "acme.beta"})
         self.assertEqual([p.name for p in registry.plugins], ["acme.beta"])
 
-    def test_harness_plugins_none_turns_all_off(self) -> None:
+    def test_plugins_enabled_false_turns_all_off(self) -> None:
+        entry_points = [_entry_point("acme.alpha", Alpha)]
+        for value in ("false", "0", "no", "off", "False"):
+            with self.subTest(value):
+                registry = self.load(
+                    entry_points,
+                    {"HARNESS_PLUGINS_ENABLED": value, "HARNESS_PLUGINS": "acme.alpha"},
+                )
+                self.assertEqual(registry.plugins, [])
+                self.assertEqual(registry.problems, [])
+        for value in ("true", "1", "", "  "):
+            with self.subTest(value):
+                registry = self.load(entry_points, {"HARNESS_PLUGINS_ENABLED": value})
+                self.assertEqual([p.name for p in registry.plugins], ["acme.alpha"])
+
+    def test_none_is_a_name_like_any_other(self) -> None:
         registry = self.load(
             [_entry_point("acme.alpha", Alpha)], {"HARNESS_PLUGINS": "none"}
         )
         self.assertEqual(registry.plugins, [])
-        self.assertEqual(registry.problems, [])
+        self.assertEqual(
+            [str(p) for p in registry.problems],
+            ["none: listed in HARNESS_PLUGINS but not installed"],
+        )
+
+    def test_every_ignores_both_settings(self) -> None:
+        entry_points = [
+            _entry_point("acme.alpha", Alpha),
+            _entry_point("acme.oldapi", OldApi),
+        ]
+        for env in (
+            {"HARNESS_PLUGINS": "acme.alpha"},
+            {"HARNESS_PLUGINS_ENABLED": "false"},
+        ):
+            with self.subTest(env):
+                self.assertEqual(self.load(entry_points, env).problems, [])
+                registry = self.load(entry_points, env, every=True)
+                self.assertEqual([p.name for p in registry.plugins], ["acme.alpha"])
+                self.assertEqual([p.plugin for p in registry.problems], ["acme.oldapi"])
+
+    def test_every_reports_installed_plugins_that_would_share_settings(self) -> None:
+        registry = self.load(
+            [
+                _entry_point("acme.alpha_two", AlphaTwo),
+                _entry_point("acme.alpha", Alpha),
+            ],
+            {"HARNESS_PLUGINS": "acme.alpha_two"},
+            every=True,
+        )
+        self.assertEqual([p.plugin for p in registry.problems], ["acme.alpha_two"])
 
     def test_enabled_names(self) -> None:
         self.assertIsNone(enabled_names({}))
         self.assertIsNone(enabled_names({"HARNESS_PLUGINS": "  "}))
-        self.assertEqual(enabled_names({"HARNESS_PLUGINS": "None"}), [])
+        self.assertEqual(enabled_names({"HARNESS_PLUGINS": "None"}), ["none"])
         self.assertEqual(enabled_names({"HARNESS_PLUGINS": "b a,b"}), ["b", "a"])
         self.assertEqual(
             enabled_names({"HARNESS_PLUGINS": "Acme.Beta,ACME.ALPHA"}),
@@ -684,9 +729,61 @@ class TestContext(PluginTestCase):
         pid = ctx.spawn([sys.executable, "-c", "pass"], log="out.log", once="server")
         self.assertIsInstance(pid, int)
         self.assertEqual(
-            (ctx.runtime_dir / "server.pid").read_text(encoding="utf-8").strip(),
+            (ctx.runtime_dir / "server.pid").read_text(encoding="utf-8").split()[0],
             str(pid),
         )
+
+    def test_start_time_is_read_past_a_command_with_spaces_and_brackets(self) -> None:
+        rest = ["S", *[str(n) for n in range(4, 22)], "987654", "0", "0"]
+        for command in ("python", "tmux: server", "a) (b", "x) S 1 2 3"):
+            with self.subTest(command):
+                stat = self.root / "proc" / "41"
+                stat.mkdir(parents=True, exist_ok=True)
+                (stat / "stat").write_text(
+                    f"41 ({command}) {' '.join(rest)}\n", encoding="utf-8"
+                )
+                self.assertEqual(
+                    context_module._start_time(41, self.root / "proc"), "987654"
+                )
+        self.assertIsNone(context_module._start_time(42, self.root / "proc"))
+        (self.root / "proc" / "41" / "stat").write_text("41 (short) S 1\n", "utf-8")
+        self.assertIsNone(context_module._start_time(41, self.root / "proc"))
+
+    def test_spawn_once_starts_again_when_the_pid_went_to_another_process(
+        self,
+    ) -> None:
+        # A daemon before this one wrote the marker; its process is gone and
+        # the pid now belongs to something else, here this test's own process.
+        ctx = self.context()
+        ctx.runtime_dir.mkdir(parents=True)
+        marker = ctx.runtime_dir / "server.pid"
+        marker.write_text(f"{os.getpid()} 100\n", encoding="utf-8")
+        with patch.object(context_module, "_start_time", return_value="200"):
+            pid = ctx.spawn([sys.executable, "-c", "pass"], log="a.log", once="server")
+            self.assertIsNotNone(pid)
+            self.assertEqual(marker.read_text(encoding="utf-8"), f"{pid} 200\n")
+
+    def test_spawn_once_skips_a_live_process_of_an_earlier_daemon(self) -> None:
+        ctx = self.context()
+        ctx.runtime_dir.mkdir(parents=True)
+        marker = ctx.runtime_dir / "server.pid"
+        cases = {
+            # Same pid, same start time: the marked process.
+            f"{os.getpid()} 100\n": "100",
+            # A marker without a start time, or a system that gives none,
+            # falls back to the pid alone.
+            f"{os.getpid()}\n": "100",
+            f"{os.getpid()} 100 \n": None,
+        }
+        for text, now in cases.items():
+            with self.subTest(text=text, now=now):
+                marker.write_text(text, encoding="utf-8")
+                with patch.object(context_module, "_start_time", return_value=now):
+                    self.assertIsNone(
+                        ctx.spawn(
+                            [sys.executable, "-c", "pass"], log="a.log", once="server"
+                        )
+                    )
 
     def test_a_finished_process_is_collected_without_another_spawn(self) -> None:
         ctx = self.context()
@@ -741,11 +838,16 @@ class TestExamplePlugin(PluginTestCase):
 
 
 class TestCli(PluginTestCase):
-    def run_cli(self, argv: list[str], entry_points: list[metadata.EntryPoint]):
+    def run_cli(
+        self, argv: list[str], entry_points: list[metadata.EntryPoint], env=None
+    ):
         out, err = io.StringIO(), io.StringIO()
-        registry = self.load(entry_points)
+
+        def load(**fields):
+            return self.load(entry_points, env, **fields)
+
         with (
-            patch.object(plugins_cli, "load_plugins", return_value=registry),
+            patch.object(plugins_cli, "load_plugins", side_effect=load),
             redirect_stdout(out),
             redirect_stderr(err),
         ):
@@ -781,6 +883,24 @@ class TestCli(PluginTestCase):
         self.assertEqual(rc, 0)
         self.assertIn("acme.alpha", out)
         self.assertIn("problem: acme.oldapi", err)
+
+    def test_check_covers_a_plugin_the_environment_turns_off(self) -> None:
+        entry_points = [
+            _entry_point("acme.alpha", Alpha),
+            _entry_point("acme.oldapi", OldApi),
+        ]
+        for env in (
+            {"HARNESS_PLUGINS": "acme.alpha"},
+            {"HARNESS_PLUGINS_ENABLED": "false"},
+        ):
+            with self.subTest(env):
+                rc, _out, err = self.run_cli(["check"], entry_points, env)
+                self.assertEqual(rc, 1)
+                self.assertIn("acme.oldapi: requires_api", err)
+                # list shows what the daemon would load, so it follows them.
+                rc, _out, err = self.run_cli(["list"], entry_points, env)
+                self.assertEqual(rc, 0)
+                self.assertEqual(err, "")
 
     def test_an_action_is_required(self) -> None:
         rc, _out, _err = self.run_cli([], [])

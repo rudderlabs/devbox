@@ -74,8 +74,10 @@ Every hook follows the same rules:
   the same way.
 - **A hook has a time budget.** When it is used up, the harness logs that and
   moves on, and drops whatever the hook returns later. The hook is not
-  stopped: it keeps running on its own thread. Start long work that needs no
-  answer with `ctx.spawn` and return.
+  stopped: it keeps running on its own thread, and what it does there still
+  happens. A `ctx.say` it calls later is posted, and a file it writes later
+  is written, after the task has moved on to a later stage. Start long work
+  that needs no answer with `ctx.spawn` and return.
 - **Plugins run one after another**, in `HARNESS_PLUGINS` order, or by name
   when it is unset.
 
@@ -129,7 +131,12 @@ class Checks(Plugin):
 - Returning `None` adds nothing.
 
 A result the hook may not return (data that is not JSON, a section with an
-empty title) is logged and dropped as a whole.
+empty title) is logged and dropped as a whole. `NaN` and the infinities are
+not JSON, so data that holds one is dropped too.
+
+If the harness cannot keep the plugins' results, for example because the
+stage's file cannot be written again, it logs that and the task goes on with
+the stage's file as it was before the hooks ran.
 
 ### Restarts
 
@@ -170,7 +177,7 @@ Each hook gets a `PluginContext`, built for that call:
 | `ctx.log` | A `logging.Logger` named `harness.plugins.<namespace>.<name>`. |
 | `ctx.task` | The round the hook runs for, an assignment or a follow-up: `task_key`, `inbox_id` and `run_id`. `None` in `daemon_start`. |
 | `ctx.say(text)` | Posts a short progress line where the task's person follows the task. It does nothing in `daemon_start`, or for a task whose source shows no progress messages, and never raises. Write it in the first person, about the work. |
-| `ctx.spawn(argv, log=..., once=...)` | Starts a detached process and returns its pid without waiting. Its output is appended to `state_dir/<log>`. With `once`, a second call under the same name starts nothing while the first process is alive, and returns `None`. Use `once` for anything that must not run twice, such as a server on a fixed port. |
+| `ctx.spawn(argv, log=..., once=...)` | Starts a detached process and returns its pid without waiting. Its output is appended to `state_dir/<log>`. With `once`, a second call under the same name starts nothing while the first process is alive, and returns `None`. A daemon that restarts in the same sandbox still finds that process, and tells it from an unrelated one that has since been given its pid. Use `once` for anything that must not run twice, such as a server on a fixed port. |
 
 ## Settings
 
@@ -203,27 +210,35 @@ RUN uv pip install --python /opt/harness/.venv/bin/python /opt/plugins/my-plugin
 ```
 
 `harness plugins check` loads every installed plugin the way the daemon does
-and exits non-zero when one cannot be loaded: an import error, a name without a namespace, a
-name that differs from its entry point or would share another plugin's settings, an
-unsupported `requires_api`, an unknown hook, two methods for one hook, or a
-hook that is `async` or has the wrong arguments. Keep it as the last step, so a broken
-plugin fails the image build and never reaches a sandbox.
+and exits non-zero when one cannot be loaded: an import error, a name without
+a namespace, a name that differs from its entry point or would share another
+plugin's settings, an unsupported `requires_api`, an unknown hook, two methods
+for one hook, or a hook that is `async` or has the wrong arguments. Keep it as
+the last step, so a broken plugin fails the image build and never reaches a
+sandbox.
+
+The check ignores `HARNESS_PLUGINS_ENABLED` and `HARNESS_PLUGINS`. A plugin
+that the image turns off is checked too, so it is not broken on the day
+someone turns it on. For the same reason, two installed plugins that would
+share settings fail the check even when only one of them is enabled.
 
 `harness plugins list` shows the plugins the daemon would load and their
 hooks.
 
 ## Choose which plugins run
 
-`HARNESS_PLUGINS` is a comma-separated list of plugin names, each with its
-namespace: `acme.warmup,acme.verify`. Upper and lower case are the same.
+Two settings decide it:
 
-- Unset or empty: every installed plugin runs, ordered by name.
-- A list: only those plugins run, in that order. A listed name that is not
-  installed is logged.
-- `none`: no plugin runs.
+- `HARNESS_PLUGINS_ENABLED` turns plugins on or off as a whole. It is on by
+  default. `false` runs no plugin, whatever `HARNESS_PLUGINS` says.
+- `HARNESS_PLUGINS` is a comma-separated list of plugin names, each with its
+  namespace: `acme.warmup,acme.verify`. Upper and lower case are the same.
+  - Unset or empty: every installed plugin runs, ordered by name.
+  - A list: only those plugins run, in that order. A listed name that is not
+    installed is logged.
 
-The control plane forwards it to sandboxes, so on Kubernetes you can turn a
-plugin off with `extraEnv`, without building a new image.
+The control plane forwards both to sandboxes, so on Kubernetes you can turn
+one plugin or all of them off with `extraEnv`, without building a new image.
 
 ## What happens when a plugin is broken
 
