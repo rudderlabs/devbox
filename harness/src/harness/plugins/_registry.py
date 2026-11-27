@@ -27,12 +27,18 @@ from harness.plugins._api import (
     TaskInfo,
     hook_name_of,
 )
-from harness.plugins._context import PluginContext, plugin_settings
+from harness.plugins._context import PluginContext, plugin_settings, settings_stem
 
 if TYPE_CHECKING:
     from harness.events import RoundEvents
 
-_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+# ``<namespace>.<name>``: the namespace says whose plugin it is, so two
+# authors' plugins can share the short name.
+_NAME = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+NAME_RULE = (
+    "name must be <namespace>.<name>, each part lowercase letters, digits and "
+    "underscores, starting with a letter"
+)
 # HARNESS_PLUGINS value that turns every installed plugin off.
 _NONE = "none"
 
@@ -77,22 +83,37 @@ def enabled_names(env: Mapping[str, str]) -> list[str] | None:
 def settings_overlaps(names: Iterable[str]) -> dict[str, str]:
     """Names whose settings another name would also read: name -> that other.
 
-    Settings are ``HARNESS_PLUGIN_<NAME>_<KEY>``, so plugin ``foo`` would read
-    every setting of a plugin ``foo_bar`` as its own ``bar_<key>``. The longer
-    name is the one reported.
+    Settings are ``HARNESS_PLUGIN_<NAME>_<KEY>`` with the dot in the name
+    written as an underscore, so plugin ``acme.foo`` would read every setting
+    of a plugin ``acme.foo_bar`` as its own ``bar_<key>``, and ``a.b_c`` and
+    ``a_b.c`` would read the same ones. The longer name is the one reported,
+    or the later one of two that read the same.
     """
-    names = list(names)
-    return {
-        name: other
-        for name in names
-        for other in names
-        if name != other and name.startswith(f"{other}_")
-    }
+    names = sorted(set(names))
+    stems = {name: settings_stem(name) for name in names}
+    overlaps: dict[str, str] = {}
+    for name in names:
+        for other in names:
+            if name == other:
+                continue
+            if stems[name].startswith(f"{stems[other]}_") or (
+                stems[name] == stems[other] and other < name
+            ):
+                overlaps[name] = other
+                break
+    return overlaps
+
+
+def name_error(name: object) -> str | None:
+    """Why ``name`` cannot be a plugin's name, or ``None`` when it can."""
+    if isinstance(name, str) and _NAME.match(name):
+        return None
+    return NAME_RULE
 
 
 def _overlap_message(other: str) -> str:
     return (
-        f"its name starts with the name of plugin {other!r} and an underscore, "
+        f"its settings prefix starts with that of plugin {other!r}, "
         "so that plugin would read its settings; rename one of them"
     )
 
@@ -340,13 +361,8 @@ def load_plugins(
 
     by_name: dict[str, metadata.EntryPoint] = {}
     for entry_point in found:
-        if not _NAME.match(entry_point.name):
-            registry.problems.append(
-                PluginProblem(
-                    entry_point.name,
-                    "name must be lowercase letters, digits and underscores",
-                )
-            )
+        if name_error(entry_point.name) is not None:
+            registry.problems.append(PluginProblem(entry_point.name, NAME_RULE))
         elif entry_point.name in by_name:
             registry.problems.append(
                 PluginProblem(entry_point.name, "installed more than once")

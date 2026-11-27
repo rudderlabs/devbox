@@ -19,6 +19,7 @@ from harness.plugins._registry import (
     PluginRegistry,
     _load_on_thread,
     _overlap_message,
+    name_error,
     settings_overlaps,
 )
 
@@ -41,11 +42,15 @@ def registry_for(
         workspace=root / "workspace",
     )
     for cls in plugin_classes:
+        if (error := name_error(cls.name)) is not None:
+            registry.problems.append(PluginProblem(str(cls.name), error))
+            continue
         plugin, errors = _load_on_thread(cls.name, lambda cls=cls: cls)
         registry.problems.extend(PluginProblem(cls.name, error) for error in errors)
         if plugin is not None:
             registry.plugins.append(plugin)
-    for name, other in settings_overlaps(cls.name for cls in plugin_classes).items():
+    named = [cls.name for cls in plugin_classes if name_error(cls.name) is None]
+    for name, other in settings_overlaps(named).items():
         registry.problems.append(PluginProblem(name, _overlap_message(other)))
     if registry.problems:
         raise ValueError("; ".join(str(problem) for problem in registry.problems))
