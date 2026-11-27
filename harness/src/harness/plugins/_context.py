@@ -197,14 +197,26 @@ class PluginContext:
                 )
             _spawned[proc.pid] = proc
             _exited.discard(proc.pid)
-            if marker is not None:
-                marker.parent.mkdir(parents=True, exist_ok=True)
-                started = _start_time(proc.pid)
-                marker.write_text(
-                    f"{proc.pid} {started}\n" if started else f"{proc.pid}\n",
-                    encoding="utf-8",
-                )
-        threading.Thread(
-            target=_reap, args=(proc,), name=f"plugin-reap-{proc.pid}", daemon=True
-        ).start()
+            try:
+                if marker is not None:
+                    marker.parent.mkdir(parents=True, exist_ok=True)
+                    started = _start_time(proc.pid)
+                    marker.write_text(
+                        f"{proc.pid} {started}\n" if started else f"{proc.pid}\n",
+                        encoding="utf-8",
+                    )
+            except BaseException:
+                # Without its marker the next call would start the work a
+                # second time, so this one does not stay.
+                proc.kill()
+                raise
+            finally:
+                # Whatever happened above, the child is collected when it
+                # exits.
+                threading.Thread(
+                    target=_reap,
+                    args=(proc,),
+                    name=f"plugin-reap-{proc.pid}",
+                    daemon=True,
+                ).start()
         return proc.pid

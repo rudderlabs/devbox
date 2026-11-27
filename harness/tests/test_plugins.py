@@ -27,6 +27,7 @@ from harness.plugins import (
     load_plugins,
 )
 from harness.plugins import _context as context_module
+from harness.plugins import _registry as registry_module
 from harness.plugins import cli as plugins_cli
 from harness.plugins._context import plugin_settings
 from harness.plugins._registry import (
@@ -212,6 +213,15 @@ class SignalsInHook(Plugin):
 class AlphaTwo(Plugin):
     name = "acme.alpha_two"
     requires_api = 1
+
+
+class BlocksOnCreate(Plugin):
+    name = "acme.blocksoncreate"
+    requires_api = 1
+    release: ClassVar[threading.Event] = threading.Event()
+
+    def __init__(self) -> None:
+        BlocksOnCreate.release.wait(30)
 
 
 class OtherAlpha(Plugin):
@@ -563,6 +573,31 @@ class TestLoading(PluginTestCase):
         # its class name only.
         self.assertIn("differs from its entry point name", problems["acme.alphabet"])
 
+    def test_a_plugin_that_failed_to_load_costs_no_other_its_place(self) -> None:
+        # acme.alpha would read acme.alpha_two's settings, but it did not load.
+        registry = self.load([
+            _entry_point("acme.alpha_two", AlphaTwo),
+            _entry_point("acme.alpha", OldApi),
+        ])
+        self.assertEqual([p.name for p in registry.plugins], ["acme.alpha_two"])
+        # OldApi fails on its class name and on its API version.
+        self.assertEqual({p.plugin for p in registry.problems}, {"acme.alpha"})
+
+    def test_a_plugin_that_blocks_while_loading_is_left_out(self) -> None:
+        self.addCleanup(BlocksOnCreate.release.set)
+        started = time.monotonic()
+        with patch.object(registry_module, "LOAD_BUDGET_SECONDS", 0.05):
+            registry = self.load([
+                _entry_point("acme.blocksoncreate", BlocksOnCreate),
+                _entry_point("acme.beta", Beta),
+            ])
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual([p.name for p in registry.plugins], ["acme.beta"])
+        self.assertEqual(
+            [str(p) for p in registry.problems],
+            ["acme.blocksoncreate: still loading after 0.05s; left out"],
+        )
+
     def test_an_overlapping_name_is_fine_when_the_other_is_not_enabled(self) -> None:
         registry = self.load(
             [
@@ -784,6 +819,25 @@ class TestContext(PluginTestCase):
                             [sys.executable, "-c", "pass"], log="a.log", once="server"
                         )
                     )
+
+    def test_a_marker_that_cannot_be_written_stops_and_collects_the_child(
+        self,
+    ) -> None:
+        ctx = self.context()
+        # A file where the marker's directory would go.
+        ctx.runtime_dir.parent.mkdir(parents=True)
+        ctx.runtime_dir.write_text("in the way", encoding="utf-8")
+        with self.assertRaises(OSError):
+            ctx.spawn(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                log="a.log",
+                once="server",
+            )
+        deadline = time.monotonic() + 10
+        while context_module._spawned and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(context_module._spawned, {})
+        self.assertEqual(len(context_module._exited), 1)
 
     def test_a_finished_process_is_collected_without_another_spawn(self) -> None:
         ctx = self.context()
