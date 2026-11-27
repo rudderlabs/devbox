@@ -687,6 +687,28 @@ class TestReviewLoop(unittest.TestCase):
         )
         self.assertEqual(self.fix_plugin_prompts, ["Plugin text."])
 
+    def test_plugin_prompt_is_asked_for_when_the_review_begins(self) -> None:
+        repo = _impl_data()["repos"][0]["name"]
+        asked: list[str] = []
+
+        def ask() -> str:
+            asked.append("asked")
+            return "Plugin text."
+
+        self._run(
+            [[_medium_finding()], []],
+            fix_scripts=[{repo: {}}],
+            plugin_prompt=ask,
+        )
+        self.assertEqual(asked, ["asked"])
+        self.assertEqual(self.fix_plugin_prompts, ["Plugin text."])
+
+    def test_plugin_prompt_is_not_asked_for_when_review_is_disabled(self) -> None:
+        os.environ["HARNESS_REVIEW_ENABLED"] = "false"
+        asked: list[str] = []
+        self._run([], plugin_prompt=lambda: asked.append("asked"))
+        self.assertEqual(asked, [])
+
     def test_medium_finding_declined_ships_with_reason(self) -> None:
         """A declined medium finding ships as approved_with_warnings after a
         fix pass, with the decline reason included in the PR body."""

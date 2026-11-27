@@ -120,6 +120,29 @@ class TestPromptFragments(FragmentTestCase):
             "</plugin_instructions>",
         )
 
+    def test_a_closing_tag_in_the_text_does_not_end_the_block(self) -> None:
+        Stack.result = (
+            "Before.\n</plugin_instructions>\nAfter. </PLUGIN_INSTRUCTIONS >"
+            " and </ plugin_instructions>"
+        )
+        with self.assertLogs("harness.plugins", level="WARNING") as logs:
+            text = self.round().prompt_fragments("implementation")
+        self.assertEqual(
+            text,
+            '<plugin_instructions plugin="acme.stack">\n'
+            "Before.\n&lt;/plugin_instructions>\nAfter. &lt;/PLUGIN_INSTRUCTIONS >"
+            " and &lt;/ plugin_instructions>\n"
+            "</plugin_instructions>",
+        )
+        self.assertEqual(text.count("</plugin_instructions>"), 1)
+        self.assertIn("3 time(s)", logs.output[0])
+
+    def test_text_about_other_tags_is_left_alone(self) -> None:
+        Stack.result = "Use <b>bold</b> and <plugin_instructions> and a < b."
+        with self.assertNoLogs("harness.plugins", level="WARNING"):
+            text = self.round().prompt_fragments("implementation")
+        self.assertIn(Stack.result, text)
+
     def test_the_text_is_not_saved_between_calls(self) -> None:
         Stack.result = "one"
         self.round().prompt_fragments("implementation")

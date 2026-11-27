@@ -172,13 +172,18 @@ distillation take no plugin text.
   own instructions, but it is not always the last thing in the prompt.
 - One plugin may add up to 8,000 characters per stage. Longer text is logged
   and dropped whole.
+- Text that holds the block's own closing tag, `</plugin_instructions>`, is
+  kept, with that tag written as `&lt;/plugin_instructions>` so it does not end
+  the block. The harness logs it. Text built from a file or a command's
+  output is where this happens.
 - The hook runs once per stage, just before its agents start, and every agent
   of the stage gets the same text. When that is depends on the stage:
   - `planning`: before planning starts. No plan exists yet, and neither
     `after_planning` nor `before_implementation` has run.
   - `implementation`: after `before_implementation`.
   - `review_fix`: when the review begins, whether or not the review then
-    finds something to fix.
+    finds something to fix. Not at all when review is off
+    (`HARNESS_REVIEW_ENABLED=false`).
   - `comment`, `review`, `ci_result`: after `followup_start`.
 - The text is not saved. After a restart the hook runs again, and a resumed
   agent gets what it returns then.

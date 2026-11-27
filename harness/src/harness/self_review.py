@@ -60,7 +60,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -1587,12 +1587,14 @@ def run_self_review_loop(
     *,
     inbox_id: str,
     events: RoundEvents | None,
-    plugin_prompt: str | None = None,
+    plugin_prompt: str | Callable[[], str | None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Drive the bounded adversarial-review loop on DeepAgents.
 
     ``plugin_prompt`` is the loaded plugins' text for the fix agents' system
-    prompt; the review's lens and merge agents do not get it.
+    prompt; the review's lens and merge agents do not get it. Pass a callable
+    to have the text asked for only when a review begins: it is not called
+    when review is disabled.
 
     Returns (review_aggregate, post_fix_implementation_json). The harness
     persists the implementation.json mutation (fix summaries, recomputed
@@ -2001,11 +2003,15 @@ def _run_review_stage(
     max_iters: int,
     max_parallel: int,
     events: RoundEvents | None,
-    plugin_prompt: str | None = None,
+    plugin_prompt: str | Callable[[], str | None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Everything `run_self_review_loop` does once review is enabled — kept
     separate so the stage timer brackets artifact cleanup, model construction
     and the scratch sweep, not just the iteration loop."""
+    if callable(plugin_prompt):
+        # Here and not at the call site, so plugins are asked for a review
+        # that is in fact starting.
+        plugin_prompt = plugin_prompt()
     HARNESS_DIR.mkdir(parents=True, exist_ok=True)
     resume = _load_review_resume(inbox_id, max_iters)
     if resume is None:

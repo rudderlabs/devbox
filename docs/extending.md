@@ -4,7 +4,7 @@
 
 devbox has one stable extension interface: [harness plugins](plugins.md), with
 hooks at daemon start, around planning and implementation, and at the start
-of a follow-up round. Everything else on this page is internal. It lists the places
+of a follow-up round, and one that adds text to an agent's system prompt. Everything else on this page is internal. It lists the places
 in the code where more hooks would naturally go, and the internal interface
 task sources plug into, so you know where to look if you change devbox for
 your own needs. All of that can change in any commit, without notice and

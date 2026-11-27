@@ -980,9 +980,13 @@ def process_assignment(entry: dict[str, Any], state: DaemonState) -> None:
                         impl_data,
                         inbox_id=inbox_id,
                         events=events,
-                        plugin_prompt=plugins.prompt_fragments("review_fix")
-                        if plugins is not None
-                        else None,
+                        # Asked for inside the loop, once it knows a review
+                        # is starting.
+                        plugin_prompt=(
+                            (lambda: plugins.prompt_fragments("review_fix"))
+                            if plugins is not None
+                            else None
+                        ),
                     )
 
                 # Distillation — promotes per-run memory into each repo's

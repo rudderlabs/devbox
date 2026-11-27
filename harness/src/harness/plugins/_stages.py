@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,21 @@ RESULTS_DIR = "_results"
 MAX_PROMPT_FRAGMENT_CHARS = 8000
 
 _log = logging.getLogger("harness.plugins")
+
+
+# The tag that ends a plugin's block in a system prompt, as an agent would
+# read it: any case, with or without spaces.
+_BLOCK_END = re.compile(r"<(/\s*plugin_instructions\s*>)", re.IGNORECASE)
+
+
+def _keep_in_block(text: str) -> tuple[str, int]:
+    """``text`` with each tag that would end its block written so that it does
+    not, and how many there were.
+
+    Text a plugin builds from a file or a command's output can hold the tag.
+    The rest of it would then read as the harness's own instructions.
+    """
+    return _BLOCK_END.subn(r"&lt;\1", text)
 
 
 def _fragment_text(value: Any) -> str:
@@ -187,6 +203,16 @@ class RoundPlugins:
                     exc,
                 )
                 continue
+            text, ends = _keep_in_block(text)
+            if ends:
+                _log.warning(
+                    "plugin %s: prompt_fragments text for %s holds the tag that "
+                    "ends its block %d time(s); each is written with &lt; so the "
+                    "text stays inside the block",
+                    plugin.name,
+                    stage,
+                    ends,
+                )
             if text:
                 blocks.append(
                     f'<plugin_instructions plugin="{plugin.name}">\n'
