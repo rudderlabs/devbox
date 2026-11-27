@@ -36,6 +36,9 @@ if TYPE_CHECKING:
 # ``<namespace>.<name>``: the namespace says whose plugin it is, so two
 # authors' plugins can share the short name.
 _NAME = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+# How long one plugin may take to import, be created and be checked. Past
+# that the daemon goes on without it.
+LOAD_BUDGET_SECONDS = 30.0
 NAME_RULE = (
     "name must be <namespace>.<name>, each part lowercase letters, digits and "
     "underscores, starting with a letter"
@@ -224,24 +227,47 @@ def _load_on_thread(
 
     thread = threading.Thread(target=body, name=f"plugin-{name}-load", daemon=True)
     thread.start()
-    thread.join()
+    thread.join(LOAD_BUDGET_SECONDS)
+    if not result:
+        # Left behind like a hook over its budget: the daemon must reach its
+        # inbox whatever a plugin does while it loads.
+        return None, [f"still loading after {LOAD_BUDGET_SECONDS:g}s; left out"]
     return result[0]
+
+
+class _BadResult(Exception):
+    """The hook returned, and ``finish`` could not take what it returned."""
 
 
 def _call(
     handler: Callable[..., Any],
     args: tuple[Any, ...],
     outcome: list[tuple[bool, Any]],
+    finish: Callable[[Any], Any] | None = None,
 ) -> None:
     """Thread body of one hook call: (True, value) or (False, exception).
 
     BaseException, so a hook that calls ``sys.exit`` is a failed hook like any
     other and not a thread that ends without a word.
+
+    ``finish`` turns the hook's return value into what the harness keeps. It
+    runs here because reading a plugin's own mapping or sequence runs the
+    plugin's code, which belongs inside this thread's guard and budget.
     """
     try:
-        outcome.append((True, handler(*args)))
+        value = handler(*args)
     except BaseException as exc:
         outcome.append((False, exc))
+        return
+    if finish is None:
+        outcome.append((True, value))
+        return
+    try:
+        outcome.append((True, finish(value)))
+    except BaseException as exc:
+        bad = _BadResult(f"{type(exc).__name__}: {exc}")
+        bad.__cause__ = exc
+        outcome.append((False, bad))
 
 
 def _source(entry_point: metadata.EntryPoint) -> str:
@@ -279,10 +305,19 @@ class PluginRegistry:
         )
 
     def invoke(
-        self, plugin: LoadedPlugin, hook_name: str, ctx: PluginContext, *args: Any
+        self,
+        plugin: LoadedPlugin,
+        hook_name: str,
+        ctx: PluginContext,
+        *args: Any,
+        finish: Callable[[Any], Any] | None = None,
     ) -> tuple[bool, Any]:
         """Call one plugin's hook. Returns (finished without raising, its
         return value).
+
+        With ``finish``, the value returned is ``finish(return value)``,
+        worked out on the hook's thread and within its budget. A ``finish``
+        that raises is logged as a dropped result.
 
         Never raises. A hook that raises is logged. A hook still running after
         its budget is logged and left behind: it keeps running on its own
@@ -292,7 +327,7 @@ class PluginRegistry:
         outcome: list[tuple[bool, Any]] = []
         thread = threading.Thread(
             target=_call,
-            args=(plugin.hooks[hook_name], (ctx, *args), outcome),
+            args=(plugin.hooks[hook_name], (ctx, *args), outcome, finish),
             name=f"plugin-{plugin.name}-{hook_name}",
             daemon=True,
         )
@@ -312,6 +347,11 @@ class PluginRegistry:
             _log.error("plugin %s: %s ended without a result", plugin.name, hook_name)
             return False, None
         ok, value = outcome[0]
+        if isinstance(value, _BadResult) and not ok:
+            _log.error(
+                "plugin %s: %s result dropped: %s", plugin.name, hook_name, value
+            )
+            return False, None
         if not ok:
             _log.error(
                 "plugin %s: %s failed (ignored): %s: %s",
@@ -386,18 +426,13 @@ def load_plugins(
             if name not in by_name
         )
 
-    overlaps = settings_overlaps(order)
+    loaded: list[LoadedPlugin] = []
     for name in order:
-        if name in overlaps:
-            registry.problems.append(
-                PluginProblem(name, _overlap_message(overlaps[name]))
-            )
-            continue
         entry_point = by_name[name]
         plugin, errors = _load_on_thread(name, entry_point.load)
         registry.problems.extend(PluginProblem(name, error) for error in errors)
         if plugin is not None:
-            registry.plugins.append(
+            loaded.append(
                 LoadedPlugin(
                     name=plugin.name,
                     instance=plugin.instance,
@@ -405,4 +440,14 @@ def load_plugins(
                     source=_source(entry_point),
                 )
             )
+    # Among the plugins that did load: one that failed reads no settings, so
+    # it must not cost another plugin its place.
+    overlaps = settings_overlaps(plugin.name for plugin in loaded)
+    for plugin in loaded:
+        if plugin.name in overlaps:
+            registry.problems.append(
+                PluginProblem(plugin.name, _overlap_message(overlaps[plugin.name]))
+            )
+        else:
+            registry.plugins.append(plugin)
     return registry

@@ -80,6 +80,11 @@ Every hook follows the same rules:
   happens. A `ctx.say` it calls later is posted, and a file it writes later
   is written, after the task has moved on to a later stage. Start long work
   that needs no answer with `ctx.spawn` and return.
+- **A budget is not a promise of that much time.** The sandbox has a lifetime
+  of its own, set on the control plane with `SANDBOX_TIMEOUT_SECONDS` and 30
+  minutes by default, and planning and implementation have used part of it
+  by the time `after_implementation` runs. A hook that needs most of its
+  budget needs a longer sandbox lifetime.
 - **Plugins run one after another**, in `HARNESS_PLUGINS` order, or by name
   when it is unset.
 
@@ -133,7 +138,9 @@ class Checks(Plugin):
 - Returning `None` adds nothing.
 
 A result the hook may not return (data that is not JSON, a section with an
-empty title) is logged and dropped as a whole. `NaN` and the infinities are
+empty title) is logged and dropped as a whole. The harness reads the result
+on the hook's own thread and within its budget, so a mapping or a sequence
+type of your own is read there. `NaN` and the infinities are
 not JSON, so data that holds one is dropped too.
 
 If the harness cannot keep the plugins' results, for example because the
@@ -299,7 +306,9 @@ one plugin or all of them off with `extraEnv`, without building a new image.
 ## What happens when a plugin is broken
 
 The daemon never fails because of a plugin. A plugin that cannot be loaded is
-logged (`daemon: plugin not loaded: …`) and left out, and the others run. The
+logged (`daemon: plugin not loaded: …`) and left out, and the others run.
+That includes a plugin that takes more than 30 seconds to import and create:
+the daemon goes on without it. The
 build-time check is what keeps a broken plugin out.
 
 ## Test a plugin
