@@ -20,6 +20,7 @@ under `TYPE_CHECKING` and no import cycle forms.
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -81,6 +82,9 @@ from harness.util import (
 
 if TYPE_CHECKING:
     from harness.daemon import DaemonState
+
+# Where plugin problems are logged, by the plugin code and by this handler.
+_plugins_log = logging.getLogger("harness.plugins")
 
 
 def _require_list(d: Mapping[str, Any], key: str, where: str) -> list[Any]:
@@ -566,11 +570,21 @@ def _with_plan_plugins(
     """
     if plugins is None:
         return plan_data
-    merged = plugins.after_planning(plan_data)
-    if merged != plan_data:
-        validate_plan(merged)
-        write_json(PLAN_JSON, merged)
-    return merged
+    try:
+        merged = plugins.after_planning(plan_data)
+        if merged != plan_data:
+            validate_plan(merged)
+            write_json(PLAN_JSON, merged)
+        return merged
+    except Exception as exc:
+        # A plugin cannot fail a task: the plan on disk is the one from
+        # before the hooks, and the task goes on with it.
+        _plugins_log.error(
+            "after_planning results not kept, going on with the plan as it was: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return plan_data
 
 
 def _with_implementation_plugins(
@@ -583,9 +597,19 @@ def _with_implementation_plugins(
     their data and their pull request sections."""
     if plugins is None:
         return impl_data
-    merged = plugins.after_implementation(plan_data, impl_data)
-    if merged != impl_data:
-        return _finalize_implementation_artifact(inbox_id, merged)
+    try:
+        merged = plugins.after_implementation(plan_data, impl_data)
+        if merged != impl_data:
+            return _finalize_implementation_artifact(inbox_id, merged)
+    except Exception as exc:
+        # As for the plan: implementation.json on disk is the one from before
+        # the hooks.
+        _plugins_log.error(
+            "after_implementation results not kept, going on with the "
+            "implementation as it was: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
     return impl_data
 
 
