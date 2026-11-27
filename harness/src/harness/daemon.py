@@ -32,7 +32,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from harness.events import (
     RETRYABLE_ASSIGNMENT_ERROR_EVENT_FIELD,
@@ -46,6 +46,9 @@ from harness.handlers.ci_result import process_ci_result
 from harness.handlers.comment import process_comment
 from harness.handlers.user_review import process_user_review
 from harness.paths import EVENTS_FILE, INBOX_DIR, LOCK_FILE, WORKSPACE
+
+if TYPE_CHECKING:
+    from harness.plugins import PluginRegistry
 
 
 def _poll_interval_seconds() -> float:
@@ -99,8 +102,11 @@ def _maybe_configure_deepagents_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def _run_daemon_start_plugins() -> None:
+def _run_daemon_start_plugins() -> PluginRegistry | None:
     """Load the installed plugins and run their ``daemon_start`` hooks.
+
+    Returns the registry, which the round handlers call stage hooks through,
+    or None when loading failed.
 
     Plugins are optional additions (see docs/plugins.md), so nothing here may
     stop the daemon: a plugin that cannot be loaded is logged and left out,
@@ -118,11 +124,13 @@ def _run_daemon_start_plugins() -> None:
             names = ", ".join(plugin.name for plugin in registry.plugins)
             print(f"daemon: plugins loaded: {names}")
         registry.run("daemon_start")
+        return registry
     except Exception as exc:
         print(
             f"daemon: plugin startup failed (ignored): {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
+        return None
 
 
 class DaemonState:
@@ -153,6 +161,9 @@ class DaemonState:
         # failures separately. Both are passed in by run_daemon.
         self.processed_dir = processed_dir
         self.error_dir = error_dir
+        # The loaded plugins, set by run_daemon once they have started. None
+        # until then, and when loading failed: rounds then run without them.
+        self.plugins: PluginRegistry | None = None
 
     def append_event(self, payload: dict[str, Any]) -> None:
         # Delegates to the shared flock-guarded writer (events.py): seq is
@@ -503,7 +514,7 @@ def run_daemon(
 
     # Plugins last, once everything they may rely on is in place, and before
     # the first inbox file. Best-effort, like signing above.
-    _run_daemon_start_plugins()
+    state.plugins = _run_daemon_start_plugins()
 
     while True:
         files = sorted(

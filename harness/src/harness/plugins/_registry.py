@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from harness.env_flags import bool_from
 from harness.paths import HARNESS_DIR, RUNTIME_DIR, WORKSPACE
@@ -25,9 +25,13 @@ from harness.plugins._api import (
     HOOKS,
     SUPPORTED_API_VERSIONS,
     Plugin,
+    TaskInfo,
     hook_name_of,
 )
 from harness.plugins._context import PluginContext, plugin_settings, settings_stem
+
+if TYPE_CHECKING:
+    from harness.events import RoundEvents
 
 # ``<namespace>.<name>``: the namespace says whose plugin it is, so two
 # authors' plugins can share the short name.
@@ -231,18 +235,39 @@ def _load_on_thread(
     return result[0]
 
 
+class _BadResult(Exception):
+    """The hook returned, and ``finish`` could not take what it returned."""
+
+
 def _call(
-    handler: Callable[..., Any], args: tuple[Any, ...], failure: list[BaseException]
+    handler: Callable[..., Any],
+    args: tuple[Any, ...],
+    outcome: list[tuple[bool, Any]],
+    finish: Callable[[Any], Any] | None = None,
 ) -> None:
-    """Thread body of one hook call: what it raises goes into ``failure``.
+    """Thread body of one hook call: (True, value) or (False, exception).
 
     BaseException, so a hook that calls ``sys.exit`` is a failed hook like any
     other and not a thread that ends without a word.
+
+    ``finish`` turns the hook's return value into what the harness keeps. It
+    runs here because reading a plugin's own mapping or sequence runs the
+    plugin's code, which belongs inside this thread's guard and budget.
     """
     try:
-        handler(*args)
+        value = handler(*args)
     except BaseException as exc:
-        failure.append(exc)
+        outcome.append((False, exc))
+        return
+    if finish is None:
+        outcome.append((True, value))
+        return
+    try:
+        outcome.append((True, finish(value)))
+    except BaseException as exc:
+        bad = _BadResult(f"{type(exc).__name__}: {exc}")
+        bad.__cause__ = exc
+        outcome.append((False, bad))
 
 
 def _source(entry_point: metadata.EntryPoint) -> str:
@@ -261,7 +286,13 @@ class PluginRegistry:
     runtime_root: Path = RUNTIME_DIR / "devbox-plugins"
     workspace: Path = WORKSPACE
 
-    def context(self, plugin: LoadedPlugin) -> PluginContext:
+    def context(
+        self,
+        plugin: LoadedPlugin,
+        *,
+        task: TaskInfo | None = None,
+        events: RoundEvents | None = None,
+    ) -> PluginContext:
         return PluginContext(
             name=plugin.name,
             settings=plugin_settings(plugin.name, self.env),
@@ -269,46 +300,76 @@ class PluginRegistry:
             runtime_dir=self.runtime_root / plugin.name,
             workspace=self.workspace,
             log=_log.getChild(plugin.name),
+            task=task,
+            _events=events,
         )
 
-    def run(self, hook_name: str, *args: Any) -> None:
-        """Call ``hook_name`` on every plugin that handles it, in order.
+    def invoke(
+        self,
+        plugin: LoadedPlugin,
+        hook_name: str,
+        ctx: PluginContext,
+        *args: Any,
+        finish: Callable[[Any], Any] | None = None,
+    ) -> tuple[bool, Any]:
+        """Call one plugin's hook. Returns (finished without raising, its
+        return value).
 
-        Never raises. A hook that raises is logged and the next plugin runs.
-        A hook still running after its budget is logged and left behind: it
-        keeps running on its own thread while the daemon moves on.
+        With ``finish``, the value returned is ``finish(return value)``,
+        worked out on the hook's thread and within its budget. A ``finish``
+        that raises is logged as a dropped result.
+
+        Never raises. A hook that raises is logged. A hook still running after
+        its budget is logged and left behind: it keeps running on its own
+        thread while the daemon moves on, and whatever it returns is dropped.
         """
         spec = HOOKS[hook_name]
-        for plugin in self.plugins:
-            handler = plugin.hooks.get(hook_name)
-            if handler is None:
-                continue
-            failure: list[BaseException] = []
-            thread = threading.Thread(
-                target=_call,
-                args=(handler, (self.context(plugin), *args), failure),
-                name=f"plugin-{plugin.name}-{hook_name}",
-                daemon=True,
+        outcome: list[tuple[bool, Any]] = []
+        thread = threading.Thread(
+            target=_call,
+            args=(plugin.hooks[hook_name], (ctx, *args), outcome, finish),
+            name=f"plugin-{plugin.name}-{hook_name}",
+            daemon=True,
+        )
+        thread.start()
+        thread.join(spec.budget_seconds)
+        if thread.is_alive():
+            _log.warning(
+                "plugin %s: %s is still running after %ss; continuing",
+                plugin.name,
+                hook_name,
+                spec.budget_seconds,
             )
-            thread.start()
-            thread.join(spec.budget_seconds)
-            if thread.is_alive():
-                _log.warning(
-                    "plugin %s: %s is still running after %ss; continuing",
-                    plugin.name,
-                    hook_name,
-                    spec.budget_seconds,
-                )
-            elif failure:
-                exc = failure[0]
-                _log.error(
-                    "plugin %s: %s failed (ignored): %s: %s",
-                    plugin.name,
-                    hook_name,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=exc,
-                )
+            return False, None
+        if not outcome:
+            # Cannot happen while _call records every way a hook can end, but
+            # a hook must never be able to raise out of here.
+            _log.error("plugin %s: %s ended without a result", plugin.name, hook_name)
+            return False, None
+        ok, value = outcome[0]
+        if isinstance(value, _BadResult) and not ok:
+            _log.error(
+                "plugin %s: %s result dropped: %s", plugin.name, hook_name, value
+            )
+            return False, None
+        if not ok:
+            _log.error(
+                "plugin %s: %s failed (ignored): %s: %s",
+                plugin.name,
+                hook_name,
+                type(value).__name__,
+                value,
+                exc_info=value,
+            )
+            return False, None
+        return True, value
+
+    def run(self, hook_name: str, *args: Any) -> None:
+        """Call ``hook_name`` on every plugin that handles it, in order, and
+        drop what the hooks return. Never raises (see ``invoke``)."""
+        for plugin in self.plugins:
+            if hook_name in plugin.hooks:
+                self.invoke(plugin, hook_name, self.context(plugin), *args)
 
 
 def load_plugins(

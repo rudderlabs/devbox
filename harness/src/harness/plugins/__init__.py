@@ -6,7 +6,8 @@ built on top of the harness image. It names a ``Plugin`` subclass in the
 startup and calls its hooks at fixed points.
 
 This module is the whole public interface: ``Plugin``, ``hook``,
-``PluginContext``, ``API_VERSION`` and, for tests, ``harness.plugins.testing``.
+``PluginContext``, ``HookResult``, ``PrSection``, ``TaskInfo``, ``API_VERSION``
+and, for tests, ``harness.plugins.testing``.
 Everything else under ``harness`` is private and may change in any release.
 See ``docs/plugins.md``.
 """
@@ -18,8 +19,11 @@ from harness.plugins._api import (
     ENTRY_POINT_GROUP,
     HOOKS,
     SUPPORTED_API_VERSIONS,
+    HookResult,
     HookSpec,
     Plugin,
+    PrSection,
+    TaskInfo,
     hook,
 )
 from harness.plugins._context import PluginContext
@@ -29,18 +33,25 @@ from harness.plugins._registry import (
     PluginRegistry,
     load_plugins,
 )
+from harness.plugins._stages import EXTENSIONS_KEY, RoundPlugins, round_plugins
 
 __all__ = [
     "API_VERSION",
     "ENTRY_POINT_GROUP",
+    "EXTENSIONS_KEY",
     "HOOKS",
     "SUPPORTED_API_VERSIONS",
+    "HookResult",
     "HookSpec",
     "LoadedPlugin",
     "Plugin",
     "PluginContext",
     "PluginProblem",
     "PluginRegistry",
+    "PrSection",
+    "RoundPlugins",
+    "TaskInfo",
     "hook",
     "load_plugins",
+    "round_plugins",
 ]

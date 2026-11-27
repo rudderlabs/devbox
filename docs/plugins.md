@@ -8,8 +8,9 @@ Plugins are the supported way to extend the harness. `harness.plugins` is the
 only part of the harness with a stable interface; the rest can change in any
 release ([Extending devbox](extending.md)).
 
-This first version has one hook, `daemon_start`. Hooks around the stages of a
-task come next.
+There are five hooks: one when the daemon starts, three around the planning
+and implementation stages of an assignment, and one at the start of each
+follow-up round (a comment, a review or a CI result).
 
 ## Write a plugin
 
@@ -61,16 +62,113 @@ plugin as a complete package.
 | Hook | Arguments | Budget | When |
 |---|---|---|---|
 | `daemon_start` | `ctx` | 10 seconds | Once per daemon process, after the harness has set itself up and before it reads its first inbox file. A sandbox recreated from its volume starts a new daemon, so the hook runs again there. |
+| `after_planning` | `ctx`, `plan` | 5 minutes | Once per assignment, after the plan is written. |
+| `before_implementation` | `ctx`, `plan` | 30 seconds | Each time the daemon is about to run or resume an assignment's implementation. A restart in the middle of implementation runs it again. It does not run once the implementation is complete. |
+| `after_implementation` | `ctx`, `plan`, `implementation` | 30 minutes | Once per assignment, after every repository's implementation is complete. Before the review, except after a failed first try ([Restarts](#restarts)). |
+| `followup_start` | `ctx`, `kind` | 30 seconds | Each time the daemon is about to run or resume a follow-up round, before its agent runs. `kind` is the round's inbox kind: `comment`, `review` or `ci_result`. It does not run for a round whose agent has already finished. |
 
 Every hook follows the same rules:
 
-- **A plugin cannot stop the daemon.** A hook that raises is logged, and the
-  next plugin runs. A hook that calls `sys.exit()` is treated the same way.
+- **A plugin cannot fail a task or stop the daemon.** A hook that raises is
+  logged, and the next plugin runs. A hook that calls `sys.exit()` is treated
+  the same way.
 - **A hook has a time budget.** When it is used up, the harness logs that and
-  moves on. The hook is not stopped: it keeps running on its own thread. Start
-  long work with `ctx.spawn` and return.
+  moves on, and drops whatever the hook returns later. The hook is not
+  stopped: it keeps running on its own thread, and what it does there still
+  happens. A `ctx.say` it calls later is posted, and a file it writes later
+  is written, after the task has moved on to a later stage. Start long work
+  that needs no answer with `ctx.spawn` and return.
+- **A budget is not a promise of that much time.** The sandbox has a lifetime
+  of its own, set on the control plane with `SANDBOX_TIMEOUT_SECONDS` and 30
+  minutes by default, and planning and implementation have used part of it
+  by the time `after_implementation` runs. A hook that needs most of its
+  budget needs a longer sandbox lifetime.
 - **Plugins run one after another**, in `HARNESS_PLUGINS` order, or by name
   when it is unset.
+
+In a follow-up round the agent makes its change, commits and pushes within one
+session, so there is no hook between the change and the push.
+
+### What a stage hook gets
+
+`plan` and `implementation` are the contents of `.harness/plan.json` and
+`.harness/implementation.json`, as dictionaries. Each plugin gets its own
+copy, so changing one changes nothing. Only the `extensions` key (below) is
+part of the plugin interface. The other keys are the harness's own and can
+change.
+
+### What a stage hook may return
+
+`after_planning` and `after_implementation` may return data, and
+`after_implementation` may also return sections for the pull request bodies:
+
+```python
+from harness.plugins import HookResult, Plugin, PrSection, hook
+
+
+class Checks(Plugin):
+    name = "acme.checks"
+    requires_api = 1
+
+    @hook("after_planning")
+    def choose(self, ctx, plan):
+        return {"suites": ["unit"]}
+
+    @hook("after_implementation")
+    def report(self, ctx, plan, implementation):
+        suites = plan["extensions"]["acme.checks"]["suites"]
+        return HookResult(
+            data={"passed": True},
+            pr_sections=[
+                PrSection(repo=repo["name"], title="Checks", body=f"Ran {suites}.")
+                for repo in implementation["repos"]
+            ],
+        )
+```
+
+- **Data** is a JSON mapping. The harness stores it under
+  `extensions["<namespace>.<name>"]` in the stage's file, where later hooks of any
+  plugin read it. Returning a mapping is the same as `HookResult(data=...)`.
+- **A pull request section** has a repository name, a title and a Markdown
+  body. The harness appends it to that repository's pull request body as
+  `## <title>`. A section for a repository the implementation does not have
+  is logged and dropped.
+- Returning `None` adds nothing.
+
+A result the hook may not return (data that is not JSON, a section with an
+empty title) is logged and dropped as a whole. The harness reads the result
+on the hook's own thread and within its budget, so a mapping or a sequence
+type of your own is read there. `NaN` and the infinities are
+not JSON, so data that holds one is dropped too.
+
+If the harness cannot keep the plugins' results, for example because the
+stage's file cannot be written again, it logs that and the task goes on with
+the stage's file as it was before the hooks ran.
+
+### Restarts
+
+The harness restarts an assignment where it stopped. For the two hooks that
+return a result:
+
+- The result is saved on the task's volume before it is used,
+  keyed by the assignment's inbox id. After a restart the saved result is used
+  again and the hook is not called.
+- A hook that raised or ran out of budget saved nothing. A restart calls it
+  again.
+- A task that is assigned again is a new assignment, and its hooks run again.
+- `after_implementation` normally runs before the review. When it raised or
+  ran out of budget and the daemon then restarts, it is called again wherever
+  the assignment has got to, which can be after the review or after the pull
+  request is open. Data it returns then is still kept. A pull request section
+  it returns then does not reach a pull request that is already open: the
+  harness reuses an open pull request without changing its body.
+- Saved results stay on the task's volume, under
+  `.harness/plugins/_results/<namespace>.<name>/`, outside the plugin's own directory.
+  They are small and the harness does not
+  remove them.
+
+So a result-returning hook runs at most once per assignment when it
+succeeds. Make anything it does outside its return value safe to repeat.
 
 ## The context
 
@@ -84,6 +182,8 @@ Each hook gets a `PluginContext`, built for that call:
 | `ctx.runtime_dir` | The plugin's own directory off the volume. A restart empties it. |
 | `ctx.workspace` | The workspace root, with each repo below it. |
 | `ctx.log` | A `logging.Logger` named `harness.plugins.<namespace>.<name>`. |
+| `ctx.task` | The round the hook runs for, an assignment or a follow-up: `task_key`, `inbox_id` and `run_id`. `None` in `daemon_start`. |
+| `ctx.say(text)` | Posts a short progress line where the task's person follows the task. It does nothing in `daemon_start`, or for a task whose source shows no progress messages, and never raises. Write it in the first person, about the work. |
 | `ctx.spawn(argv, log=..., once=...)` | Starts a detached process and returns its pid without waiting. Its output is appended to `state_dir/<log>`. With `once`, a second call under the same name starts nothing while the first process is alive, and returns `None`. A daemon that restarts in the same sandbox still finds that process, and tells it from an unrelated one that has since been given its pid. Use `once` for anything that must not run twice, such as a server on a fixed port. |
 
 ## Settings
